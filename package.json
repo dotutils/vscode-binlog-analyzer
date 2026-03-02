@@ -1,0 +1,213 @@
+{
+  "name": "binlog-analyzer",
+  "displayName": "MSBuild Binlog Analyzer",
+  "description": "Analyze MSBuild binary logs with Copilot Chat and MCP tools",
+  "version": "0.1.0",
+  "publisher": "dotutils",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dotutils/vscode-binlog-analyzer"
+  },
+  "homepage": "https://github.com/dotutils/vscode-binlog-analyzer#readme",
+  "bugs": {
+    "url": "https://github.com/dotutils/vscode-binlog-analyzer/issues"
+  },
+  "engines": {
+    "vscode": "^1.99.0"
+  },
+  "categories": [
+    "Other",
+    "Chat"
+  ],
+  "keywords": [
+    "msbuild",
+    "binlog",
+    "build",
+    "diagnostics"
+  ],
+  "activationEvents": [
+    "onUri",
+    "onView:binlogExplorer"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "binlog-analyzer",
+          "title": "Binlog Analyzer",
+          "icon": "$(file-binary)"
+        }
+      ]
+    },
+    "views": {
+      "binlog-analyzer": [
+        {
+          "id": "binlogExplorer",
+          "name": "Binlog Explorer",
+          "icon": "$(file-binary)",
+          "contextualTitle": "Binlog Analyzer"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "binlogExplorer",
+        "contents": "No binlog loaded.\n\nLoad a binlog file to get started with build analysis.\n\n[Load Binlog File](command:binlog.loadFile)\n\nOr open a .binlog from Structured Log Viewer using ✨ Open in VS Code."
+      }
+    ],
+    "commands": [
+      {
+        "command": "binlog.loadFile",
+        "title": "Binlog: Load File"
+      },
+      {
+        "command": "binlog.addFile",
+        "title": "Binlog: Add File",
+        "icon": "$(add)"
+      },
+      {
+        "command": "binlog.removeFile",
+        "title": "Binlog: Remove File"
+      },
+      {
+        "command": "binlog.manageBinlogs",
+        "title": "Binlog: Manage Loaded Binlogs"
+      },
+      {
+        "command": "binlog.openProjectFolder",
+        "title": "Binlog: Open Project Folder",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "binlog.showBuildSummary",
+        "title": "Binlog: Show Build Summary"
+      },
+      {
+        "command": "binlog.showErrors",
+        "title": "Binlog: Show Errors"
+      },
+      {
+        "command": "binlog.scanSecrets",
+        "title": "Binlog: Scan for Secrets"
+      },
+      {
+        "command": "binlog.redactSecrets",
+        "title": "Binlog: Redact Secrets"
+      }
+    ],
+    "configuration": {
+      "title": "Binlog Analyzer",
+      "properties": {
+        "binlogAnalyzer.activeBinlogs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Binlog file paths to load automatically. Set by Structured Log Viewer when opening in VS Code."
+        },
+        "binlogAnalyzer.mcpServerPath": {
+          "type": "string",
+          "default": "",
+          "description": "Custom path to the baronfel.binlog.mcp dotnet tool. Leave empty to use the globally installed tool."
+        },
+        "binlogAnalyzer.autoLoad": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically load binlog and push diagnostics when activated via URI handler."
+        },
+        "binlogAnalyzer.diagnosticsSeverityFilter": {
+          "type": "string",
+          "default": "Warning",
+          "enum": [
+            "Error",
+            "Warning",
+            "Info"
+          ],
+          "description": "Minimum severity level to show in the Problems panel."
+        },
+        "binlogAnalyzer.inlineDecorations": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show build errors as inline decorations in source files."
+        },
+        "binlogAnalyzer.redaction.autodetectCommonPatterns": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically detect common secret patterns (API keys, connection strings, tokens) during redaction."
+        },
+        "binlogAnalyzer.redaction.autodetectUsername": {
+          "type": "boolean",
+          "default": true,
+          "description": "Detect and redact username occurrences during redaction."
+        },
+        "binlogAnalyzer.redaction.processEmbeddedFiles": {
+          "type": "boolean",
+          "default": true,
+          "description": "Also redact secrets inside embedded source files in the binlog."
+        }
+      }
+    },
+    "chatParticipants": [
+      {
+        "id": "binlog-analyzer.binlog",
+        "name": "binlog",
+        "fullName": "MSBuild Binlog Analyzer",
+        "description": "Ask questions about MSBuild binary logs — build errors, performance, targets, and more.",
+        "isSticky": false,
+        "commands": [
+          {
+            "name": "errors",
+            "description": "Show build errors and warnings with analysis"
+          },
+          {
+            "name": "timeline",
+            "description": "Analyze build timeline and performance"
+          },
+          {
+            "name": "targets",
+            "description": "List and analyze MSBuild targets"
+          },
+          {
+            "name": "summary",
+            "description": "Show a comprehensive build summary"
+          },
+          {
+            "name": "secrets",
+            "description": "Scan for leaked secrets, tokens, and credentials in the binlog"
+          }
+        ]
+      }
+    ],
+    "chatModes": [
+      {
+        "slug": "build-analysis",
+        "name": "Build Analysis",
+        "description": "Pre-configured for MSBuild binlog investigation with binlog MCP tools.",
+        "toolsReferences": [
+          {
+            "type": "tool",
+            "id": "baronfel_binlog_mcp"
+          }
+        ],
+        "systemPrompt": "You are an MSBuild build analysis expert. You have access to binlog MCP tools that can parse and analyze MSBuild binary log files. Use these tools to help the user investigate build failures, performance issues, and understand build behavior.\n\nWorkflow:\n1. First load the binlog if not already loaded\n2. Get diagnostics to understand errors and warnings\n3. Analyze specific issues using appropriate tools\n4. Provide actionable recommendations\n\nAlways reference specific file paths and line numbers when discussing errors."
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.99.0",
+    "typescript": "^5.5.0",
+    "@vscode/vsce": "^3.0.0"
+  },
+  "dependencies": {
+    "@vscode/extension-telemetry": "^0.9.0"
+  }
+}
