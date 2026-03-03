@@ -31,6 +31,13 @@ const COMMAND_PROMPTS: Record<string, string> = {
     targets: 'List the MSBuild targets that were executed. Show their execution order, duration, and dependencies. Highlight any targets that failed.',
     summary: 'Provide a comprehensive build summary: overall result, duration, number of projects, error/warning counts, key properties, and configuration. Highlight anything unusual.',
     secrets: 'Scan the binlog for potential secrets, credentials, API keys, tokens, connection strings, and sensitive data that may have been logged during the build. Report any findings.',
+    compare: 'Compare the two loaded binlogs side by side. For EACH binlog, call list_projects, get_diagnostics, get_expensive_targets (top 5), and get_expensive_tasks (top 5) using the respective binlog_file path. Then produce a structured comparison highlighting KEY DIFFERENCES across these dimensions:\n' +
+        '1. **Build Result**: Did one succeed and the other fail?\n' +
+        '2. **Errors & Warnings**: New/removed diagnostics between the two builds\n' +
+        '3. **Projects**: Added/removed projects, different target lists\n' +
+        '4. **Performance**: Significant duration changes in targets and tasks (>20% change)\n' +
+        '5. **Configuration**: Different SDK versions, properties, or task assemblies if visible\n' +
+        'Present the comparison as a clear table or structured diff. Highlight anything that could explain a regression.',
 };
 
 export class BinlogChatParticipant {
@@ -61,13 +68,31 @@ export class BinlogChatParticipant {
     ): Promise<void> {
         // Build the user prompt — combine slash command context with user text
         const commandPrompt = request.command ? COMMAND_PROMPTS[request.command] || '' : '';
+
+        // For /compare, require two binlogs and provide both paths explicitly
+        if (request.command === 'compare') {
+            if (this.binlogPaths.length < 2) {
+                stream.markdown(
+                    '⚠️ **Two binlogs required for comparison.**\n\n' +
+                    'Load a second binlog:\n' +
+                    '- Use **Binlog: Add File** (Ctrl+Shift+P)\n' +
+                    '- Or attach multiple binlogs from Structured Log Viewer before clicking "Open in VS Code"\n'
+                );
+                return;
+            }
+        }
+
         const binlogContext = this.binlogPaths.length > 0
-            ? `The binlog file is already loaded at: ${this.binlogPaths[0]}\n` +
-              `When calling MCP tools, use binlog_file="${this.binlogPaths[0]}" (the full absolute path). ` +
-              `Do NOT use a relative filename. Do NOT call load_binlog.` +
-              (this.binlogPaths.length > 1
-                  ? `\nAdditional binlogs: ${this.binlogPaths.slice(1).join(', ')}`
-                  : '')
+            ? (request.command === 'compare' && this.binlogPaths.length >= 2
+                ? `Binlog A (first build): binlog_file="${this.binlogPaths[0]}"\n` +
+                  `Binlog B (second build): binlog_file="${this.binlogPaths[1]}"\n` +
+                  `Call each tool TWICE — once with each binlog_file path. Do NOT call load_binlog.`
+                : `The binlog file is already loaded at: ${this.binlogPaths[0]}\n` +
+                  `When calling MCP tools, use binlog_file="${this.binlogPaths[0]}" (the full absolute path). ` +
+                  `Do NOT use a relative filename. Do NOT call load_binlog.` +
+                  (this.binlogPaths.length > 1
+                      ? `\nAdditional binlogs: ${this.binlogPaths.slice(1).join(', ')}`
+                      : ''))
             : 'No binlog loaded yet.';
 
         const userMessage = [

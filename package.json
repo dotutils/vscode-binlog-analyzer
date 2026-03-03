@@ -191,6 +191,10 @@
           {
             "name": "secrets",
             "description": "Scan for leaked secrets, tokens, and credentials in the binlog"
+          },
+          {
+            "name": "compare",
+            "description": "Compare two loaded binlogs to spot regressions and configuration differences"
           }
         ]
       }
