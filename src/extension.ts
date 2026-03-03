@@ -458,7 +458,7 @@ function updateStatusBar() {
     }
 
     const count = allBinlogPaths.length;
-    statusBarItem.text = `$(tools) ${count} binlog${count > 1 ? 's' : ''}`;
+    statusBarItem.text = `$(file-binary) ${count} binlog${count > 1 ? 's' : ''}`;
     statusBarItem.tooltip = new vscode.MarkdownString(
         `**Loaded Binlogs (${count})**\n\n` +
         allBinlogPaths.map((p, i) => `${i === 0 ? '🔹' : '📎'} \`${getFileName(p)}\`  \n_${p}_`).join('\n\n') +
