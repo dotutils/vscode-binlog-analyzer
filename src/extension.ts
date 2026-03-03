@@ -277,6 +277,12 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
     // Start a private MCP client for the tree view content
     await startMcpClientForTree(allBinlogPaths);
 
+    // Auto-open binlog summary in editor so the user sees the content
+    if (mcpClient) {
+        const fileName = getFileName(binlogPaths[0]);
+        openBinlogDocument('/summary', fileName);
+    }
+
     if (autoLoad) {
         // Push diagnostics from primary binlog to Problems panel
         if (diagnosticsProvider) {

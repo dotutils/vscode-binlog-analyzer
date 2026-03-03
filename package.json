@@ -91,6 +91,10 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "binlog.openInEditor",
+        "title": "Binlog: Open in Editor"
+      },
+      {
         "command": "binlog.showErrors",
         "title": "Binlog: Show Errors"
       },
