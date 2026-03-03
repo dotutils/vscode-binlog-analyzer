@@ -252,11 +252,17 @@ export function activate(context: vscode.ExtensionContext) {
                 folderUri = vscode.Uri.file(pick.label);
             }
 
-            // Replace the first workspace folder (or add if none)
-            if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
-                vscode.workspace.updateWorkspaceFolders(0, 1, { uri: folderUri });
-            } else {
-                vscode.workspace.updateWorkspaceFolders(0, 0, { uri: folderUri });
+            // Save binlog paths before workspace change so they survive potential reload
+            const config = vscode.workspace.getConfiguration('binlogAnalyzer');
+            await config.update('activeBinlogs', allBinlogPaths, vscode.ConfigurationTarget.Global);
+
+            // Add the folder to workspace (don't replace — avoids reload)
+            const existingFolders = vscode.workspace.workspaceFolders || [];
+            const alreadyAdded = existingFolders.some(f => f.uri.fsPath === folderUri.fsPath);
+            if (!alreadyAdded) {
+                vscode.workspace.updateWorkspaceFolders(
+                    existingFolders.length, 0, { uri: folderUri }
+                );
             }
             // Refresh tree to update the workspace hint
             treeDataProvider?.refresh();
@@ -337,9 +343,8 @@ export function activate(context: vscode.ExtensionContext) {
     // Register diagnostics
     context.subscriptions.push(diagnosticsProvider);
 
-    // Auto-load binlogs from workspace settings (written by Structured Log Viewer)
-    // Use a delay to let the URI handler fire first — if a URI opens a new binlog,
-    // skip loading the stale saved setting.
+    // Auto-load binlogs from settings (written by Structured Log Viewer or workspace change)
+    // Check both workspace and global settings
     const config = vscode.workspace.getConfiguration('binlogAnalyzer');
     const savedBinlogs = config.get<string[]>('activeBinlogs', []);
     if (savedBinlogs.length > 0) {
@@ -347,8 +352,12 @@ export function activate(context: vscode.ExtensionContext) {
             if (!openedViaUri) {
                 handleBinlogOpen(savedBinlogs, context);
             }
-            // Clear stale setting so it doesn't persist across restarts
+            // Clear stale settings so they don't persist across restarts
             config.update('activeBinlogs', undefined, vscode.ConfigurationTarget.Workspace).then(
+                () => {},
+                () => {}
+            );
+            config.update('activeBinlogs', undefined, vscode.ConfigurationTarget.Global).then(
                 () => {},
                 () => {}
             );
