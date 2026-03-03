@@ -62,30 +62,58 @@ export class McpClient extends EventEmitter {
         this.initialized = true;
 
         // Pre-load all binlogs
-        for (const binlogPath of this.binlogPaths) {
-            try {
-                log(`Loading binlog: ${binlogPath}`);
-                const loadResult = await this.sendRequest('tools/call', {
-                    name: 'load_binlog',
-                    arguments: { binlog_file: binlogPath },
-                });
-                log(`load_binlog result: ${JSON.stringify(loadResult).substring(0, 200)}`);
-                this.loadedBinlogs.add(binlogPath);
-            } catch (err) {
-                log(`load_binlog FAILED: ${err}`);
-                // Try with 'path' parameter as fallback
-                try {
-                    const loadResult2 = await this.sendRequest('tools/call', {
-                        name: 'load_binlog',
-                        arguments: { path: binlogPath },
-                    });
-                    log(`load_binlog (path param) result: ${JSON.stringify(loadResult2).substring(0, 200)}`);
-                    this.loadedBinlogs.add(binlogPath);
-                } catch (err2) {
-                    log(`load_binlog (path param) also FAILED: ${err2}`);
+        // First, discover the correct parameter name for load_binlog
+        let loadParamName = 'binlog_file'; // default
+        try {
+            const tools = await this.listTools();
+            log(`Available tools: ${tools.map(t => t.name).join(', ')}`);
+            const loadTool = tools.find(t => t.name === 'load_binlog');
+            if (loadTool?.inputSchema?.properties) {
+                const props = Object.keys(loadTool.inputSchema.properties);
+                log(`load_binlog params: ${props.join(', ')}`);
+                if (props.length > 0) {
+                    loadParamName = props[0]; // use whatever the first (likely only) param is
                 }
             }
+        } catch (err) {
+            log(`listTools failed: ${err}`);
         }
+
+        for (const binlogPath of this.binlogPaths) {
+            log(`Loading binlog with param '${loadParamName}': ${binlogPath}`);
+            const loadResult = await this.sendRequest('tools/call', {
+                name: 'load_binlog',
+                arguments: { [loadParamName]: binlogPath },
+            }) as { content?: Array<{ type: string; text?: string }>; isError?: boolean };
+            log(`load_binlog result: ${JSON.stringify(loadResult).substring(0, 300)}`);
+
+            if (loadResult.isError) {
+                // Try alternative param names
+                const altNames = ['binlog_file', 'path', 'file', 'binlogPath', 'filePath']
+                    .filter(n => n !== loadParamName);
+                let loaded = false;
+                for (const alt of altNames) {
+                    log(`Retrying load_binlog with param '${alt}'`);
+                    const retryResult = await this.sendRequest('tools/call', {
+                        name: 'load_binlog',
+                        arguments: { [alt]: binlogPath },
+                    }) as { content?: Array<{ type: string; text?: string }>; isError?: boolean };
+                    log(`load_binlog (${alt}) result: ${JSON.stringify(retryResult).substring(0, 300)}`);
+                    if (!retryResult.isError) {
+                        this.loadedBinlogs.add(binlogPath);
+                        loadParamName = alt; // remember working param for next binlog
+                        loaded = true;
+                        break;
+                    }
+                }
+                if (!loaded) {
+                    log(`FAILED to load binlog with any parameter name: ${binlogPath}`);
+                }
+            } else {
+                this.loadedBinlogs.add(binlogPath);
+            }
+        }
+        log(`Loaded binlogs: ${[...this.loadedBinlogs].join(', ') || 'NONE'}`);
     }
 
     async callTool(name: string, args: Record<string, unknown> = {}): Promise<ToolResult> {
@@ -113,13 +141,14 @@ export class McpClient extends EventEmitter {
         return { text };
     }
 
-    async listTools(): Promise<Array<{ name: string; description: string }>> {
+    async listTools(): Promise<Array<{ name: string; description: string; inputSchema?: any }>> {
         const result = await this.sendRequest('tools/list', {}) as {
-            tools?: Array<{ name: string; description?: string }>;
+            tools?: Array<{ name: string; description?: string; inputSchema?: any }>;
         };
         return (result.tools || []).map(t => ({
             name: t.name,
             description: t.description || '',
+            inputSchema: t.inputSchema,
         }));
     }
 
