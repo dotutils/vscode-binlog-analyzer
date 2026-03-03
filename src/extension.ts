@@ -14,6 +14,7 @@ let currentBinlogPath: string | undefined;
 let allBinlogPaths: string[] = [];
 let statusBarItem: vscode.StatusBarItem | undefined;
 let extensionContext: vscode.ExtensionContext | undefined;
+let openedViaUri = false;
 
 export function activate(context: vscode.ExtensionContext) {
     extensionContext = context;
@@ -44,6 +45,7 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.window.registerUriHandler({
             handleUri(uri: vscode.Uri) {
                 if (uri.path === '/open') {
+                    openedViaUri = true;
                     const params = new URLSearchParams(uri.query);
                     const binlogPaths = params.getAll('path');
                     if (binlogPaths.length > 0) {
@@ -263,11 +265,21 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(diagnosticsProvider);
 
     // Auto-load binlogs from workspace settings (written by Structured Log Viewer)
+    // Use a delay to let the URI handler fire first — if a URI opens a new binlog,
+    // skip loading the stale saved setting.
     const config = vscode.workspace.getConfiguration('binlogAnalyzer');
     const savedBinlogs = config.get<string[]>('activeBinlogs', []);
     if (savedBinlogs.length > 0) {
-        // Small delay to ensure VS Code window is ready
-        setTimeout(() => handleBinlogOpen(savedBinlogs, context), 500);
+        setTimeout(() => {
+            if (!openedViaUri) {
+                handleBinlogOpen(savedBinlogs, context);
+            }
+            // Clear stale setting so it doesn't persist across restarts
+            config.update('activeBinlogs', undefined, vscode.ConfigurationTarget.Workspace).then(
+                () => {},
+                () => {}
+            );
+        }, 1500);
     }
 }
 
