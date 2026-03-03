@@ -62,7 +62,12 @@ export class BinlogChatParticipant {
         // Build the user prompt — combine slash command context with user text
         const commandPrompt = request.command ? COMMAND_PROMPTS[request.command] || '' : '';
         const binlogContext = this.binlogPaths.length > 0
-            ? `Loaded binlog(s): ${this.binlogPaths.join(', ')}`
+            ? `The binlog file is already loaded at: ${this.binlogPaths[0]}\n` +
+              `When calling MCP tools, use binlog_file="${this.binlogPaths[0]}" (the full absolute path). ` +
+              `Do NOT use a relative filename. Do NOT call load_binlog.` +
+              (this.binlogPaths.length > 1
+                  ? `\nAdditional binlogs: ${this.binlogPaths.slice(1).join(', ')}`
+                  : '')
             : 'No binlog loaded yet.';
 
         const userMessage = [

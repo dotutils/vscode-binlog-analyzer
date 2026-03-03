@@ -185,6 +185,11 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             item.tooltip = p;
             item.iconPath = new vscode.ThemeIcon(i === 0 ? 'file-binary' : 'link');
             item.contextValue = 'binlogFile';
+            item.command = {
+                command: 'workbench.action.chat.open',
+                title: 'Analyze binlog',
+                arguments: [`@binlog Analyze ${fileName}. What is the build result? Show errors if any, and the slowest targets.`],
+            };
             return item;
         });
     }
@@ -306,7 +311,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         if (this.targetsCache) {
             return this.targetsCache.map(d => this.dataToItem(d));
         }
-        return this.callMcpTool('get_expensive_targets', { count: 10 }, 'perf-targets', (text) => {
+        return this.callMcpTool('get_expensive_targets', { top_number: 10 }, 'perf-targets', (text) => {
             const items = this.parsePerfItems(text, 'flame');
             this.targetsCache = items;
             return items;
@@ -317,7 +322,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         if (this.tasksCache) {
             return this.tasksCache.map(d => this.dataToItem(d));
         }
-        return this.callMcpTool('get_expensive_tasks', { count: 10 }, 'perf-tasks', (text) => {
+        return this.callMcpTool('get_expensive_tasks', { top_number: 10 }, 'perf-tasks', (text) => {
             const items = this.parsePerfItems(text, 'tools');
             this.tasksCache = items;
             return items;
