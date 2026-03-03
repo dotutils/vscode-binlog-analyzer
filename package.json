@@ -19,14 +19,22 @@
     "vscode": "^1.99.0"
   },
   "categories": [
-    "Other",
+    "Linters",
     "Chat"
   ],
   "keywords": [
     "msbuild",
     "binlog",
     "build",
-    "diagnostics"
+    "diagnostics",
+    "copilot"
+  ],
+  "galleryBanner": {
+    "color": "#1e1e1e",
+    "theme": "dark"
+  },
+  "extensionDependencies": [
+    "github.copilot-chat"
   ],
   "activationEvents": [
     "onUri",

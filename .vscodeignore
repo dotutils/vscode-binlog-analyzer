@@ -6,3 +6,7 @@ tsconfig.json
 **/*.map
 **/*.ts
 !out/**
+*.vsix
+.git
+.gitignore
+out/test/**
