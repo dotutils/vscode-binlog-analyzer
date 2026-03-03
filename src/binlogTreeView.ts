@@ -474,6 +474,13 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         refresh.iconPath = new vscode.ThemeIcon('refresh');
         actions.push(refresh);
 
+        // Set workspace folder — suggest roots from binlog project paths
+        const wsFolder = new BinlogTreeItem('Set workspace folder...', vscode.TreeItemCollapsibleState.None);
+        wsFolder.nodeKind = 'action';
+        wsFolder.command = { command: 'binlog.setWorkspaceFolder', title: 'Set Folder' };
+        wsFolder.iconPath = new vscode.ThemeIcon('root-folder');
+        actions.push(wsFolder);
+
         // Show "Fix all issues" only when there are errors or warnings
         if ((this.errorsCache && this.errorsCache.length > 0) ||
             (this.warningsCache && this.warningsCache.length > 0)) {
@@ -575,6 +582,30 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         const segments = parts.filter(Boolean);
         if (segments.length <= 3) { return segments.join('/'); }
         return '…/' + segments.slice(-3).join('/');
+    }
+
+    /** Get candidate workspace root folders from binlog project paths */
+    getProjectRootCandidates(): string[] {
+        if (!this.projectsCache) { return []; }
+        const roots = new Map<string, number>();
+        for (const proj of this.projectsCache) {
+            const fullPath = proj.projectFile || '';
+            if (!fullPath || fullPath.length < 4) { continue; }
+            // Walk up to find likely repo roots (directories containing .sln, .git, src/)
+            const normalized = fullPath.replace(/\\/g, '/');
+            const parts = normalized.split('/');
+            // Try several depths: 2, 3, 4 segments from root (e.g., C:/Users/x/msbuild)
+            for (let depth = 2; depth <= Math.min(5, parts.length - 1); depth++) {
+                const candidate = parts.slice(0, depth + 1).join('/');
+                roots.set(candidate, (roots.get(candidate) || 0) + 1);
+            }
+        }
+        // Sort by frequency (most projects share this root) and return unique
+        return [...roots.entries()]
+            .sort((a, b) => b[1] - a[1])
+            .map(([path]) => path)
+            .filter(p => p.length > 3)
+            .slice(0, 10);
     }
 
     private isError(severity: string): boolean {

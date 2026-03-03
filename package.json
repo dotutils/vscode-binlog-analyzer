@@ -104,6 +104,11 @@
         "icon": "$(sparkle)"
       },
       {
+        "command": "binlog.setWorkspaceFolder",
+        "title": "Binlog: Set Workspace Folder",
+        "icon": "$(root-folder)"
+      },
+      {
         "command": "binlog.showErrors",
         "title": "Binlog: Show Errors"
       },

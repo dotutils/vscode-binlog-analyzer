@@ -216,6 +216,53 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
+    // Command: Set Workspace Folder — pick from binlog project paths or browse
+    context.subscriptions.push(
+        vscode.commands.registerCommand('binlog.setWorkspaceFolder', async () => {
+            const candidates = treeDataProvider?.getProjectRootCandidates() || [];
+            // Filter to folders that actually exist locally
+            const fs = await import('fs');
+            const existing = candidates.filter(c => {
+                try { return fs.existsSync(c); } catch { return false; }
+            });
+
+            const items: vscode.QuickPickItem[] = existing.map(p => ({
+                label: p.replace(/\//g, '\\'),
+                description: 'detected from binlog',
+            }));
+            items.push({ label: '$(folder) Browse...', description: 'pick a folder manually' });
+
+            const pick = await vscode.window.showQuickPick(items, {
+                placeHolder: 'Select the project source folder',
+                title: 'Set Workspace Folder',
+            });
+            if (!pick) { return; }
+
+            let folderUri: vscode.Uri;
+            if (pick.label.startsWith('$(folder)')) {
+                const result = await vscode.window.showOpenDialog({
+                    canSelectFolders: true,
+                    canSelectFiles: false,
+                    canSelectMany: false,
+                    openLabel: 'Select Project Folder',
+                });
+                if (!result || result.length === 0) { return; }
+                folderUri = result[0];
+            } else {
+                folderUri = vscode.Uri.file(pick.label);
+            }
+
+            // Replace the first workspace folder (or add if none)
+            if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+                vscode.workspace.updateWorkspaceFolders(0, 1, { uri: folderUri });
+            } else {
+                vscode.workspace.updateWorkspaceFolders(0, 0, { uri: folderUri });
+            }
+            // Refresh tree to update the workspace hint
+            treeDataProvider?.refresh();
+        })
+    );
+
     // Command: Fix All Issues — launches Copilot agent to fix all build errors/warnings
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.fixAllIssues', async () => {
