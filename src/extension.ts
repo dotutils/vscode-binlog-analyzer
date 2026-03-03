@@ -256,13 +256,16 @@ export function activate(context: vscode.ExtensionContext) {
             const config = vscode.workspace.getConfiguration('binlogAnalyzer');
             await config.update('activeBinlogs', allBinlogPaths, vscode.ConfigurationTarget.Global);
 
-            // Add the folder to workspace (don't replace — avoids reload)
+            // Replace the workspace folder (keeps single-root, no restart needed)
             const existingFolders = vscode.workspace.workspaceFolders || [];
             const alreadyAdded = existingFolders.some(f => f.uri.fsPath === folderUri.fsPath);
             if (!alreadyAdded) {
-                vscode.workspace.updateWorkspaceFolders(
-                    existingFolders.length, 0, { uri: folderUri }
-                );
+                if (existingFolders.length > 0) {
+                    // Replace first folder — stays single-root, no extension restart
+                    vscode.workspace.updateWorkspaceFolders(0, 1, { uri: folderUri });
+                } else {
+                    vscode.workspace.updateWorkspaceFolders(0, 0, { uri: folderUri });
+                }
             }
             // Refresh tree to update the workspace hint
             treeDataProvider?.refresh();
