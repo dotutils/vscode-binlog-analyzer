@@ -4,6 +4,7 @@ import { BinlogChatParticipant } from './chatParticipant';
 import { BinlogTreeDataProvider } from './binlogTreeView';
 import { McpClient } from './mcpClient';
 import { BinlogDocumentProvider, BINLOG_SCHEME, openBinlogDocument } from './binlogDocumentProvider';
+import * as telemetry from './telemetry';
 
 let diagnosticsProvider: BinlogDiagnosticsProvider | undefined;
 let chatParticipant: BinlogChatParticipant | undefined;
@@ -18,6 +19,8 @@ let openedViaUri = false;
 
 export function activate(context: vscode.ExtensionContext) {
     extensionContext = context;
+    telemetry.initTelemetry(context);
+    telemetry.trackActivation();
     diagnosticsProvider = new BinlogDiagnosticsProvider();
     chatParticipant = new BinlogChatParticipant();
 
@@ -403,6 +406,7 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 async function handleBinlogOpen(binlogPaths: string[], context: vscode.ExtensionContext) {
+    telemetry.trackBinlogLoad(binlogPaths.length, openedViaUri ? 'uri' : 'file');
     allBinlogPaths = [...binlogPaths];
     currentBinlogPath = binlogPaths[0];
     chatParticipant?.setBinlogPaths(binlogPaths);
@@ -427,8 +431,9 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
     // This way Copilot Chat is usable immediately while the tree loads
     startMcpClientForTree(allBinlogPaths).then(() => {
         treeDataProvider?.setLoading(false);
-    }).catch(() => {
+    }).catch((err) => {
         treeDataProvider?.setLoading(false);
+        telemetry.trackMcpError('startMcpClient', String(err));
     });
 
     // Load diagnostics to Problems panel in the background
@@ -444,6 +449,7 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
     const crossMachineHint = detectCrossMachineBinlog(binlogPaths[0]);
 
     if (crossMachineHint) {
+        telemetry.trackCrossMachine();
         const action = await vscode.window.showWarningMessage(
             `⚠️ This binlog appears to be from a different machine. ` +
             `Open your local project folder so Copilot can navigate source files.`,
@@ -813,14 +819,14 @@ async function installBinlogMcpTool(): Promise<string | null> {
         () => new Promise<string | null>((resolve) => {
             cp.exec('dotnet tool install -g baronfel.binlog.mcp', { timeout: 60000 }, (err: Error | null, stdout: string, stderr: string) => {
                 if (err) {
-                    // Maybe already installed — try update
                     cp.exec('dotnet tool update -g baronfel.binlog.mcp', { timeout: 60000 }, (err2: Error | null) => {
-                        // Check if exe exists now regardless of exit code
                         const exe = findBinlogMcpTool();
+                        telemetry.trackToolInstall(!!exe);
                         resolve(exe);
                     });
                 } else {
                     const exe = findBinlogMcpTool();
+                    telemetry.trackToolInstall(!!exe);
                     if (exe) {
                         vscode.window.showInformationMessage('✅ binlog.mcp MCP server installed successfully.');
                     }

@@ -2,12 +2,16 @@
 
 Analyze MSBuild binary logs (`.binlog`) with **GitHub Copilot Chat** and **MCP tools** — right from VS Code.
 
+> **Preview** — This extension is under active development. Feedback welcome!
+
 ## Features
 
 - **🤖 @binlog Chat Participant** — Ask Copilot about your build: errors, performance, targets, and more
 - **📊 Build Analysis Mode** — Pre-configured Copilot Chat mode for build investigation
+- **🌳 Binlog Explorer** — Sidebar tree view with projects, errors, warnings, and performance data
 - **🔍 Problems Panel** — Build errors and warnings surfaced as VS Code diagnostics
 - **📎 Multi-Binlog Support** — Load and compare multiple binlogs in a single session
+- **✨ Fix All Issues** — One-click action to fix all build warnings/errors with Copilot agent
 - **🔐 Secrets Detection** — Scan binlogs for leaked credentials, tokens, and API keys
 - **🔗 Structured Log Viewer Integration** — One-click launch from the WPF [MSBuild Structured Log Viewer](https://github.com/KirillOsenkov/MSBuildStructuredLog)
 
@@ -27,11 +31,11 @@ Analyze MSBuild binary logs (`.binlog`) with **GitHub Copilot Chat** and **MCP t
 ## Prerequisites
 
 - **VS Code** 1.99+ with GitHub Copilot
-- **[baronfel.binlog.mcp](https://www.nuget.org/packages/baronfel.binlog.mcp)** — The MCP server for binlog analysis
+- **.NET SDK** (for the MCP server tool)
+- **[baronfel.binlog.mcp](https://www.nuget.org/packages/baronfel.binlog.mcp)** — Auto-installed on first use, or install manually:
   ```bash
   dotnet tool install -g baronfel.binlog.mcp
   ```
-  > The extension auto-installs this tool if it's missing.
 
 ## Usage
 
@@ -52,27 +56,43 @@ Open Copilot Chat and type `@binlog` followed by your question:
 | `/targets` | MSBuild target inspection |
 | `/summary` | Comprehensive build summary |
 | `/secrets` | Scan for leaked secrets |
+| `/compare` | Compare two loaded binlogs side by side |
+
+### Binlog Explorer Sidebar
+Click the **Binlog Analyzer** icon in the Activity Bar to see:
+- **Loaded Binlogs** — with inline remove (✕) button on hover
+- **Projects** — with directory paths and build times; click for details
+- **Errors / Warnings** — from build diagnostics
+- **Performance** — slowest targets and tasks
+- **Actions** — quick access to chat, add/refresh binlogs, set workspace, fix all issues
+
+### Fix All Issues
+When errors or warnings exist, the ✨ **Fix all issues** action appears in the tree.
+It sends the concrete diagnostic list to Copilot agent mode, which:
+1. Opens each source file and makes the fix
+2. Suppresses unfixable issues with a comment
+3. Rebuilds to verify — iterates until clean
+
+### Cross-Machine Binlogs
+Binlogs from CI/CD or other machines contain source paths that don't match your local filesystem.
+The extension detects this and shows a dialog. Use **Set workspace folder...** in the tree's
+Actions to point VS Code at your local source code.
 
 ### Commands (`Ctrl+Shift+P`)
 | Command | Description |
 |---------|-------------|
 | **Binlog: Load File** | Open a binlog (replaces current session) |
 | **Binlog: Add File** | Add more binlogs to the current session |
+| **Binlog: Remove File** | Remove a binlog from the session |
 | **Binlog: Manage Loaded Binlogs** | View/add/remove loaded binlogs |
-| **Binlog: Open Project Folder** | Point VS Code at the right source code (for cross-machine binlogs) |
+| **Binlog: Set Workspace Folder** | Point VS Code at the right source code |
+| **Binlog: Fix All Build Issues** | Fix all warnings/errors with Copilot |
 | **Binlog: Show Errors** | Focus the Problems panel |
 | **Binlog: Scan for Secrets** | Detect leaked credentials |
 | **Binlog: Redact Secrets** | Create a redacted copy of a binlog |
 
-### Binlog Explorer Sidebar
-Click the **Binlog Analyzer** icon in the Activity Bar to see loaded binlogs, quick actions, and status.
-
 ### Status Bar
 Shows the number of loaded binlogs. Click to manage.
-
-## Cross-Machine Binlogs
-
-Binlogs from CI/CD or other machines contain source paths that don't match your local filesystem. The extension detects this and prompts you to open the correct local project folder. Copilot Chat can still analyze the binlog structure without local source files.
 
 ## How It Works
 
@@ -95,8 +115,12 @@ Binlogs from CI/CD or other machines contain source paths that don't match your 
 | `binlogAnalyzer.mcpServerPath` | `""` | Custom path to the MCP server executable |
 | `binlogAnalyzer.autoLoad` | `true` | Auto-load binlog diagnostics on activation |
 | `binlogAnalyzer.diagnosticsSeverityFilter` | `"Warning"` | Min severity for Problems panel |
-| `binlogAnalyzer.activeBinlogs` | `[]` | Binlog paths (set automatically by Structured Log Viewer) |
-| `binlogAnalyzer.redaction.*` | — | Secrets redaction options |
+
+## Telemetry
+
+This extension collects anonymized usage data to help improve the experience.
+It respects VS Code's telemetry settings (`telemetry.telemetryLevel`).
+No source code, file paths, or build content is collected.
 
 ## Development
 
@@ -107,11 +131,14 @@ npm install
 # Compile
 npm run compile
 
+# Run tests
+npm test
+
 # Watch mode
 npm run watch
 
 # Package VSIX
-npx vsce package --no-dependencies
+npx vsce package --no-dependencies --allow-missing-repository
 ```
 
 ## Related Projects
