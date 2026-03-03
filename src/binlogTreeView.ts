@@ -55,11 +55,118 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         this.mcpClient = client;
         this.clearCache();
         this._onDidChangeTreeData.fire(undefined);
+        if (client) {
+            this.prefetch();
+        }
     }
 
     refresh() {
         this.clearCache();
         this._onDidChangeTreeData.fire(undefined);
+        if (this.mcpClient) {
+            this.prefetch();
+        }
+    }
+
+    /** Pre-fetch all data so tree expansion is instant */
+    private async prefetch() {
+        if (!this.mcpClient) { return; }
+        const client = this.mcpClient;
+
+        await vscode.window.withProgress(
+            { location: { viewId: 'binlogExplorer' }, },
+            async () => {
+                const calls = [
+                    { tool: 'list_projects', args: {}, cache: 'projects' as const },
+                    { tool: 'get_diagnostics', args: {}, cache: 'diagnostics' as const },
+                    { tool: 'get_expensive_targets', args: { top_number: 10 }, cache: 'targets' as const },
+                    { tool: 'get_expensive_tasks', args: { top_number: 10 }, cache: 'tasks' as const },
+                ];
+
+                await Promise.allSettled(calls.map(async (c) => {
+                    try {
+                        const result = await client.callTool(c.tool, c.args);
+                        const data = this.tryParseJson(result.text);
+                        if (c.cache === 'projects') {
+                            this.projectsCache = this.parseProjectData(data, result.text);
+                        } else if (c.cache === 'diagnostics') {
+                            this.parseDiagnosticsData(data);
+                        } else if (c.cache === 'targets') {
+                            this.targetsCache = this.parsePerfItems(result.text, 'flame');
+                        } else if (c.cache === 'tasks') {
+                            this.tasksCache = this.parsePerfItems(result.text, 'tools');
+                        }
+                    } catch {
+                        // Non-fatal
+                    }
+                }));
+
+                this._onDidChangeTreeData.fire(undefined);
+            }
+        );
+    }
+
+    private parseProjectData(data: unknown, text: string): TreeNodeData[] {
+        const items: TreeNodeData[] = [];
+        if (data && typeof data === 'object' && !Array.isArray(data)) {
+            for (const [id, proj] of Object.entries(data as Record<string, any>)) {
+                const file = proj.projectFile || proj.ProjectFile || '';
+                const targets = proj.entryTargets || {};
+                const totalMs = Object.values(targets).reduce(
+                    (sum: number, t: any) => sum + (t.durationMs || 0), 0
+                );
+                const targetNames = Object.values(targets)
+                    .map((t: any) => t.targetName)
+                    .join(', ');
+                items.push({
+                    kind: 'project',
+                    label: this.extractFileName(String(file)),
+                    description: totalMs > 0 ? `${(totalMs / 1000).toFixed(1)}s` : undefined,
+                    tooltip: `${file}\nTargets: ${targetNames || 'none'}`,
+                    icon: 'package',
+                });
+            }
+        }
+        const seen = new Set<string>();
+        return items.filter(i => {
+            if (seen.has(i.label)) { return false; }
+            seen.add(i.label);
+            return true;
+        });
+    }
+
+    private parseDiagnosticsData(data: unknown) {
+        const errors: TreeNodeData[] = [];
+        const warnings: TreeNodeData[] = [];
+        if (data && typeof data === 'object') {
+            const obj = data as Record<string, any>;
+            const diagnostics = obj.diagnostics || [];
+            if (Array.isArray(diagnostics)) {
+                for (const d of diagnostics) {
+                    const sev = d.severity || d.Severity || d.level || '';
+                    const code = d.code || d.Code || '';
+                    const msg = d.message || d.Message || d.text || '';
+                    const file = d.file || d.File || d.projectFile || '';
+                    const line = d.lineNumber || d.LineNumber || d.line || '';
+                    const label = code ? `${code}: ${msg}` : String(msg);
+                    const loc = file ? `${this.extractFileName(String(file))}${line ? ':' + line : ''}` : '';
+                    const item: TreeNodeData = {
+                        kind: 'diagnostic',
+                        label: label.length > 120 ? label.substring(0, 117) + '...' : label,
+                        description: loc,
+                        tooltip: `${label}\n${file}${line ? ':' + line : ''}`,
+                        icon: this.isError(sev) ? 'error' : 'warning',
+                    };
+                    if (this.isError(sev)) {
+                        errors.push(item);
+                    } else {
+                        warnings.push(item);
+                    }
+                }
+            }
+        }
+        this.errorsCache = errors;
+        this.warningsCache = warnings;
     }
 
     private clearCache() {
@@ -198,93 +305,27 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         if (this.projectsCache) {
             return this.projectsCache.map(d => this.dataToItem(d));
         }
+        // Fallback if not prefetched
         return this.callMcpTool('list_projects', {}, 'root-projects', (text) => {
             const data = this.tryParseJson(text);
-            const items: TreeNodeData[] = [];
-            if (data && typeof data === 'object' && !Array.isArray(data)) {
-                // Format: { "19": { projectFile, id, entryTargets: { ... } }, ... }
-                for (const [id, proj] of Object.entries(data as Record<string, any>)) {
-                    const file = proj.projectFile || proj.ProjectFile || '';
-                    const targets = proj.entryTargets || {};
-                    const targetNames = Object.values(targets).map((t: any) => t.targetName).join(', ');
-                    const totalMs = Object.values(targets).reduce((sum: number, t: any) => sum + (t.durationMs || 0), 0);
-                    const durStr = totalMs > 0 ? `${(totalMs / 1000).toFixed(1)}s` : '';
-                    items.push({
-                        kind: 'project',
-                        label: this.extractFileName(String(file)),
-                        description: durStr,
-                        tooltip: `${file}\nTargets: ${targetNames || 'none'}`,
-                        icon: 'package',
-                    });
-                }
-            } else if (Array.isArray(data)) {
-                for (const proj of data) {
-                    const name = proj.name || proj.projectFile || String(proj);
-                    items.push({
-                        kind: 'project',
-                        label: this.extractFileName(String(name)),
-                        tooltip: String(name),
-                        icon: 'package',
-                    });
-                }
-            }
-            // Deduplicate by project file name
-            const seen = new Set<string>();
-            const deduped = items.filter(i => {
-                if (seen.has(i.label)) { return false; }
-                seen.add(i.label);
-                return true;
-            });
-            this.projectsCache = deduped;
-            return deduped;
+            this.projectsCache = this.parseProjectData(data, text);
+            return this.projectsCache;
         });
     }
 
     private async fetchDiagnostics(severity: 'Error' | 'Warning'): Promise<BinlogTreeItem[]> {
         const cache = severity === 'Error' ? this.errorsCache : this.warningsCache;
         if (cache) {
+            if (cache.length === 0) {
+                return [this.makeInfoItem('None found', 'info')];
+            }
             return cache.map(d => this.dataToItem(d));
         }
+        // Fallback if not prefetched
         return this.callMcpTool('get_diagnostics', {}, severity === 'Error' ? 'root-errors' : 'root-warnings', (text) => {
             const data = this.tryParseJson(text);
-            const items: TreeNodeData[] = [];
-            if (data && typeof data === 'object') {
-                const obj = data as Record<string, any>;
-                // Format: { diagnostics: [...], errorCount, warningCount }
-                const diagnostics = obj.diagnostics || [];
-                if (Array.isArray(diagnostics)) {
-                    for (const d of diagnostics) {
-                        const sev = d.severity || d.Severity || d.level || '';
-                        if (severity === 'Error' && !this.isError(sev)) { continue; }
-                        if (severity === 'Warning' && !this.isWarning(sev)) { continue; }
-                        const code = d.code || d.Code || '';
-                        const msg = d.message || d.Message || d.text || '';
-                        const file = d.file || d.File || d.projectFile || '';
-                        const line = d.lineNumber || d.LineNumber || d.line || '';
-                        const label = code ? `${code}: ${msg}` : String(msg);
-                        const loc = file ? `${this.extractFileName(String(file))}${line ? ':' + line : ''}` : '';
-                        items.push({
-                            kind: 'diagnostic',
-                            label: label.length > 120 ? label.substring(0, 117) + '...' : label,
-                            description: loc,
-                            tooltip: `${label}\n${file}${line ? ':' + line : ''}`,
-                            icon: severity === 'Error' ? 'error' : 'warning',
-                        });
-                    }
-                }
-                // If no individual diagnostics but we have counts
-                if (diagnostics.length === 0) {
-                    const count = severity === 'Error' ? (obj.errorCount || 0) : (obj.warningCount || 0);
-                    if (count === 0) {
-                        // Will show "None found"
-                    }
-                }
-            }
-            if (severity === 'Error') {
-                this.errorsCache = items;
-            } else {
-                this.warningsCache = items;
-            }
+            this.parseDiagnosticsData(data);
+            const items = severity === 'Error' ? this.errorsCache! : this.warningsCache!;
             return items;
         });
     }

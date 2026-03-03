@@ -277,6 +277,9 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
     // Start a private MCP client for the tree view content
     await startMcpClientForTree(allBinlogPaths);
 
+    // Write copilot instructions with binlog paths so Copilot Chat knows them
+    await writeCopilotInstructions(allBinlogPaths);
+
     // Auto-open binlog summary in editor so the user sees the content
     if (mcpClient) {
         const fileName = getFileName(binlogPaths[0]);
@@ -484,6 +487,45 @@ function showGettingStarted() {
     panel.appendLine('');
     panel.appendLine('═══════════════════════════════════════════');
     panel.show();
+}
+
+/**
+ * Writes .github/copilot-instructions.md in the workspace so that
+ * Copilot Chat knows the binlog paths and never calls load_binlog.
+ */
+async function writeCopilotInstructions(binlogPaths: string[]) {
+    const fs = require('fs');
+    const pathMod = require('path');
+
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspaceFolder) { return; }
+
+    const githubDir = pathMod.join(workspaceFolder, '.github');
+    const instructionsPath = pathMod.join(githubDir, 'copilot-instructions.md');
+
+    const pathsList = binlogPaths.map(p => `- \`${p}\``).join('\n');
+    const primaryPath = binlogPaths[0];
+
+    const content = `# Binlog Analyzer Instructions
+
+## Loaded Binlogs
+${pathsList}
+
+## CRITICAL Rules for MCP Tool Calls
+- **NEVER call \`load_binlog\`** — binlogs are already pre-loaded by the MCP server
+- All tools require \`binlog_file\` parameter — always use the full absolute path: \`${primaryPath}\`
+- Do NOT use relative filenames like \`wsl_build.binlog\` — always use the full path above
+- Available tools: \`get_diagnostics\`, \`list_projects\`, \`get_expensive_targets\`, \`get_expensive_tasks\`, \`get_expensive_projects\`, \`search_binlog\`, \`get_project_build_time\`, \`search_targets_by_name\`, \`search_tasks_by_name\`
+`;
+
+    try {
+        if (!fs.existsSync(githubDir)) {
+            fs.mkdirSync(githubDir, { recursive: true });
+        }
+        fs.writeFileSync(instructionsPath, content, 'utf8');
+    } catch {
+        // Non-fatal
+    }
 }
 
 /**
