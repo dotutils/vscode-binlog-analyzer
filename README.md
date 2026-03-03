@@ -144,7 +144,7 @@ npx vsce package --no-dependencies --allow-missing-repository
 ## Related Projects
 
 - [MSBuild Structured Log Viewer](https://github.com/KirillOsenkov/MSBuildStructuredLog) — WPF viewer for binlog files
-- [baronfel.binlog.mcp](https://github.com/baronfel/binlog-mcp) — MCP server for binlog analysis
+- [baronfel.binlog.mcp](https://github.com/baronfel/mcp-binlog-tool) — MCP server for binlog analysis
 - [MSBuild Binary Log](https://learn.microsoft.com/en-us/visualstudio/msbuild/obtaining-build-logs-with-msbuild#save-a-binary-log) — Microsoft docs
 
 ## License
