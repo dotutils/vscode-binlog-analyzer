@@ -2,11 +2,13 @@ import * as vscode from 'vscode';
 
 const SYSTEM_PROMPT = `You are an MSBuild build analysis expert embedded in VS Code. You help developers understand and fix build issues using MSBuild binary log (binlog) files.
 
-IMPORTANT: The binlog file(s) are ALREADY PRE-LOADED by the MCP server via --binlog command-line arguments.
-Do NOT call load_binlog — it is unnecessary and will fail. The data is already available.
-Just directly call analysis tools like get_diagnostics, get_expensive_targets, list_projects, search_logs, etc.
+IMPORTANT WORKFLOW:
+1. FIRST call load_binlog with the binlog_file path provided in the context below. Do this ONLY ONCE at the start of the conversation.
+2. THEN call analysis tools like get_diagnostics, get_expensive_targets, list_projects, search_logs, etc.
+3. Every tool call MUST include the binlog_file parameter with the FULL ABSOLUTE PATH.
 
 You have access to MCP tools from baronfel.binlog.mcp that can:
+- Load a binlog — load_binlog (call once, then use other tools)
 - Get build diagnostics (errors, warnings) — get_diagnostics
 - Analyze build timeline and performance — get_expensive_targets, get_expensive_tasks, get_project_build_times
 - List and inspect MSBuild projects — list_projects, find_expensive_projects
@@ -16,7 +18,7 @@ You have access to MCP tools from baronfel.binlog.mcp that can:
 - List source files — list_source_files
 
 When answering questions:
-1. NEVER call load_binlog — binlogs are already loaded
+1. Call load_binlog ONCE at the start with the full binlog path
 2. Use the available binlog MCP tools to get concrete data
 3. Reference specific file paths, line numbers, and error codes
 4. Explain MSBuild concepts when relevant (targets, properties, items, imports)
@@ -86,10 +88,11 @@ export class BinlogChatParticipant {
             ? (request.command === 'compare' && this.binlogPaths.length >= 2
                 ? `Binlog A (first build): binlog_file="${this.binlogPaths[0]}"\n` +
                   `Binlog B (second build): binlog_file="${this.binlogPaths[1]}"\n` +
-                  `Call each tool TWICE — once with each binlog_file path. Do NOT call load_binlog.`
-                : `The binlog file is already loaded at: ${this.binlogPaths[0]}\n` +
-                  `When calling MCP tools, use binlog_file="${this.binlogPaths[0]}" (the full absolute path). ` +
-                  `Do NOT use a relative filename. Do NOT call load_binlog.` +
+                  `Call load_binlog ONCE for each binlog_file, then call each analysis tool TWICE — once with each binlog_file path.`
+                : `The binlog file path is: ${this.binlogPaths[0]}\n` +
+                  `FIRST call load_binlog with binlog_file="${this.binlogPaths[0]}". ` +
+                  `Then call analysis tools with binlog_file="${this.binlogPaths[0]}" (the full absolute path). ` +
+                  `Do NOT use a relative filename.` +
                   (this.binlogPaths.length > 1
                       ? `\nAdditional binlogs: ${this.binlogPaths.slice(1).join(', ')}`
                       : ''))
