@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Stylized build block / B shape -->
+  <!-- Left vertical bar -->
+  <path d="M6 4 v16" />
+  <!-- Top block -->
+  <path d="M6 4 h7 a4 4 0 0 1 0 8 H6" />
+  <!-- Bottom block (slightly wider) -->
+  <path d="M6 12 h8 a4 4 0 0 1 0 8 H6" />
+  <!-- Binary log accent lines -->
+  <line x1="9" y1="7" x2="12" y2="7" />
+  <line x1="9" y1="9" x2="11" y2="9" />
+  <line x1="9" y1="15" x2="13" y2="15" />
+  <line x1="9" y1="17" x2="12" y2="17" />
+</svg>

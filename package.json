@@ -38,7 +38,7 @@
         {
           "id": "binlog-analyzer",
           "title": "Binlog Analyzer",
-          "icon": "images/icon.svg"
+          "icon": "images/icon-mono.svg"
         }
       ]
     },
