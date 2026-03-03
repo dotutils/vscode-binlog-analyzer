@@ -66,15 +66,22 @@ export class BinlogChatParticipant {
         ].filter(Boolean).join('\n\n');
 
         // Find available MCP tools from the binlog MCP server
-        const allTools = vscode.lm.tools.filter(tool =>
+        const tools = vscode.lm.tools.filter(tool =>
             tool.name.includes('binlog') ||
             tool.name.includes('baronfel') ||
-            tool.tags?.includes('mcp') ||
             tool.name.startsWith('baronfel_binlog_mcp')
         );
 
-        // If no MCP tools found, try all tools (the MCP tools may have generic names)
-        const tools = allTools.length > 0 ? allTools : vscode.lm.tools;
+        if (tools.length === 0) {
+            stream.markdown(
+                '⚠️ No binlog MCP tools found. The MCP server may not be running.\n\n' +
+                '**To fix:**\n' +
+                '1. Check that `baronfel.binlog.mcp` is installed: `dotnet tool list -g`\n' +
+                '2. Restart VS Code to reload MCP servers\n' +
+                '3. Or try the **Build Analysis** chat mode instead\n'
+            );
+            return;
+        }
 
         // Select a chat model
         const models = await vscode.lm.selectChatModels({ family: 'gpt-4o' });
