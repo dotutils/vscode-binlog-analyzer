@@ -19,6 +19,14 @@ When answering questions:
 
 Common MSBuild node types: Build, Project, Target, Task, Message, Warning, Error, Property, Item, Import, ProjectEvaluation.`;
 
+const COMMAND_PROMPTS: Record<string, string> = {
+    errors: 'Get all build errors and warnings from the binlog. Show error codes, file paths, line numbers, and messages. Group by project. Suggest fixes for each error.',
+    timeline: 'Analyze the build timeline and performance. Show the slowest targets and tasks, total build duration, and identify bottlenecks. Suggest optimizations.',
+    targets: 'List the MSBuild targets that were executed. Show their execution order, duration, and dependencies. Highlight any targets that failed.',
+    summary: 'Provide a comprehensive build summary: overall result, duration, number of projects, error/warning counts, key properties, and configuration. Highlight anything unusual.',
+    secrets: 'Scan the binlog for potential secrets, credentials, API keys, tokens, connection strings, and sensitive data that may have been logged during the build. Report any findings.',
+};
+
 export class BinlogChatParticipant {
     private binlogPaths: string[] = [];
     private participant: vscode.Disposable | undefined;
@@ -45,100 +53,154 @@ export class BinlogChatParticipant {
         stream: vscode.ChatResponseStream,
         token: vscode.CancellationToken
     ): Promise<void> {
-        const command = request.command;
+        // Build the user prompt — combine slash command context with user text
+        const commandPrompt = request.command ? COMMAND_PROMPTS[request.command] || '' : '';
+        const binlogContext = this.binlogPaths.length > 0
+            ? `Loaded binlog(s): ${this.binlogPaths.join(', ')}`
+            : 'No binlog loaded yet.';
 
-        // Build context message
-        let contextInfo = '';
-        if (this.binlogPaths.length > 0) {
-            const pathList = this.binlogPaths.map(p => `\`${p}\``).join(', ');
-            contextInfo = `\n\nLoaded binlog(s): ${pathList}`;
+        const userMessage = [
+            commandPrompt,
+            request.prompt,
+            binlogContext
+        ].filter(Boolean).join('\n\n');
+
+        // Find available MCP tools from the binlog MCP server
+        const allTools = vscode.lm.tools.filter(tool =>
+            tool.name.includes('binlog') ||
+            tool.name.includes('baronfel') ||
+            tool.tags?.includes('mcp') ||
+            tool.name.startsWith('baronfel_binlog_mcp')
+        );
+
+        // If no MCP tools found, try all tools (the MCP tools may have generic names)
+        const tools = allTools.length > 0 ? allTools : vscode.lm.tools;
+
+        // Select a chat model
+        const models = await vscode.lm.selectChatModels({ family: 'gpt-4o' });
+        const model = models[0] ?? (await vscode.lm.selectChatModels())[0];
+
+        if (!model) {
+            stream.markdown('⚠️ No language model available. Make sure GitHub Copilot is active.\n');
+            return;
         }
 
-        const loadedLabel = this.binlogPaths.length > 0
-            ? this.binlogPaths.map(p => p.split(/[/\\]/).pop()).join(', ')
-            : 'not loaded';
+        // Build messages
+        const messages = [
+            vscode.LanguageModelChatMessage.User(SYSTEM_PROMPT),
+            // Include conversation history for context
+            ...context.history.map(turn => {
+                if (turn instanceof vscode.ChatResponseTurn) {
+                    const parts = turn.response
+                        .filter((p): p is vscode.ChatResponseMarkdownPart => p instanceof vscode.ChatResponseMarkdownPart)
+                        .map(p => p.value.value);
+                    return vscode.LanguageModelChatMessage.Assistant(parts.join(''));
+                } else {
+                    return vscode.LanguageModelChatMessage.User(
+                        (turn as vscode.ChatRequestTurn).prompt
+                    );
+                }
+            }),
+            vscode.LanguageModelChatMessage.User(userMessage),
+        ];
 
-        switch (command) {
-            case 'errors':
-                stream.markdown('Analyzing build errors and warnings...\n\n');
-                stream.markdown(
-                    `Use the binlog MCP tools to investigate errors. ` +
-                    `Loaded: \`${loadedLabel}\`\n\n` +
-                    `Try asking:\n` +
-                    `- "What errors are in the build?"\n` +
-                    `- "Why did the build fail?"\n` +
-                    `- "Show me all CS* compiler errors"\n`
-                );
-                break;
+        // Send request with tools
+        const toolReferences = tools.map(t => ({ name: t.name, toolReferenceName: t.name }));
+        try {
+            const chatRequest = await model.sendRequest(
+                messages,
+                {
+                    tools: tools as unknown as vscode.LanguageModelChatTool[],
+                    toolMode: vscode.LanguageModelChatToolMode.Auto,
+                },
+                token
+            );
 
-            case 'timeline':
-                stream.markdown('Analyzing build timeline and performance...\n\n');
-                stream.markdown(
-                    `Use the binlog MCP tools to analyze build performance. ` +
-                    `Loaded: \`${loadedLabel}\`\n\n` +
-                    `Try asking:\n` +
-                    `- "What are the slowest targets?"\n` +
-                    `- "Show the build timeline"\n` +
-                    `- "Which projects took the longest?"\n`
-                );
-                break;
+            // Process the response — handle tool calls in a loop
+            await this.processResponse(chatRequest, messages, model, tools, stream, token);
 
-            case 'targets':
-                stream.markdown('Analyzing MSBuild targets...\n\n');
-                stream.markdown(
-                    `Use the binlog MCP tools to inspect targets. ` +
-                    `Loaded: \`${loadedLabel}\`\n\n` +
-                    `Try asking:\n` +
-                    `- "List all executed targets"\n` +
-                    `- "Why did target X run?"\n` +
-                    `- "Show the target dependency graph"\n`
-                );
-                break;
+        } catch (err) {
+            if (err instanceof vscode.LanguageModelError) {
+                stream.markdown(`⚠️ Model error: ${err.message}\n\nTry using the **Build Analysis** chat mode instead — it has MCP tools pre-configured.`);
+            } else {
+                throw err;
+            }
+        }
+    }
 
-            case 'summary':
-                stream.markdown('Generating build summary...\n\n');
-                stream.markdown(
-                    `Use the binlog MCP tools for a comprehensive summary. ` +
-                    `Loaded: \`${loadedLabel}\`\n\n` +
-                    `Ask for:\n` +
-                    `- Overall build result and duration\n` +
-                    `- Number of projects built\n` +
-                    `- Error and warning counts\n` +
-                    `- Key properties and configurations\n`
-                );
-                break;
+    private async processResponse(
+        chatRequest: vscode.LanguageModelChatResponse,
+        messages: vscode.LanguageModelChatMessage[],
+        model: vscode.LanguageModelChat,
+        tools: readonly vscode.LanguageModelToolInformation[],
+        stream: vscode.ChatResponseStream,
+        token: vscode.CancellationToken,
+        depth: number = 0
+    ): Promise<void> {
+        // Prevent infinite tool call loops
+        if (depth > 10) {
+            stream.markdown('\n\n⚠️ Too many tool calls — stopping here.\n');
+            return;
+        }
 
-            case 'secrets':
-                stream.markdown('🔐 **Scanning for secrets in binlog...**\n\n');
-                stream.markdown(
-                    `The binlog may contain sensitive data like API keys, connection strings, tokens, and usernames ` +
-                    `that were passed as MSBuild properties or environment variables during the build.\n\n` +
-                    `**Detection categories:**\n` +
-                    `- **CommonSecrets** — API keys, SAS tokens, connection strings, passwords\n` +
-                    `- **ExplicitSecrets** — Values explicitly marked as secrets in MSBuild\n` +
-                    `- **Username** — Username/identity information\n\n` +
-                    `**What you can do:**\n` +
-                    `- Search \`$secret\` in the Structured Log Viewer to find secrets in the tree\n` +
-                    `- Search \`$secret not(Username)\` to exclude username detection\n` +
-                    `- Use the \`Binlog: Redact Secrets\` command to create a redacted copy\n` +
-                    `- Ask me to analyze specific properties for sensitive data\n\n` +
-                    `Loaded: \`${loadedLabel}\`\n`
-                );
-                break;
+        const toolCalls: vscode.LanguageModelToolCallPart[] = [];
+        let hasText = false;
 
-            default:
-                // General question - provide system prompt context
-                stream.markdown(
-                    `I'm the MSBuild Binlog Analyzer. ${this.binlogPaths.length > 0 ? `Loaded: \`${loadedLabel}\`.` : 'No binlog loaded yet.'}\n\n` +
-                    `I can help with:\n` +
-                    `- \`/errors\` — Analyze build errors and warnings\n` +
-                    `- \`/timeline\` — Build performance analysis\n` +
-                    `- \`/targets\` — MSBuild target inspection\n` +
-                    `- \`/summary\` — Comprehensive build summary\n` +
-                    `- \`/secrets\` — Scan for leaked secrets and credentials\n\n` +
-                    `Or just ask any question about your build!${contextInfo}\n`
-                );
-                break;
+        for await (const part of chatRequest.stream) {
+            if (part instanceof vscode.LanguageModelTextPart) {
+                stream.markdown(part.value);
+                hasText = true;
+            } else if (part instanceof vscode.LanguageModelToolCallPart) {
+                toolCalls.push(part);
+            }
+        }
+
+        // If there were tool calls, invoke them and continue
+        if (toolCalls.length > 0) {
+            // Show tool activity
+            for (const call of toolCalls) {
+                stream.progress(`Calling ${call.name}...`);
+            }
+
+            // Execute tool calls
+            const toolResults: vscode.LanguageModelToolResultPart[] = [];
+            for (const call of toolCalls) {
+                try {
+                    const result = await vscode.lm.invokeTool(
+                        call.name,
+                        { input: call.input, toolInvocationToken: undefined },
+                        token
+                    );
+                    toolResults.push(new vscode.LanguageModelToolResultPart(call.callId, result.content));
+                } catch (err) {
+                    const errorMsg = err instanceof Error ? err.message : String(err);
+                    toolResults.push(
+                        new vscode.LanguageModelToolResultPart(call.callId, [
+                            new vscode.LanguageModelTextPart(`Error: ${errorMsg}`)
+                        ])
+                    );
+                }
+            }
+
+            // Add assistant tool calls and results to messages
+            messages.push(
+                vscode.LanguageModelChatMessage.Assistant(toolCalls.map(tc => tc)),
+            );
+            messages.push(
+                vscode.LanguageModelChatMessage.User(toolResults.map(tr => tr)),
+            );
+
+            // Continue conversation with tool results
+            const nextRequest = await model.sendRequest(
+                messages,
+                {
+                    tools: tools as unknown as vscode.LanguageModelChatTool[],
+                    toolMode: vscode.LanguageModelChatToolMode.Auto,
+                },
+                token
+            );
+
+            await this.processResponse(nextRequest, messages, model, tools, stream, token, depth + 1);
         }
     }
 
