@@ -608,6 +608,20 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             .slice(0, 10);
     }
 
+    /** Get formatted diagnostics for the fix-all prompt */
+    getDiagnosticsSummary(): { errors: string[], warnings: string[], errorCount: number, warningCount: number } {
+        const formatDiag = (d: TreeNodeData) => {
+            const desc = d.description || '';
+            return `- ${d.label} (${desc})`;
+        };
+        return {
+            errors: (this.errorsCache || []).map(formatDiag),
+            warnings: (this.warningsCache || []).map(formatDiag),
+            errorCount: this.errorsCache?.length || 0,
+            warningCount: this.warningsCache?.length || 0,
+        };
+    }
+
     private isError(severity: string): boolean {
         return /error/i.test(String(severity));
     }

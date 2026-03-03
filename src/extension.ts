@@ -294,21 +294,40 @@ export function activate(context: vscode.ExtensionContext) {
                 return;
             }
 
-            const binlogFile = currentBinlogPath;
-            const fileName = getFileName(binlogFile);
+            // Get concrete diagnostics from the tree cache
+            const diag = treeDataProvider?.getDiagnosticsSummary();
+            if (!diag || (diag.errorCount === 0 && diag.warningCount === 0)) {
+                vscode.window.showInformationMessage('No errors or warnings to fix.');
+                return;
+            }
 
-            // Build a prompt that instructs Copilot to fix all issues in a loop
-            const prompt = `@binlog /errors\n\n` +
-                `Please fix ALL build errors and warnings reported in the binlog "${fileName}". ` +
-                `For each issue:\n` +
-                `1. Read the error/warning code, message, file path, and line number\n` +
-                `2. Open the source file and fix the issue\n` +
-                `3. Move to the next issue\n\n` +
-                `After fixing all issues, run the build command to verify the fixes. ` +
-                `If new issues appear, fix those too. Continue until the build is clean (0 errors, 0 warnings). ` +
-                `When done, show a summary of all changes made.`;
+            // Build a detailed prompt with actual issues for agent mode
+            const issueLines: string[] = [];
+            if (diag.errors.length > 0) {
+                issueLines.push('**ERRORS:**');
+                issueLines.push(...diag.errors.slice(0, 50));
+            }
+            if (diag.warnings.length > 0) {
+                issueLines.push('**WARNINGS:**');
+                issueLines.push(...diag.warnings.slice(0, 50));
+            }
 
-            vscode.commands.executeCommand('workbench.action.chat.open', prompt);
+            const prompt =
+                `Fix the following ${diag.errorCount} errors and ${diag.warningCount} warnings from the MSBuild binlog.\n\n` +
+                issueLines.join('\n') + '\n\n' +
+                `INSTRUCTIONS:\n` +
+                `1. For each issue, open the source file and make the fix\n` +
+                `2. If an issue cannot be fixed (e.g. external dependency, SDK limitation), suppress it with a comment explaining why\n` +
+                `3. After fixing all issues, run the build command to verify\n` +
+                `4. If new issues appear, fix those too\n` +
+                `5. Continue until the build is clean\n` +
+                `6. Show a summary of all changes made`;
+
+            // Open in agent mode (not @binlog — agent mode can edit files and run terminal)
+            vscode.commands.executeCommand('workbench.action.chat.open', {
+                query: prompt,
+                isPartialQuery: false,
+            });
         })
     );
 
