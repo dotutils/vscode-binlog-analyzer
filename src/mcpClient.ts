@@ -1,5 +1,15 @@
 import { ChildProcess, spawn } from 'child_process';
 import { EventEmitter } from 'events';
+import * as vscode from 'vscode';
+
+// Debug output channel for MCP client diagnostics
+let outputChannel: vscode.OutputChannel | undefined;
+function log(msg: string) {
+    if (!outputChannel) {
+        outputChannel = vscode.window.createOutputChannel('Binlog MCP Client');
+    }
+    outputChannel.appendLine(`[${new Date().toISOString().substring(11, 19)}] ${msg}`);
+}
 
 /**
  * Minimal MCP (Model Context Protocol) client that communicates with
@@ -54,13 +64,26 @@ export class McpClient extends EventEmitter {
         // Pre-load all binlogs
         for (const binlogPath of this.binlogPaths) {
             try {
-                await this.sendRequest('tools/call', {
+                log(`Loading binlog: ${binlogPath}`);
+                const loadResult = await this.sendRequest('tools/call', {
                     name: 'load_binlog',
-                    arguments: { path: binlogPath },
+                    arguments: { binlog_file: binlogPath },
                 });
+                log(`load_binlog result: ${JSON.stringify(loadResult).substring(0, 200)}`);
                 this.loadedBinlogs.add(binlogPath);
-            } catch {
-                // Non-fatal: some binlogs may not exist
+            } catch (err) {
+                log(`load_binlog FAILED: ${err}`);
+                // Try with 'path' parameter as fallback
+                try {
+                    const loadResult2 = await this.sendRequest('tools/call', {
+                        name: 'load_binlog',
+                        arguments: { path: binlogPath },
+                    });
+                    log(`load_binlog (path param) result: ${JSON.stringify(loadResult2).substring(0, 200)}`);
+                    this.loadedBinlogs.add(binlogPath);
+                } catch (err2) {
+                    log(`load_binlog (path param) also FAILED: ${err2}`);
+                }
             }
         }
     }
@@ -73,6 +96,7 @@ export class McpClient extends EventEmitter {
         if (!args.binlog_file && this.loadedBinlogs.size > 0) {
             args.binlog_file = [...this.loadedBinlogs][0];
         }
+        log(`callTool: ${name} args=${JSON.stringify(args).substring(0, 200)}`);
         const result = await this.sendRequest('tools/call', { name, arguments: args }) as {
             content?: Array<{ type: string; text?: string }>;
             isError?: boolean;
@@ -81,7 +105,9 @@ export class McpClient extends EventEmitter {
             .filter(c => c.type === 'text' && c.text)
             .map(c => c.text!);
         const text = textParts.join('\n');
+        log(`callTool ${name} response (${text.length} chars): ${text.substring(0, 300)}`);
         if (result.isError || text.includes('An error occurred invoking')) {
+            log(`callTool ${name} ERROR: ${text.substring(0, 500)}`);
             throw new Error(text || 'Tool call failed');
         }
         return { text };

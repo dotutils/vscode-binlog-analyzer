@@ -106,8 +106,10 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                         } else if (c.cache === 'tasks') {
                             this.tasksCache = this.parsePerfItems(result.text, 'tools');
                         }
-                    } catch {
-                        // Non-fatal
+                    } catch (err) {
+                        // Log error to output channel for debugging
+                        const outputChannel = vscode.window.createOutputChannel('Binlog MCP Client');
+                        outputChannel.appendLine(`prefetch ${c.tool} FAILED: ${err}`);
                     }
                 }));
 
@@ -606,6 +608,14 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             .map(([path]) => path)
             .filter(p => p.length > 3)
             .slice(0, 10);
+    }
+
+    /** Get project file paths from the cache (for build command reconstruction) */
+    getProjectFiles(): string[] {
+        if (!this.projectsCache) { return []; }
+        return this.projectsCache
+            .map(p => p.projectFile || '')
+            .filter(p => p.length > 0);
     }
 
     /** Get formatted diagnostics for the fix-all prompt */

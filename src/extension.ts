@@ -16,6 +16,7 @@ let allBinlogPaths: string[] = [];
 let statusBarItem: vscode.StatusBarItem | undefined;
 let extensionContext: vscode.ExtensionContext | undefined;
 let openedViaUri = false;
+let binlogWatchers: vscode.FileSystemWatcher[] = [];
 
 export function activate(context: vscode.ExtensionContext) {
     extensionContext = context;
@@ -304,6 +305,21 @@ export function activate(context: vscode.ExtensionContext) {
                 return;
             }
 
+            // Get project files for build command reconstruction
+            const projectFiles = treeDataProvider?.getProjectFiles() || [];
+            const binlogPath = currentBinlogPath.replace(/\\/g, '/');
+
+            // Infer the build command from binlog + project info
+            // Try to find a solution file or the root project
+            const slnFiles = projectFiles.filter(f => /\.sln$/i.test(f));
+            const buildTarget = slnFiles.length > 0
+                ? slnFiles[0].replace(/\\/g, '/')
+                : (projectFiles.length === 1 ? projectFiles[0].replace(/\\/g, '/') : '');
+
+            const buildCmd = buildTarget
+                ? `dotnet build "${buildTarget}" -bl:"${binlogPath}"`
+                : `dotnet build -bl:"${binlogPath}"`;
+
             // Build a detailed prompt with actual issues for agent mode
             const issueLines: string[] = [];
             if (diag.errors.length > 0) {
@@ -316,15 +332,27 @@ export function activate(context: vscode.ExtensionContext) {
             }
 
             const prompt =
-                `Fix the following ${diag.errorCount} errors and ${diag.warningCount} warnings from the MSBuild binlog.\n\n` +
+                `Fix the following ${diag.errorCount} errors and ${diag.warningCount} warnings from the MSBuild binary log.\n\n` +
                 issueLines.join('\n') + '\n\n' +
-                `INSTRUCTIONS:\n` +
-                `1. For each issue, open the source file and make the fix\n` +
-                `2. If an issue cannot be fixed (e.g. external dependency, SDK limitation), suppress it with a comment explaining why\n` +
-                `3. After fixing all issues, run the build command to verify\n` +
-                `4. If new issues appear, fix those too\n` +
-                `5. Continue until the build is clean\n` +
-                `6. Show a summary of all changes made`;
+                `BUILD COMMAND: \`${buildCmd}\`\n` +
+                `BINLOG PATH: \`${binlogPath}\`\n\n` +
+                `INSTRUCTIONS — FIX-BUILD-VERIFY LOOP:\n` +
+                `You MUST follow this iterative cycle until the build is clean:\n\n` +
+                `**STEP 1 — FIX:** For each issue listed above:\n` +
+                `  - Open the source file and apply the fix\n` +
+                `  - If an issue CANNOT be fixed (e.g. external dependency, SDK limitation, third-party code),\n` +
+                `    suppress it with a pragma/NoWarn and add a comment: // Suppressed: <reason>\n\n` +
+                `**STEP 2 — REBUILD:** Run the build command in the terminal:\n` +
+                `  \`${buildCmd}\`\n` +
+                `  This will regenerate the binlog at the same path.\n\n` +
+                `**STEP 3 — VERIFY:** Check the build output for remaining errors/warnings.\n` +
+                `  - If the build output still shows errors or warnings, go back to STEP 1 and fix them.\n` +
+                `  - Repeat this cycle (max 5 iterations) until the build succeeds with 0 errors and 0 warnings.\n` +
+                `  - If after 5 iterations issues remain, list the unfixable ones with reasons.\n\n` +
+                `**STEP 4 — SUMMARY:** When done, provide:\n` +
+                `  - List of all files changed and what was fixed\n` +
+                `  - List of suppressed warnings with justification\n` +
+                `  - Final build result (pass/fail, remaining issues if any)`;
 
             // Open in agent mode (not @binlog — agent mode can edit files and run terminal)
             vscode.commands.executeCommand('workbench.action.chat.open', {
@@ -436,6 +464,9 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
         telemetry.trackMcpError('startMcpClient', String(err));
     });
 
+    // Watch binlog files for changes (e.g. rebuild regenerates the binlog)
+    setupBinlogWatchers(binlogPaths, context);
+
     // Load diagnostics to Problems panel in the background
     if (autoLoad && diagnosticsProvider) {
         diagnosticsProvider.loadFromBinlog(binlogPaths[0], config).catch(() => {});
@@ -465,6 +496,42 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
     if (isFirstUse) {
         context.globalState.update('binlog.hasSeenWelcome', true);
         showGettingStarted();
+    }
+}
+
+/** Watch binlog files for changes — auto-reload when rebuild regenerates the binlog */
+function setupBinlogWatchers(binlogPaths: string[], context: vscode.ExtensionContext) {
+    const path = require('path');
+
+    // Dispose previous watchers
+    for (const w of binlogWatchers) { w.dispose(); }
+    binlogWatchers = [];
+
+    let reloadDebounce: NodeJS.Timeout | undefined;
+
+    for (const binlogPath of binlogPaths) {
+        const dir = path.dirname(binlogPath);
+        const filename = path.basename(binlogPath);
+        const pattern = new vscode.RelativePattern(dir, filename);
+        const watcher = vscode.workspace.createFileSystemWatcher(pattern, true, false, true);
+
+        watcher.onDidChange(() => {
+            // Debounce: binlog writes can trigger multiple change events
+            if (reloadDebounce) { clearTimeout(reloadDebounce); }
+            reloadDebounce = setTimeout(async () => {
+                const action = await vscode.window.showInformationMessage(
+                    `🔄 Binlog "${filename}" was updated (rebuild detected). Reload to see latest results?`,
+                    'Reload',
+                    'Dismiss'
+                );
+                if (action === 'Reload') {
+                    handleBinlogOpen(allBinlogPaths, context);
+                }
+            }, 2000);
+        });
+
+        binlogWatchers.push(watcher);
+        context.subscriptions.push(watcher);
     }
 }
 
