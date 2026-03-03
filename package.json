@@ -10,6 +10,7 @@
     "url": "https://github.com/dotutils/vscode-binlog-analyzer"
   },
   "homepage": "https://github.com/dotutils/vscode-binlog-analyzer#readme",
+  "icon": "images/icon.png",
   "bugs": {
     "url": "https://github.com/dotutils/vscode-binlog-analyzer/issues"
   },
@@ -37,7 +38,7 @@
         {
           "id": "binlog-analyzer",
           "title": "Binlog Analyzer",
-          "icon": "$(file-binary)"
+          "icon": "images/icon.svg"
         }
       ]
     },
@@ -107,7 +108,9 @@
       "properties": {
         "binlogAnalyzer.activeBinlogs": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "description": "Binlog file paths to load automatically. Set by Structured Log Viewer when opening in VS Code."
         },
@@ -223,8 +226,8 @@
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.99.0",
-    "typescript": "^5.5.0",
-    "@vscode/vsce": "^3.0.0"
+    "@vscode/vsce": "^3.0.0",
+    "typescript": "^5.5.0"
   },
   "dependencies": {
     "@vscode/extension-telemetry": "^0.9.0"
