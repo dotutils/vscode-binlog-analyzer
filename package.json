@@ -70,7 +70,8 @@
       },
       {
         "command": "binlog.removeFile",
-        "title": "Binlog: Remove File"
+        "title": "Binlog: Remove File",
+        "icon": "$(close)"
       },
       {
         "command": "binlog.manageBinlogs",
@@ -235,6 +236,13 @@
         "command": "binlog.addFile",
         "when": "view == binlogExplorer",
         "group": "navigation"
+      }
+    ],
+    "view/item/context": [
+      {
+        "command": "binlog.removeFile",
+        "when": "view == binlogExplorer && viewItem == binlogFile",
+        "group": "inline"
       }
     ]
   },

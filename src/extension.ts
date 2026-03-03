@@ -95,7 +95,16 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Command: Remove Binlog — remove a binlog from the session
     context.subscriptions.push(
-        vscode.commands.registerCommand('binlog.removeFile', async () => {
+        vscode.commands.registerCommand('binlog.removeFile', async (treeItem?: any) => {
+            // If called from tree item inline button, remove that specific binlog
+            if (treeItem && treeItem.tooltip) {
+                const path = String(treeItem.tooltip).split('\n')[0];
+                if (path && allBinlogPaths.includes(path)) {
+                    await removeBinlogs(new Set([path]));
+                    return;
+                }
+            }
+
             if (allBinlogPaths.length === 0) {
                 vscode.window.showWarningMessage('No binlogs loaded.');
                 return;
