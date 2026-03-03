@@ -219,38 +219,51 @@ export function activate(context: vscode.ExtensionContext) {
     // Command: Set Workspace Folder — pick from binlog project paths or browse
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.setWorkspaceFolder', async () => {
+            // Try to find candidate folders from binlog project paths
             const candidates = treeDataProvider?.getProjectRootCandidates() || [];
-            // Filter to folders that actually exist locally
-            const fs = await import('fs');
-            const existing = candidates.filter(c => {
+            const fs = require('fs');
+            const existing: string[] = candidates.filter((c: string) => {
                 try { return fs.existsSync(c); } catch { return false; }
             });
 
-            const items: vscode.QuickPickItem[] = existing.map(p => ({
-                label: p.replace(/\//g, '\\'),
-                description: 'detected from binlog',
-            }));
-            items.push({ label: '$(folder) Browse...', description: 'pick a folder manually' });
+            let folderUri: vscode.Uri | undefined;
 
-            const pick = await vscode.window.showQuickPick(items, {
-                placeHolder: 'Select the project source folder',
-                title: 'Set Workspace Folder',
-            });
-            if (!pick) { return; }
+            if (existing.length > 0) {
+                // Show quick pick with detected folders + browse option
+                const items: vscode.QuickPickItem[] = existing.map((p: string) => ({
+                    label: p.replace(/\//g, '\\'),
+                    description: 'detected from binlog',
+                }));
+                items.push({ label: 'Browse...', description: 'pick a folder manually' });
 
-            let folderUri: vscode.Uri;
-            if (pick.label.startsWith('$(folder)')) {
+                const pick = await vscode.window.showQuickPick(items, {
+                    placeHolder: 'Select the project source folder',
+                    title: 'Set Workspace Folder',
+                });
+                if (!pick) { return; }
+
+                if (pick.label === 'Browse...') {
+                    const result = await vscode.window.showOpenDialog({
+                        canSelectFolders: true, canSelectFiles: false,
+                        canSelectMany: false, openLabel: 'Select Project Folder',
+                    });
+                    if (!result || result.length === 0) { return; }
+                    folderUri = result[0];
+                } else {
+                    folderUri = vscode.Uri.file(pick.label);
+                }
+            } else {
+                // No candidates — go straight to folder browser
                 const result = await vscode.window.showOpenDialog({
-                    canSelectFolders: true,
-                    canSelectFiles: false,
-                    canSelectMany: false,
-                    openLabel: 'Select Project Folder',
+                    canSelectFolders: true, canSelectFiles: false,
+                    canSelectMany: false, openLabel: 'Select Project Folder',
+                    title: 'Select the project source folder for this binlog',
                 });
                 if (!result || result.length === 0) { return; }
                 folderUri = result[0];
-            } else {
-                folderUri = vscode.Uri.file(pick.label);
             }
+
+            if (!folderUri) { return; }
 
             // Save binlog paths before workspace change so they survive potential reload
             const config = vscode.workspace.getConfiguration('binlogAnalyzer');
@@ -258,16 +271,14 @@ export function activate(context: vscode.ExtensionContext) {
 
             // Replace the workspace folder (keeps single-root, no restart needed)
             const existingFolders = vscode.workspace.workspaceFolders || [];
-            const alreadyAdded = existingFolders.some(f => f.uri.fsPath === folderUri.fsPath);
+            const alreadyAdded = existingFolders.some(f => f.uri.fsPath === folderUri!.fsPath);
             if (!alreadyAdded) {
                 if (existingFolders.length > 0) {
-                    // Replace first folder — stays single-root, no extension restart
                     vscode.workspace.updateWorkspaceFolders(0, 1, { uri: folderUri });
                 } else {
                     vscode.workspace.updateWorkspaceFolders(0, 0, { uri: folderUri });
                 }
             }
-            // Refresh tree to update the workspace hint
             treeDataProvider?.refresh();
         })
     );
