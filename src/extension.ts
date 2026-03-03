@@ -287,8 +287,12 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
     allBinlogPaths = [...binlogPaths];
     currentBinlogPath = binlogPaths[0];
     chatParticipant?.setBinlogPaths(binlogPaths);
+    treeDataProvider?.setLoading(true);
     treeDataProvider?.setBinlogPaths(binlogPaths);
     updateStatusBar();
+
+    // Reveal the Binlog Explorer sidebar immediately so user sees loading state
+    vscode.commands.executeCommand('binlogExplorer.focus');
 
     const config = vscode.workspace.getConfiguration('binlogAnalyzer');
     const autoLoad = config.get<boolean>('autoLoad', true);
@@ -321,8 +325,7 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
         }
     );
 
-    // Reveal the Binlog Explorer sidebar
-    vscode.commands.executeCommand('binlogExplorer.focus');
+    treeDataProvider?.setLoading(false);
 
     // Auto-open Copilot Chat with @binlog context so the user sees it immediately
     vscode.commands.executeCommand(

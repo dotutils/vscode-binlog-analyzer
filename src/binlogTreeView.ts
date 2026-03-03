@@ -40,6 +40,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
 
     private binlogPaths: string[] = [];
     private mcpClient: McpClient | null = null;
+    private isLoading = false;
 
     // Cached data from MCP calls
     private projectsCache: TreeNodeData[] | null = null;
@@ -52,6 +53,11 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
     setBinlogPaths(paths: string[]) {
         this.binlogPaths = paths;
         this.clearCache();
+        this._onDidChangeTreeData.fire(undefined);
+    }
+
+    setLoading(loading: boolean) {
+        this.isLoading = loading;
         this._onDidChangeTreeData.fire(undefined);
     }
 
@@ -200,11 +206,23 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
     }
 
     private getRootChildren(): BinlogTreeItem[] {
-        if (this.binlogPaths.length === 0) {
+        if (this.binlogPaths.length === 0 && !this.isLoading) {
             return [];
         }
 
         const items: BinlogTreeItem[] = [];
+
+        if (this.isLoading && this.binlogPaths.length === 0) {
+            // Show loading placeholder before binlog paths arrive
+            const loading = new BinlogTreeItem(
+                'Loading binlog...',
+                vscode.TreeItemCollapsibleState.None
+            );
+            loading.nodeKind = 'loading';
+            loading.iconPath = new vscode.ThemeIcon('sync~spin');
+            items.push(loading);
+            return items;
+        }
 
         // Loaded binlogs section
         const filesNode = new BinlogTreeItem(
@@ -257,6 +275,15 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             perfNode.nodeKind = 'root-perf';
             perfNode.iconPath = new vscode.ThemeIcon('dashboard');
             items.push(perfNode);
+        } else if (this.isLoading) {
+            // MCP client not ready yet — show loading indicator
+            const loading = new BinlogTreeItem(
+                'Analyzing binlog...',
+                vscode.TreeItemCollapsibleState.None
+            );
+            loading.nodeKind = 'loading';
+            loading.iconPath = new vscode.ThemeIcon('sync~spin');
+            items.push(loading);
         }
 
         // Actions section (always shown)
