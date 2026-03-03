@@ -3,11 +3,13 @@ import { BinlogDiagnosticsProvider } from './diagnostics';
 import { BinlogChatParticipant } from './chatParticipant';
 import { BinlogTreeDataProvider } from './binlogTreeView';
 import { McpClient } from './mcpClient';
+import { BinlogDocumentProvider, BINLOG_SCHEME, openBinlogDocument } from './binlogDocumentProvider';
 
 let diagnosticsProvider: BinlogDiagnosticsProvider | undefined;
 let chatParticipant: BinlogChatParticipant | undefined;
 let treeDataProvider: BinlogTreeDataProvider | undefined;
 let mcpClient: McpClient | undefined;
+let binlogDocProvider: BinlogDocumentProvider | undefined;
 let currentBinlogPath: string | undefined;
 let allBinlogPaths: string[] = [];
 let statusBarItem: vscode.StatusBarItem | undefined;
@@ -17,6 +19,12 @@ export function activate(context: vscode.ExtensionContext) {
     extensionContext = context;
     diagnosticsProvider = new BinlogDiagnosticsProvider();
     chatParticipant = new BinlogChatParticipant();
+
+    // Virtual document provider for binlog content in editor
+    binlogDocProvider = new BinlogDocumentProvider();
+    context.subscriptions.push(
+        vscode.workspace.registerTextDocumentContentProvider(BINLOG_SCHEME, binlogDocProvider)
+    );
 
     // Binlog Explorer tree view in sidebar
     treeDataProvider = new BinlogTreeDataProvider();
@@ -171,14 +179,21 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    // Command: Show Build Summary
+    // Command: Show Build Summary — opens binlog content in editor
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.showBuildSummary', async () => {
             if (!currentBinlogPath) {
                 vscode.window.showWarningMessage('No binlog loaded. Use "Binlog: Load File" first.');
                 return;
             }
-            vscode.window.showInformationMessage(`Binlog loaded: ${currentBinlogPath}. Ask Copilot Chat to analyze your build.`);
+            await openBinlogDocument('/summary', getFileName(currentBinlogPath));
+        })
+    );
+
+    // Command: Open binlog section in editor
+    context.subscriptions.push(
+        vscode.commands.registerCommand('binlog.openInEditor', async (section: string, label: string) => {
+            await openBinlogDocument(section, label);
         })
     );
 
@@ -475,6 +490,7 @@ async function startMcpClientForTree(binlogPaths: string[]) {
         mcpClient.dispose();
         mcpClient = undefined;
         treeDataProvider?.setMcpClient(null);
+        binlogDocProvider?.setMcpClient(null);
     }
 
     const toolExe = findBinlogMcpTool();
@@ -488,6 +504,7 @@ async function startMcpClientForTree(binlogPaths: string[]) {
         await client.start();
         mcpClient = client;
         treeDataProvider?.setMcpClient(client);
+        binlogDocProvider?.setMcpClient(client);
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.warn('Failed to start MCP client for tree view:', msg);

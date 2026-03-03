@@ -182,13 +182,13 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             const item = new BinlogTreeItem(fileName, vscode.TreeItemCollapsibleState.None);
             item.nodeKind = 'binlog-file';
             item.description = i === 0 ? 'primary' : 'attached';
-            item.tooltip = p;
+            item.tooltip = `${p}\n\nClick to view build summary in editor`;
             item.iconPath = new vscode.ThemeIcon(i === 0 ? 'file-binary' : 'link');
             item.contextValue = 'binlogFile';
             item.command = {
-                command: 'workbench.action.chat.open',
-                title: 'Analyze binlog',
-                arguments: [`@binlog Analyze ${fileName}. What is the build result? Show errors if any, and the slowest targets.`],
+                command: 'binlog.openInEditor',
+                title: 'Open Summary',
+                arguments: ['/summary', fileName],
             };
             return item;
         });
