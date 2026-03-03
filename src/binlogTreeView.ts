@@ -128,11 +128,17 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                 const targetNames = Object.values(targets)
                     .map((t: any) => t.targetName)
                     .join(', ');
+                const filePath = String(file);
+                const dirPath = this.extractDirectory(filePath);
+                const timeStr = totalMs > 0 ? `${(totalMs / 1000).toFixed(1)}s` : '';
+                const desc = dirPath
+                    ? (timeStr ? `${dirPath}  ${timeStr}` : dirPath)
+                    : (timeStr || undefined);
                 items.push({
                     kind: 'project',
-                    label: this.extractFileName(String(file)),
-                    description: totalMs > 0 ? `${(totalMs / 1000).toFixed(1)}s` : undefined,
-                    tooltip: `${file}\nTargets: ${targetNames || 'none'}\n\nClick to view project details`,
+                    label: this.extractFileName(filePath),
+                    description: desc,
+                    tooltip: `${file}\nTargets: ${targetNames || 'none'}\nBuild time: ${timeStr || '0.0s'}\n\nClick to view project details`,
                     icon: 'package',
                     projectFile: String(file),
                     projectId: id,
@@ -561,6 +567,16 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
 
     private extractFileName(path: string): string {
         return path.split(/[/\\]/).pop() || path;
+    }
+
+    private extractDirectory(path: string): string {
+        const parts = path.replace(/\\/g, '/').split('/');
+        if (parts.length <= 1) { return ''; }
+        parts.pop(); // remove filename
+        // Show last 2-3 path segments to keep it readable
+        const segments = parts.filter(Boolean);
+        if (segments.length <= 3) { return segments.join('/'); }
+        return '…/' + segments.slice(-3).join('/');
     }
 
     private isError(severity: string): boolean {
