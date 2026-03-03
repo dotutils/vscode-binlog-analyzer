@@ -20,7 +20,7 @@ export function initTelemetry(context: vscode.ExtensionContext): void {
         // eslint-disable-next-line @typescript-eslint/no-var-requires
         const { default: TelemetryReporterClass } = require('@vscode/extension-telemetry');
         // Using a placeholder key — replace with real Application Insights connection string for production
-        const connectionString = 'InstrumentationKey=00000000-0000-0000-0000-000000000000';
+        const connectionString = 'InstrumentationKey=a7eb229a-c9eb-41c5-817b-62f0b74bfa78;IngestionEndpoint=https://swedencentral-0.in.applicationinsights.azure.com/;LiveEndpoint=https://swedencentral.livediagnostics.monitor.azure.com/;ApplicationId=dd1de234-9886-4f22-830b-36147303383e';
         reporter = new TelemetryReporterClass(connectionString);
         context.subscriptions.push(reporter as unknown as vscode.Disposable);
     } catch {
