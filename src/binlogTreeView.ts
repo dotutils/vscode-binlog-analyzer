@@ -470,6 +470,19 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         folder.description = 'cross-machine';
         actions.push(folder);
 
+        // Show "Fix all issues" only when there are errors or warnings
+        if ((this.errorsCache && this.errorsCache.length > 0) ||
+            (this.warningsCache && this.warningsCache.length > 0)) {
+            const errorCount = this.errorsCache?.length || 0;
+            const warnCount = this.warningsCache?.length || 0;
+            const fix = new BinlogTreeItem('Fix all issues', vscode.TreeItemCollapsibleState.None);
+            fix.nodeKind = 'action';
+            fix.command = { command: 'binlog.fixAllIssues', title: 'Fix' };
+            fix.iconPath = new vscode.ThemeIcon('sparkle');
+            fix.description = `${errorCount} errors, ${warnCount} warnings`;
+            actions.push(fix);
+        }
+
         return actions;
     }
 

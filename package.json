@@ -99,6 +99,11 @@
         "title": "Binlog: View Project Details"
       },
       {
+        "command": "binlog.fixAllIssues",
+        "title": "Binlog: Fix All Build Issues",
+        "icon": "$(sparkle)"
+      },
+      {
         "command": "binlog.showErrors",
         "title": "Binlog: Show Errors"
       },

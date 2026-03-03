@@ -216,6 +216,32 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
+    // Command: Fix All Issues — launches Copilot agent to fix all build errors/warnings
+    context.subscriptions.push(
+        vscode.commands.registerCommand('binlog.fixAllIssues', async () => {
+            if (!currentBinlogPath) {
+                vscode.window.showWarningMessage('No binlog loaded.');
+                return;
+            }
+
+            const binlogFile = currentBinlogPath;
+            const fileName = getFileName(binlogFile);
+
+            // Build a prompt that instructs Copilot to fix all issues in a loop
+            const prompt = `@binlog /errors\n\n` +
+                `Please fix ALL build errors and warnings reported in the binlog "${fileName}". ` +
+                `For each issue:\n` +
+                `1. Read the error/warning code, message, file path, and line number\n` +
+                `2. Open the source file and fix the issue\n` +
+                `3. Move to the next issue\n\n` +
+                `After fixing all issues, run the build command to verify the fixes. ` +
+                `If new issues appear, fix those too. Continue until the build is clean (0 errors, 0 warnings). ` +
+                `When done, show a summary of all changes made.`;
+
+            vscode.commands.executeCommand('workbench.action.chat.open', prompt);
+        })
+    );
+
     // Command: Show Errors
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.showErrors', async () => {
@@ -300,34 +326,22 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
     const fileName = getFileName(binlogPaths[0]);
     const multi = binlogPaths.length > 1 ? ` (+${binlogPaths.length - 1} more)` : '';
 
-    await vscode.window.withProgress(
-        {
-            location: vscode.ProgressLocation.Notification,
-            title: `Loading binlog: ${fileName}${multi}`,
-            cancellable: false,
-        },
-        async (progress) => {
-            progress.report({ message: 'Configuring MCP server...' });
-            await configureMcpServer(allBinlogPaths, config);
+    // Configure MCP server for Copilot Chat (fast — just writes config)
+    await configureMcpServer(allBinlogPaths, config);
+    await writeCopilotInstructions(allBinlogPaths);
 
-            progress.report({ message: 'Starting binlog analyzer...' });
-            await startMcpClientForTree(allBinlogPaths);
+    // Start the private MCP client for tree view in the background (non-blocking)
+    // This way Copilot Chat is usable immediately while the tree loads
+    startMcpClientForTree(allBinlogPaths).then(() => {
+        treeDataProvider?.setLoading(false);
+    }).catch(() => {
+        treeDataProvider?.setLoading(false);
+    });
 
-            progress.report({ message: 'Writing Copilot instructions...' });
-            await writeCopilotInstructions(allBinlogPaths);
-
-            if (autoLoad) {
-                progress.report({ message: 'Loading diagnostics...' });
-                if (diagnosticsProvider) {
-                    await diagnosticsProvider.loadFromBinlog(binlogPaths[0], config);
-                }
-            }
-        }
-    );
-
-    treeDataProvider?.setLoading(false);
-
-    // Auto-open Copilot Chat with @binlog context so the user sees it immediately
+    // Load diagnostics to Problems panel in the background
+    if (autoLoad && diagnosticsProvider) {
+        diagnosticsProvider.loadFromBinlog(binlogPaths[0], config).catch(() => {});
+    }
     vscode.commands.executeCommand(
         'workbench.action.chat.open',
         `@binlog Binlog "${fileName}"${multi} is loaded. What would you like to analyze?`
