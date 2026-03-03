@@ -482,7 +482,7 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
     if (crossMachineHint) {
         telemetry.trackCrossMachine();
         const action = await vscode.window.showWarningMessage(
-            `⚠️ This binlog appears to be from a different machine. ` +
+            `This binlog appears to be from a different machine. ` +
             `Open your local project folder so Copilot can navigate source files.`,
             'Open Project Folder',
             'Dismiss'
