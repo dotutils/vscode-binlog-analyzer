@@ -85,6 +85,11 @@
         "title": "Binlog: Show Build Summary"
       },
       {
+        "command": "binlog.refreshTree",
+        "title": "Binlog: Refresh Tree",
+        "icon": "$(refresh)"
+      },
+      {
         "command": "binlog.showErrors",
         "title": "Binlog: Show Errors"
       },
@@ -191,6 +196,20 @@
           }
         ],
         "systemPrompt": "You are an MSBuild build analysis expert. You have access to binlog MCP tools that can parse and analyze MSBuild binary log files. Use these tools to help the user investigate build failures, performance issues, and understand build behavior.\n\nWorkflow:\n1. First load the binlog if not already loaded\n2. Get diagnostics to understand errors and warnings\n3. Analyze specific issues using appropriate tools\n4. Provide actionable recommendations\n\nAlways reference specific file paths and line numbers when discussing errors."
+      }
+    ]
+  },
+  "menus": {
+    "view/title": [
+      {
+        "command": "binlog.refreshTree",
+        "when": "view == binlogExplorer",
+        "group": "navigation"
+      },
+      {
+        "command": "binlog.addFile",
+        "when": "view == binlogExplorer",
+        "group": "navigation"
       }
     ]
   },

@@ -2,10 +2,12 @@ import * as vscode from 'vscode';
 import { BinlogDiagnosticsProvider } from './diagnostics';
 import { BinlogChatParticipant } from './chatParticipant';
 import { BinlogTreeDataProvider } from './binlogTreeView';
+import { McpClient } from './mcpClient';
 
 let diagnosticsProvider: BinlogDiagnosticsProvider | undefined;
 let chatParticipant: BinlogChatParticipant | undefined;
 let treeDataProvider: BinlogTreeDataProvider | undefined;
+let mcpClient: McpClient | undefined;
 let currentBinlogPath: string | undefined;
 let allBinlogPaths: string[] = [];
 let statusBarItem: vscode.StatusBarItem | undefined;
@@ -20,7 +22,7 @@ export function activate(context: vscode.ExtensionContext) {
     treeDataProvider = new BinlogTreeDataProvider();
     const treeView = vscode.window.createTreeView('binlogExplorer', {
         treeDataProvider,
-        showCollapseAll: false
+        showCollapseAll: true
     });
     context.subscriptions.push(treeView);
 
@@ -180,6 +182,13 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
+    // Command: Refresh Tree
+    context.subscriptions.push(
+        vscode.commands.registerCommand('binlog.refreshTree', () => {
+            treeDataProvider?.refresh();
+        })
+    );
+
     // Command: Show Errors
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.showErrors', async () => {
@@ -249,6 +258,9 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
 
     // Auto-configure MCP server with all binlog paths
     await configureMcpServer(allBinlogPaths, config);
+
+    // Start a private MCP client for the tree view content
+    await startMcpClientForTree(allBinlogPaths);
 
     if (autoLoad) {
         // Push diagnostics from primary binlog to Problems panel
@@ -451,6 +463,35 @@ function showGettingStarted() {
     panel.appendLine('');
     panel.appendLine('═══════════════════════════════════════════');
     panel.show();
+}
+
+/**
+ * Starts a private MCP client subprocess for populating the tree view.
+ * This is separate from the VS Code MCP integration used by Copilot Chat.
+ */
+async function startMcpClientForTree(binlogPaths: string[]) {
+    // Dispose previous client
+    if (mcpClient) {
+        mcpClient.dispose();
+        mcpClient = undefined;
+        treeDataProvider?.setMcpClient(null);
+    }
+
+    const toolExe = findBinlogMcpTool();
+    if (!toolExe) {
+        // Tree will show without content sections
+        return;
+    }
+
+    try {
+        const client = new McpClient(toolExe, binlogPaths);
+        await client.start();
+        mcpClient = client;
+        treeDataProvider?.setMcpClient(client);
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn('Failed to start MCP client for tree view:', msg);
+    }
 }
 
 async function configureMcpServer(binlogPaths: string[], config: vscode.WorkspaceConfiguration) {
@@ -739,4 +780,5 @@ async function redactSecrets(binlogPath: string) {
 
 export function deactivate() {
     diagnosticsProvider?.dispose();
+    mcpClient?.dispose();
 }
