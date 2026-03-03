@@ -427,7 +427,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         if (data && typeof data === 'object' && !Array.isArray(data)) {
             // Format: { "TargetName": { executionCount, inclusiveDurationMs, ... }, ... }
             for (const [name, info] of Object.entries(data as Record<string, any>)) {
-                const durationMs = info.inclusiveDurationMs || info.durationMs || info.exclusiveDurationMs || 0;
+                const durationMs = info.inclusiveDurationMs || info.totalDurationMs || info.durationMs || info.exclusiveDurationMs || 0;
                 const durStr = durationMs >= 1000
                     ? `${(durationMs / 1000).toFixed(1)}s`
                     : `${durationMs}ms`;
