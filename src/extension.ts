@@ -265,22 +265,12 @@ export function activate(context: vscode.ExtensionContext) {
 
                 if (!folderUri) { return; }
 
-                // Save binlog paths before workspace change so they survive potential reload
+                // Save binlog paths before workspace change so they survive reload
                 const config = vscode.workspace.getConfiguration('binlogAnalyzer');
                 await config.update('activeBinlogs', allBinlogPaths, vscode.ConfigurationTarget.Global);
 
-                // Replace the workspace folder (keeps single-root, no restart needed)
-                const existingFolders = vscode.workspace.workspaceFolders || [];
-                const alreadyAdded = existingFolders.some(f => f.uri.fsPath === folderUri!.fsPath);
-                if (!alreadyAdded) {
-                    if (existingFolders.length > 0) {
-                        vscode.workspace.updateWorkspaceFolders(0, 1, { uri: folderUri });
-                    } else {
-                        vscode.workspace.updateWorkspaceFolders(0, 0, { uri: folderUri });
-                    }
-                }
-                treeDataProvider?.refresh();
-                vscode.window.showInformationMessage(`Workspace set to: ${folderUri.fsPath}`);
+                // Open the folder properly (single-root, proper title)
+                await vscode.commands.executeCommand('vscode.openFolder', folderUri, false);
             } catch (err: any) {
                 vscode.window.showErrorMessage(`Failed to set workspace folder: ${err?.message || err}`);
             }
