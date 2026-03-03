@@ -247,9 +247,14 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             );
             projectsNode.nodeKind = 'root-projects';
             projectsNode.iconPath = new vscode.ThemeIcon('project');
-            projectsNode.description = this.projectsCache
-                ? `(${this.projectsCache.length})`
-                : '';
+            const projCount = this.projectsCache ? `(${this.projectsCache.length})` : '';
+            const wsFolder = vscode.workspace.workspaceFolders?.[0]?.name;
+            projectsNode.description = wsFolder
+                ? `${projCount}  ⟵ ${wsFolder}`
+                : projCount;
+            if (wsFolder) {
+                projectsNode.tooltip = `Workspace: ${vscode.workspace.workspaceFolders![0].uri.fsPath}`;
+            }
             items.push(projectsNode);
 
             const errorsNode = new BinlogTreeItem(
@@ -468,13 +473,6 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         refresh.command = { command: 'binlog.refreshTree', title: 'Refresh' };
         refresh.iconPath = new vscode.ThemeIcon('refresh');
         actions.push(refresh);
-
-        const folder = new BinlogTreeItem('Open project folder...', vscode.TreeItemCollapsibleState.None);
-        folder.nodeKind = 'action';
-        folder.command = { command: 'binlog.openProjectFolder', title: 'Folder' };
-        folder.iconPath = new vscode.ThemeIcon('folder-opened');
-        folder.description = 'cross-machine';
-        actions.push(folder);
 
         // Show "Fix all issues" only when there are errors or warnings
         if ((this.errorsCache && this.errorsCache.length > 0) ||
