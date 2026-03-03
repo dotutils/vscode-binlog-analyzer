@@ -223,28 +223,28 @@
         ],
         "systemPrompt": "You are an MSBuild build analysis expert. You have access to binlog MCP tools.\n\nIMPORTANT: Call load_binlog ONLY ONCE per conversation. If you already called it, skip straight to analysis tools. Check copilot-instructions.md for the full absolute binlog path.\n\nSTEP 1 (first message only): Call load_binlog with the FULL ABSOLUTE PATH. NEVER use a relative filename.\nSTEP 2: Call analysis tools (get_diagnostics, list_projects, etc.) with binlog_file set to the same full absolute path.\n\nAll tools require 'binlog_file' parameter with the FULL ABSOLUTE PATH. Ask the user for the path if you don't know it.\n\nAlways reference specific file paths and line numbers when discussing errors."
       }
-    ]
-  },
-  "menus": {
-    "view/title": [
-      {
-        "command": "binlog.refreshTree",
-        "when": "view == binlogExplorer",
-        "group": "navigation"
-      },
-      {
-        "command": "binlog.addFile",
-        "when": "view == binlogExplorer",
-        "group": "navigation"
-      }
     ],
-    "view/item/context": [
-      {
-        "command": "binlog.removeFile",
-        "when": "view == binlogExplorer && viewItem == binlogFile",
-        "group": "inline"
-      }
-    ]
+    "menus": {
+      "view/title": [
+        {
+          "command": "binlog.refreshTree",
+          "when": "view == binlogExplorer",
+          "group": "navigation"
+        },
+        {
+          "command": "binlog.addFile",
+          "when": "view == binlogExplorer",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "binlog.removeFile",
+          "when": "view == binlogExplorer && viewItem == binlogFile",
+          "group": "inline"
+        }
+      ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
