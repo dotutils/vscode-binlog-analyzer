@@ -352,24 +352,25 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(diagnosticsProvider);
 
     // Auto-load binlogs from settings (written by Structured Log Viewer or workspace change)
-    // Check both workspace and global settings
     const config = vscode.workspace.getConfiguration('binlogAnalyzer');
     const savedBinlogs = config.get<string[]>('activeBinlogs', []);
+    // Clear settings immediately to prevent stale data on next activation
+    config.update('activeBinlogs', undefined, vscode.ConfigurationTarget.Workspace).then(() => {}, () => {});
+    config.update('activeBinlogs', undefined, vscode.ConfigurationTarget.Global).then(() => {}, () => {});
+
     if (savedBinlogs.length > 0) {
-        setTimeout(() => {
-            if (!openedViaUri) {
-                handleBinlogOpen(savedBinlogs, context);
-            }
-            // Clear stale settings so they don't persist across restarts
-            config.update('activeBinlogs', undefined, vscode.ConfigurationTarget.Workspace).then(
-                () => {},
-                () => {}
-            );
-            config.update('activeBinlogs', undefined, vscode.ConfigurationTarget.Global).then(
-                () => {},
-                () => {}
-            );
-        }, 1500);
+        // Verify files still exist
+        const fs = require('fs');
+        const validBinlogs = savedBinlogs.filter((p: string) => {
+            try { return fs.existsSync(p); } catch { return false; }
+        });
+        if (validBinlogs.length > 0) {
+            setTimeout(() => {
+                if (!openedViaUri) {
+                    handleBinlogOpen(validBinlogs, context);
+                }
+            }, 1500);
+        }
     }
 }
 
