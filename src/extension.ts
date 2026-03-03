@@ -541,9 +541,9 @@ async function writeCopilotInstructions(binlogPaths: string[]) {
 ${pathsList}
 
 ## CRITICAL Rules for MCP Tool Calls
-- When using binlog MCP tools, FIRST call \`load_binlog\` with \`path\` set to the FULL ABSOLUTE PATH: \`${primaryPath}\`
-- After loading, all other tools require \`binlog_file\` parameter — always use the same full absolute path: \`${primaryPath}\`
-- **NEVER use relative filenames** like \`wsl_build.binlog\` or \`Locked_assembly.binlog\` — always use the full path above
+- Call \`load_binlog\` with \`path\` set to \`${primaryPath}\` ONLY ONCE at the start of the conversation. If you already called load_binlog earlier in this conversation, do NOT call it again — the data persists.
+- All analysis tools require \`binlog_file\` parameter — always use the full absolute path: \`${primaryPath}\`
+- **NEVER use relative filenames** — always use the full path above
 - Available analysis tools: \`get_diagnostics\`, \`list_projects\`, \`get_expensive_targets\`, \`get_expensive_tasks\`, \`get_expensive_projects\`, \`search_binlog\`, \`get_project_build_time\`, \`search_targets_by_name\`, \`search_tasks_by_name\`
 `;
 
