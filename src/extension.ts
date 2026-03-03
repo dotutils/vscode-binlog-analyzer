@@ -281,34 +281,38 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
     const config = vscode.workspace.getConfiguration('binlogAnalyzer');
     const autoLoad = config.get<boolean>('autoLoad', true);
 
-    // Auto-configure MCP server with all binlog paths
-    await configureMcpServer(allBinlogPaths, config);
+    const fileName = getFileName(binlogPaths[0]);
+    const multi = binlogPaths.length > 1 ? ` (+${binlogPaths.length - 1} more)` : '';
 
-    // Start a private MCP client for the tree view content
-    await startMcpClientForTree(allBinlogPaths);
+    await vscode.window.withProgress(
+        {
+            location: vscode.ProgressLocation.Notification,
+            title: `Loading binlog: ${fileName}${multi}`,
+            cancellable: false,
+        },
+        async (progress) => {
+            progress.report({ message: 'Configuring MCP server...' });
+            await configureMcpServer(allBinlogPaths, config);
 
-    // Write copilot instructions with binlog paths so Copilot Chat knows them
-    await writeCopilotInstructions(allBinlogPaths);
+            progress.report({ message: 'Starting binlog analyzer...' });
+            await startMcpClientForTree(allBinlogPaths);
 
-    // Auto-open binlog summary in editor so the user sees the content
-    if (mcpClient) {
-        const fileName = getFileName(binlogPaths[0]);
-        openBinlogDocument('/summary', fileName);
-    }
+            progress.report({ message: 'Writing Copilot instructions...' });
+            await writeCopilotInstructions(allBinlogPaths);
 
-    if (autoLoad) {
-        // Push diagnostics from primary binlog to Problems panel
-        if (diagnosticsProvider) {
-            await diagnosticsProvider.loadFromBinlog(binlogPaths[0], config);
+            if (autoLoad) {
+                progress.report({ message: 'Loading diagnostics...' });
+                if (diagnosticsProvider) {
+                    await diagnosticsProvider.loadFromBinlog(binlogPaths[0], config);
+                }
+            }
         }
-    }
+    );
 
     // Reveal the Binlog Explorer sidebar
     vscode.commands.executeCommand('binlogExplorer.focus');
 
     // Auto-open Copilot Chat with @binlog context so the user sees it immediately
-    const multi = binlogPaths.length > 1 ? ` (+${binlogPaths.length - 1} more)` : '';
-    const fileName = getFileName(binlogPaths[0]);
     vscode.commands.executeCommand(
         'workbench.action.chat.open',
         `@binlog Binlog "${fileName}"${multi} is loaded. What would you like to analyze?`
