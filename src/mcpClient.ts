@@ -3,7 +3,7 @@ import { EventEmitter } from 'events';
 
 /**
  * Minimal MCP (Model Context Protocol) client that communicates with
- * binlog.mcp.exe over stdio using JSON-RPC 2.0 with Content-Length framing.
+ * binlog.mcp.exe over stdio using JSON-RPC 2.0 with newline-delimited JSON.
  */
 export class McpClient extends EventEmitter {
     private proc: ChildProcess | null = null;
@@ -11,6 +11,7 @@ export class McpClient extends EventEmitter {
     private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
     private buffer = '';
     private initialized = false;
+    private loadedBinlogs = new Set<string>();
 
     constructor(
         private readonly exePath: string,
@@ -36,8 +37,11 @@ export class McpClient extends EventEmitter {
             this.pending.clear();
         });
 
+        // Wait for server to start
+        await new Promise(resolve => setTimeout(resolve, 1500));
+
         // Initialize handshake
-        const initResult = await this.sendRequest('initialize', {
+        await this.sendRequest('initialize', {
             protocolVersion: '2024-11-05',
             capabilities: {},
             clientInfo: { name: 'binlog-tree', version: '0.1.0' },
@@ -47,20 +51,40 @@ export class McpClient extends EventEmitter {
         this.sendNotification('notifications/initialized', {});
         this.initialized = true;
 
-        return;
+        // Pre-load all binlogs
+        for (const binlogPath of this.binlogPaths) {
+            try {
+                await this.sendRequest('tools/call', {
+                    name: 'load_binlog',
+                    arguments: { path: binlogPath },
+                });
+                this.loadedBinlogs.add(binlogPath);
+            } catch {
+                // Non-fatal: some binlogs may not exist
+            }
+        }
     }
 
     async callTool(name: string, args: Record<string, unknown> = {}): Promise<ToolResult> {
         if (!this.initialized) {
             throw new Error('MCP client not initialized');
         }
+        // Auto-inject binlog_file if not provided and we have loaded binlogs
+        if (!args.binlog_file && this.loadedBinlogs.size > 0) {
+            args.binlog_file = [...this.loadedBinlogs][0];
+        }
         const result = await this.sendRequest('tools/call', { name, arguments: args }) as {
             content?: Array<{ type: string; text?: string }>;
+            isError?: boolean;
         };
         const textParts = (result.content || [])
             .filter(c => c.type === 'text' && c.text)
             .map(c => c.text!);
-        return { text: textParts.join('\n') };
+        const text = textParts.join('\n');
+        if (result.isError || text.includes('An error occurred invoking')) {
+            throw new Error(text || 'Tool call failed');
+        }
+        return { text };
     }
 
     async listTools(): Promise<Array<{ name: string; description: string }>> {
@@ -80,6 +104,7 @@ export class McpClient extends EventEmitter {
         }
         this.initialized = false;
         this.pending.clear();
+        this.loadedBinlogs.clear();
     }
 
     private sendRequest(method: string, params: unknown): Promise<unknown> {
@@ -88,7 +113,6 @@ export class McpClient extends EventEmitter {
             this.pending.set(id, { resolve, reject });
             this.writeMessage({ jsonrpc: '2.0', id, method, params });
 
-            // Timeout after 30s
             setTimeout(() => {
                 if (this.pending.has(id)) {
                     this.pending.delete(id);
@@ -106,9 +130,7 @@ export class McpClient extends EventEmitter {
         if (!this.proc?.stdin?.writable) {
             throw new Error('MCP server stdin not writable');
         }
-        const body = JSON.stringify(msg);
-        const header = `Content-Length: ${Buffer.byteLength(body, 'utf8')}\r\n\r\n`;
-        this.proc.stdin.write(header + body);
+        this.proc.stdin.write(JSON.stringify(msg) + '\n');
     }
 
     private onData(chunk: Buffer): void {
@@ -117,33 +139,14 @@ export class McpClient extends EventEmitter {
     }
 
     private parseMessages(): void {
-        while (true) {
-            // Look for Content-Length header
-            const headerEnd = this.buffer.indexOf('\r\n\r\n');
-            if (headerEnd === -1) {
-                return;
-            }
+        const lines = this.buffer.split('\n');
+        this.buffer = lines.pop() || '';
 
-            const headerPart = this.buffer.substring(0, headerEnd);
-            const match = headerPart.match(/Content-Length:\s*(\d+)/i);
-            if (!match) {
-                // Skip malformed data — advance past the header
-                this.buffer = this.buffer.substring(headerEnd + 4);
-                continue;
-            }
-
-            const contentLength = parseInt(match[1], 10);
-            const bodyStart = headerEnd + 4;
-
-            if (this.buffer.length < bodyStart + contentLength) {
-                return; // Wait for more data
-            }
-
-            const body = this.buffer.substring(bodyStart, bodyStart + contentLength);
-            this.buffer = this.buffer.substring(bodyStart + contentLength);
-
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) { continue; }
             try {
-                const msg = JSON.parse(body);
+                const msg = JSON.parse(trimmed);
                 if (msg.id !== undefined && this.pending.has(msg.id)) {
                     const p = this.pending.get(msg.id)!;
                     this.pending.delete(msg.id);
@@ -153,7 +156,6 @@ export class McpClient extends EventEmitter {
                         p.resolve(msg.result);
                     }
                 }
-                // Ignore notifications from server
             } catch {
                 // Skip parse errors
             }

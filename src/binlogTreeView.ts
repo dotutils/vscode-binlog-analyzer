@@ -196,31 +196,42 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         return this.callMcpTool('list_projects', {}, 'root-projects', (text) => {
             const data = this.tryParseJson(text);
             const items: TreeNodeData[] = [];
-            if (Array.isArray(data)) {
+            if (data && typeof data === 'object' && !Array.isArray(data)) {
+                // Format: { "19": { projectFile, id, entryTargets: { ... } }, ... }
+                for (const [id, proj] of Object.entries(data as Record<string, any>)) {
+                    const file = proj.projectFile || proj.ProjectFile || '';
+                    const targets = proj.entryTargets || {};
+                    const targetNames = Object.values(targets).map((t: any) => t.targetName).join(', ');
+                    const totalMs = Object.values(targets).reduce((sum: number, t: any) => sum + (t.durationMs || 0), 0);
+                    const durStr = totalMs > 0 ? `${(totalMs / 1000).toFixed(1)}s` : '';
+                    items.push({
+                        kind: 'project',
+                        label: this.extractFileName(String(file)),
+                        description: durStr,
+                        tooltip: `${file}\nTargets: ${targetNames || 'none'}`,
+                        icon: 'package',
+                    });
+                }
+            } else if (Array.isArray(data)) {
                 for (const proj of data) {
-                    const name = proj.name || proj.projectFile || proj.Name || proj.ProjectFile || String(proj);
-                    const duration = proj.duration || proj.Duration || proj.buildTime || '';
+                    const name = proj.name || proj.projectFile || String(proj);
                     items.push({
                         kind: 'project',
                         label: this.extractFileName(String(name)),
-                        description: duration ? `${duration}` : undefined,
                         tooltip: String(name),
                         icon: 'package',
                     });
                 }
-            } else if (typeof text === 'string' && text.trim()) {
-                // Try line-by-line parsing for plain text responses
-                for (const line of text.split('\n').filter(l => l.trim())) {
-                    items.push({
-                        kind: 'project',
-                        label: this.extractFileName(line.trim()),
-                        tooltip: line.trim(),
-                        icon: 'package',
-                    });
-                }
             }
-            this.projectsCache = items;
-            return items;
+            // Deduplicate by project file name
+            const seen = new Set<string>();
+            const deduped = items.filter(i => {
+                if (seen.has(i.label)) { return false; }
+                seen.add(i.label);
+                return true;
+            });
+            this.projectsCache = deduped;
+            return deduped;
         });
     }
 
@@ -232,36 +243,35 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         return this.callMcpTool('get_diagnostics', {}, severity === 'Error' ? 'root-errors' : 'root-warnings', (text) => {
             const data = this.tryParseJson(text);
             const items: TreeNodeData[] = [];
-            if (Array.isArray(data)) {
-                for (const d of data) {
-                    const sev = d.severity || d.Severity || d.level || '';
-                    if (severity === 'Error' && !this.isError(sev)) { continue; }
-                    if (severity === 'Warning' && !this.isWarning(sev)) { continue; }
-                    const code = d.code || d.Code || '';
-                    const msg = d.message || d.Message || d.text || '';
-                    const file = d.file || d.File || d.projectFile || '';
-                    const line = d.lineNumber || d.LineNumber || d.line || '';
-                    const label = code ? `${code}: ${msg}` : String(msg);
-                    const loc = file ? `${this.extractFileName(String(file))}${line ? ':' + line : ''}` : '';
-                    items.push({
-                        kind: 'diagnostic',
-                        label: label.length > 120 ? label.substring(0, 117) + '...' : label,
-                        description: loc,
-                        tooltip: `${label}\n${file}${line ? ':' + line : ''}`,
-                        icon: severity === 'Error' ? 'error' : 'warning',
-                    });
-                }
-            } else if (typeof text === 'string' && text.trim()) {
-                for (const line of text.split('\n').filter(l => l.trim())) {
-                    const isTarget = severity === 'Error'
-                        ? /error/i.test(line)
-                        : /warn/i.test(line);
-                    if (isTarget || severity === 'Error') {
+            if (data && typeof data === 'object') {
+                const obj = data as Record<string, any>;
+                // Format: { diagnostics: [...], errorCount, warningCount }
+                const diagnostics = obj.diagnostics || [];
+                if (Array.isArray(diagnostics)) {
+                    for (const d of diagnostics) {
+                        const sev = d.severity || d.Severity || d.level || '';
+                        if (severity === 'Error' && !this.isError(sev)) { continue; }
+                        if (severity === 'Warning' && !this.isWarning(sev)) { continue; }
+                        const code = d.code || d.Code || '';
+                        const msg = d.message || d.Message || d.text || '';
+                        const file = d.file || d.File || d.projectFile || '';
+                        const line = d.lineNumber || d.LineNumber || d.line || '';
+                        const label = code ? `${code}: ${msg}` : String(msg);
+                        const loc = file ? `${this.extractFileName(String(file))}${line ? ':' + line : ''}` : '';
                         items.push({
                             kind: 'diagnostic',
-                            label: line.trim().substring(0, 120),
+                            label: label.length > 120 ? label.substring(0, 117) + '...' : label,
+                            description: loc,
+                            tooltip: `${label}\n${file}${line ? ':' + line : ''}`,
                             icon: severity === 'Error' ? 'error' : 'warning',
                         });
+                    }
+                }
+                // If no individual diagnostics but we have counts
+                if (diagnostics.length === 0) {
+                    const count = severity === 'Error' ? (obj.errorCount || 0) : (obj.warningCount || 0);
+                    if (count === 0) {
+                        // Will show "None found"
                     }
                 }
             }
@@ -317,22 +327,30 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
     private parsePerfItems(text: string, icon: string): TreeNodeData[] {
         const data = this.tryParseJson(text);
         const items: TreeNodeData[] = [];
-        if (Array.isArray(data)) {
+        if (data && typeof data === 'object' && !Array.isArray(data)) {
+            // Format: { "TargetName": { executionCount, inclusiveDurationMs, ... }, ... }
+            for (const [name, info] of Object.entries(data as Record<string, any>)) {
+                const durationMs = info.inclusiveDurationMs || info.durationMs || info.exclusiveDurationMs || 0;
+                const durStr = durationMs >= 1000
+                    ? `${(durationMs / 1000).toFixed(1)}s`
+                    : `${durationMs}ms`;
+                const count = info.executionCount || 1;
+                items.push({
+                    kind: 'perf-item',
+                    label: name,
+                    description: `${durStr}${count > 1 ? ` (×${count})` : ''}`,
+                    tooltip: `${name}\nDuration: ${durStr}\nExecutions: ${count}`,
+                    icon,
+                });
+            }
+        } else if (Array.isArray(data)) {
             for (const entry of data) {
-                const name = entry.name || entry.Name || entry.target || entry.task || entry.Target || entry.Task || '';
-                const dur = entry.duration || entry.Duration || entry.elapsed || entry.time || '';
+                const name = entry.name || entry.Name || entry.target || entry.task || '';
+                const dur = entry.duration || entry.Duration || entry.elapsed || '';
                 items.push({
                     kind: 'perf-item',
                     label: String(name),
                     description: dur ? String(dur) : undefined,
-                    icon,
-                });
-            }
-        } else if (typeof text === 'string' && text.trim()) {
-            for (const line of text.split('\n').filter(l => l.trim())) {
-                items.push({
-                    kind: 'perf-item',
-                    label: line.trim().substring(0, 100),
                     icon,
                 });
             }
