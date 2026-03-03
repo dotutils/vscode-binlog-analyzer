@@ -28,6 +28,10 @@ interface TreeNodeData {
     icon?: string;
     command?: vscode.Command;
     children?: TreeNodeData[];
+    /** For project nodes: full path of the project file */
+    projectFile?: string;
+    /** For project nodes: project id from MCP */
+    projectId?: string;
 }
 
 export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTreeItem> {
@@ -122,8 +126,15 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                     kind: 'project',
                     label: this.extractFileName(String(file)),
                     description: totalMs > 0 ? `${(totalMs / 1000).toFixed(1)}s` : undefined,
-                    tooltip: `${file}\nTargets: ${targetNames || 'none'}`,
+                    tooltip: `${file}\nTargets: ${targetNames || 'none'}\n\nClick to view project details`,
                     icon: 'package',
+                    projectFile: String(file),
+                    projectId: id,
+                    command: {
+                        command: 'binlog.openProjectDetails',
+                        title: 'View Project Details',
+                        arguments: [id, String(file), targets],
+                    },
                 });
             }
         }

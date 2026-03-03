@@ -58,7 +58,12 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
                     content = await this.renderExpensive('get_expensive_tasks', 'Slowest Tasks');
                     break;
                 default:
-                    content = await this.renderSummary(binlogName);
+                    if (section.startsWith('/project/')) {
+                        const projectId = decodeURIComponent(section.substring('/project/'.length));
+                        content = await this.renderProjectDetails(projectId, binlogName);
+                    } else {
+                        content = await this.renderSummary(binlogName);
+                    }
             }
             this.cache.set(uri.toString(), content);
             return content;
@@ -189,6 +194,116 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
         }
 
         lines.push('');
+        lines.push('═══════════════════════════════════════════════════════');
+        lines.push('  Use @binlog in Copilot Chat for deeper analysis');
+        lines.push('═══════════════════════════════════════════════════════');
+
+        return lines.join('\n');
+    }
+
+    private async renderProjectDetails(projectId: string, projectFile: string): Promise<string> {
+        const lines: string[] = [];
+        lines.push('═══════════════════════════════════════════════════════');
+        lines.push(`  Project: ${projectFile}`);
+        lines.push('═══════════════════════════════════════════════════════');
+        lines.push('');
+
+        // Get project info from list_projects
+        try {
+            const projResult = await this.mcpClient!.callTool('list_projects');
+            const projData = JSON.parse(projResult.text);
+            const project = projData[projectId];
+            if (project) {
+                const file = project.projectFile || '';
+                lines.push(`📁 Project File: ${file}`);
+                lines.push(`🆔 Project ID: ${projectId}`);
+                lines.push('');
+
+                const targets = project.entryTargets || {};
+                const targetEntries = Object.entries(targets);
+                if (targetEntries.length > 0) {
+                    lines.push('🎯 ENTRY TARGETS');
+                    lines.push('─────────────────────────────────────────────────────');
+                    for (const [, t] of targetEntries) {
+                        const target = t as any;
+                        const name = target.targetName || '';
+                        const dur = target.durationMs || 0;
+                        const durStr = dur >= 1000 ? `${(dur / 1000).toFixed(1)}s` : `${dur}ms`;
+                        lines.push(`  ${name.padEnd(40)} ${durStr.padStart(8)}`);
+                    }
+                    lines.push('');
+                }
+            }
+        } catch {
+            lines.push('  (could not load project info)');
+            lines.push('');
+        }
+
+        // Get project build time
+        try {
+            const buildTimeResult = await this.mcpClient!.callTool('get_project_build_time', {
+                project_path: projectFile,
+            });
+            const buildTimeData = JSON.parse(buildTimeResult.text);
+            lines.push('⏱️  BUILD TIME');
+            lines.push('─────────────────────────────────────────────────────');
+            lines.push(JSON.stringify(buildTimeData, null, 2));
+            lines.push('');
+        } catch {
+            // Tool may not exist or may fail — non-fatal
+        }
+
+        // Get diagnostics and filter for this project
+        try {
+            const diagResult = await this.mcpClient!.callTool('get_diagnostics');
+            const diagData = JSON.parse(diagResult.text);
+            const diags = diagData.diagnostics || [];
+            const projectDiags = diags.filter((d: any) => {
+                const f = (d.file || d.File || d.projectFile || '').toLowerCase();
+                return f.includes(projectFile.toLowerCase()) ||
+                    f.includes(projectFile.split(/[/\\]/).pop()?.toLowerCase() || '');
+            });
+
+            const errors = projectDiags.filter((d: any) => /error/i.test(d.severity || ''));
+            const warnings = projectDiags.filter((d: any) => /warn/i.test(d.severity || ''));
+
+            if (errors.length > 0) {
+                lines.push(`❌ ERRORS (${errors.length})`);
+                lines.push('─────────────────────────────────────────────────────');
+                for (const e of errors) {
+                    const code = e.code || '';
+                    const msg = e.message || '';
+                    const file = e.file || '';
+                    const ln = e.lineNumber || '';
+                    lines.push(`  ${code}: ${msg}`);
+                    if (file) { lines.push(`    📄 ${file}${ln ? ':' + ln : ''}`); }
+                    lines.push('');
+                }
+            }
+
+            if (warnings.length > 0) {
+                lines.push(`⚠️  WARNINGS (${warnings.length})`);
+                lines.push('─────────────────────────────────────────────────────');
+                for (const w of warnings) {
+                    const code = w.code || '';
+                    const msg = w.message || '';
+                    const file = w.file || '';
+                    const ln = w.lineNumber || '';
+                    lines.push(`  ${code}: ${msg}`);
+                    if (file) { lines.push(`    📄 ${file}${ln ? ':' + ln : ''}`); }
+                    lines.push('');
+                }
+            }
+
+            if (errors.length === 0 && warnings.length === 0) {
+                lines.push('✅ No diagnostics for this project');
+                lines.push('');
+            }
+        } catch {
+            lines.push('  (could not load diagnostics)');
+            lines.push('');
+        }
+
         lines.push('═══════════════════════════════════════════════════════');
         lines.push('  Use @binlog in Copilot Chat for deeper analysis');
         lines.push('═══════════════════════════════════════════════════════');

@@ -172,9 +172,10 @@ export function activate(context: vscode.ExtensionContext) {
             });
 
             if (uris && uris.length > 0) {
-                // Open the selected folder in this window (add to workspace)
+                // Add the folder to the workspace without reloading the window
                 const folderUri = uris[0];
-                vscode.commands.executeCommand('vscode.openFolder', folderUri, { forceNewWindow: false });
+                const folders = vscode.workspace.workspaceFolders || [];
+                vscode.workspace.updateWorkspaceFolders(folders.length, 0, { uri: folderUri });
             }
         })
     );
@@ -194,6 +195,15 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.openInEditor', async (section: string, label: string) => {
             await openBinlogDocument(section, label);
+        })
+    );
+
+    // Command: Open project details in editor
+    context.subscriptions.push(
+        vscode.commands.registerCommand('binlog.openProjectDetails', async (projectId: string, projectFile: string, _targets: unknown) => {
+            const section = `/project/${encodeURIComponent(projectId)}`;
+            const fileName = projectFile.split(/[/\\]/).pop() || projectFile;
+            await openBinlogDocument(section, fileName);
         })
     );
 

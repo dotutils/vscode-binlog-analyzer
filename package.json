@@ -95,6 +95,10 @@
         "title": "Binlog: Open in Editor"
       },
       {
+        "command": "binlog.openProjectDetails",
+        "title": "Binlog: View Project Details"
+      },
+      {
         "command": "binlog.showErrors",
         "title": "Binlog: Show Errors"
       },
