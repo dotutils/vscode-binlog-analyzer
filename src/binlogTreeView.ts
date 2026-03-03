@@ -415,8 +415,6 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             const result = await this.mcpClient.callTool(toolName, args);
             this.loadingSet.delete(parentKind);
             const data = parser(result.text);
-            // Update parent description with count
-            this._onDidChangeTreeData.fire(undefined);
             if (data.length === 0) {
                 return [this.makeInfoItem('None found', 'info')];
             }
