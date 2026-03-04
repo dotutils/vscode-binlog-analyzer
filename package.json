@@ -39,7 +39,8 @@
   "activationEvents": [
     "onUri",
     "onView:binlogExplorer",
-    "onCustomEditor:binlog-analyzer.binlogViewer"
+    "onCustomEditor:binlog-analyzer.binlogViewer",
+    "workspaceContains:.vscode/settings.json"
   ],
   "main": "./out/extension.js",
   "contributes": {

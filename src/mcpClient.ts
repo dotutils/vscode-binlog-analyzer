@@ -47,15 +47,24 @@ export class McpClient extends EventEmitter {
             this.pending.clear();
         });
 
-        // Wait for server to start
-        await new Promise(resolve => setTimeout(resolve, 1500));
-
-        // Initialize handshake
-        await this.sendRequest('initialize', {
-            protocolVersion: '2024-11-05',
-            capabilities: {},
-            clientInfo: { name: 'binlog-tree', version: '0.1.0' },
-        });
+        // Wait for server to start, then try handshake with quick retry
+        let initialized = false;
+        for (let attempt = 0; attempt < 5 && !initialized; attempt++) {
+            await new Promise(resolve => setTimeout(resolve, attempt === 0 ? 300 : 400));
+            try {
+                await this.sendRequest('initialize', {
+                    protocolVersion: '2024-11-05',
+                    capabilities: {},
+                    clientInfo: { name: 'binlog-tree', version: '0.1.0' },
+                });
+                initialized = true;
+            } catch {
+                log(`Initialize attempt ${attempt + 1} failed, retrying...`);
+            }
+        }
+        if (!initialized) {
+            throw new Error('Failed to initialize MCP server after 5 attempts');
+        }
 
         // Send initialized notification
         this.sendNotification('notifications/initialized', {});

@@ -463,11 +463,12 @@ export function activate(context: vscode.ExtensionContext) {
             try { return fs.existsSync(p); } catch { return false; }
         });
         if (validBinlogs.length > 0) {
+            // Short delay to let URI handler claim priority if both fire
             setTimeout(() => {
                 if (!openedViaUri) {
                     handleBinlogOpen(validBinlogs, context);
                 }
-            }, 1500);
+            }, 500);
         }
     }
 }
