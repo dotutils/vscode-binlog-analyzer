@@ -268,6 +268,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             errorsNode.description = this.errorsCache
                 ? `(${this.errorsCache.length})`
                 : '';
+            errorsNode.contextValue = 'errorsRoot';
             items.push(errorsNode);
 
             const warningsNode = new BinlogTreeItem(
@@ -279,6 +280,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             warningsNode.description = this.warningsCache
                 ? `(${this.warningsCache.length})`
                 : '';
+            warningsNode.contextValue = 'warningsRoot';
             items.push(warningsNode);
 
             const perfNode = new BinlogTreeItem(
@@ -343,6 +345,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             item.tooltip = `${p}\n\nClick to view build summary in editor`;
             item.iconPath = new vscode.ThemeIcon(i === 0 ? 'file-binary' : 'link');
             item.contextValue = 'binlogFile';
+            item.fullText = p;
             item.command = {
                 command: 'binlog.openInEditor',
                 title: 'Open Summary',
@@ -543,6 +546,18 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         if (data.tooltip) { item.tooltip = data.tooltip; }
         if (data.icon) { item.iconPath = new vscode.ThemeIcon(data.icon); }
         if (data.command) { item.command = data.command; }
+        // Build full text for clipboard and set context for menus
+        const parts = [data.label];
+        if (data.description) { parts.push(data.description); }
+        item.fullText = parts.join(' — ');
+        if (data.tooltip && data.tooltip !== data.label) {
+            item.fullText = String(data.tooltip);
+        }
+        item.contextValue = data.kind === 'diagnostic' ? 'copyable-diagnostic'
+            : data.kind === 'perf-item' ? 'copyable-perf'
+            : data.kind === 'project' ? 'copyable-project'
+            : data.kind === 'binlog-file' ? 'copyable-file'
+            : undefined;
         return item;
     }
 
@@ -632,6 +647,16 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         };
     }
 
+    /** Get cached diagnostic items for copy-all commands */
+    getCachedDiagnostics(type: 'error' | 'warning'): { label: string | vscode.TreeItemLabel, fullText?: string }[] {
+        const cache = type === 'error' ? this.errorsCache : this.warningsCache;
+        if (!cache) { return []; }
+        return cache.map(d => ({
+            label: d.label,
+            fullText: d.tooltip || `${d.label}${d.description ? ' — ' + d.description : ''}`,
+        }));
+    }
+
     private isError(severity: string): boolean {
         return /error/i.test(String(severity));
     }
@@ -643,6 +668,8 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
 
 export class BinlogTreeItem extends vscode.TreeItem {
     nodeKind: NodeKind = 'info';
+    /** Full text for clipboard copy (label + description + tooltip details) */
+    fullText?: string;
     constructor(label: string, collapsibleState: vscode.TreeItemCollapsibleState) {
         super(label, collapsibleState);
     }

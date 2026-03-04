@@ -68,6 +68,14 @@
         "contents": "No binlog loaded.\n\nLoad a binlog file to get started with build analysis.\n\n[Load Binlog File](command:binlog.loadFile)\n\nOr open a .binlog from Structured Log Viewer using ✨ Open in VS Code."
       }
     ],
+    "keybindings": [
+      {
+        "command": "binlog.copyItem",
+        "key": "ctrl+c",
+        "mac": "cmd+c",
+        "when": "focusedView == binlogExplorer && listFocus"
+      }
+    ],
     "commands": [
       {
         "command": "binlog.loadFile",
@@ -130,6 +138,19 @@
       {
         "command": "binlog.redactSecrets",
         "title": "Binlog: Redact Secrets"
+      },
+      {
+        "command": "binlog.copyItem",
+        "title": "Copy",
+        "icon": "$(clippy)"
+      },
+      {
+        "command": "binlog.copyAllErrors",
+        "title": "Copy All Errors"
+      },
+      {
+        "command": "binlog.copyAllWarnings",
+        "title": "Copy All Warnings"
       }
     ],
     "configuration": {
@@ -272,6 +293,21 @@
           "command": "binlog.removeFile",
           "when": "view == binlogExplorer && viewItem == binlogFile",
           "group": "inline"
+        },
+        {
+          "command": "binlog.copyItem",
+          "when": "view == binlogExplorer && viewItem =~ /^copyable/",
+          "group": "1_copy"
+        },
+        {
+          "command": "binlog.copyAllErrors",
+          "when": "view == binlogExplorer && viewItem == errorsRoot",
+          "group": "1_copy"
+        },
+        {
+          "command": "binlog.copyAllWarnings",
+          "when": "view == binlogExplorer && viewItem == warningsRoot",
+          "group": "1_copy"
         }
       ]
     }

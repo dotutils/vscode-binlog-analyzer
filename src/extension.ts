@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { BinlogDiagnosticsProvider } from './diagnostics';
 import { BinlogChatParticipant } from './chatParticipant';
-import { BinlogTreeDataProvider } from './binlogTreeView';
+import { BinlogTreeDataProvider, BinlogTreeItem } from './binlogTreeView';
 import { McpClient } from './mcpClient';
 import { BinlogDocumentProvider, BINLOG_SCHEME, openBinlogDocument } from './binlogDocumentProvider';
 import * as telemetry from './telemetry';
@@ -410,6 +410,36 @@ export function activate(context: vscode.ExtensionContext) {
                 targetPath = uris[0].fsPath;
             }
             await redactSecrets(targetPath);
+        }),
+        vscode.commands.registerCommand('binlog.copyItem', async (treeItem?: BinlogTreeItem) => {
+            if (!treeItem) { return; }
+            const text = treeItem.fullText
+                || (typeof treeItem.tooltip === 'string' ? treeItem.tooltip : '')
+                || (typeof treeItem.label === 'string' ? treeItem.label : '');
+            if (text) {
+                await vscode.env.clipboard.writeText(text);
+                vscode.window.setStatusBarMessage('$(clippy) Copied to clipboard', 2000);
+            }
+        }),
+        vscode.commands.registerCommand('binlog.copyAllErrors', async () => {
+            const items = treeDataProvider?.getCachedDiagnostics('error') || [];
+            if (items.length === 0) {
+                vscode.window.showInformationMessage('No errors to copy.');
+                return;
+            }
+            const text = items.map(d => d.fullText || d.label).join('\n');
+            await vscode.env.clipboard.writeText(text as string);
+            vscode.window.setStatusBarMessage(`$(clippy) Copied ${items.length} errors`, 2000);
+        }),
+        vscode.commands.registerCommand('binlog.copyAllWarnings', async () => {
+            const items = treeDataProvider?.getCachedDiagnostics('warning') || [];
+            if (items.length === 0) {
+                vscode.window.showInformationMessage('No warnings to copy.');
+                return;
+            }
+            const text = items.map(d => d.fullText || d.label).join('\n');
+            await vscode.env.clipboard.writeText(text as string);
+            vscode.window.setStatusBarMessage(`$(clippy) Copied ${items.length} warnings`, 2000);
         })
     );
 
