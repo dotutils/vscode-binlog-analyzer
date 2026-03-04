@@ -232,6 +232,10 @@
           {
             "name": "perf",
             "description": "Deep performance analysis with prioritized actionable optimization suggestions"
+          },
+          {
+            "name": "incremental",
+            "description": "Analyze build incrementality — find targets that rebuild unnecessarily and suggest fixes"
           }
         ]
       }

@@ -79,6 +79,49 @@ const COMMAND_PROMPTS: Record<string, string> = {
         '   🟡 MEDIUM IMPACT: Items consuming 2-10% of build time\n' +
         '   🟢 QUICK WINS: Easy changes with modest impact\n' +
         '6. End with concrete next steps the developer can copy-paste into their build files',
+    incremental: 'Analyze build INCREMENTALITY — determine if this build is doing unnecessary work that could be skipped on rebuild. Follow these steps:\n' +
+        '\n' +
+        'STEP 1: Search for rebuild-reason messages\n' +
+        'Call search_logs with these queries (one at a time):\n' +
+        '  - "Building target" — finds targets that rebuilt and why\n' +
+        '  - "not up to date" — finds up-to-date check failures\n' +
+        '  - "newer than output" — finds input files that triggered rebuild\n' +
+        '  - "doesn\'t exist" — finds missing output files forcing rebuild\n' +
+        '  - "out-of-date" — finds out-of-date explanations\n' +
+        '\n' +
+        'STEP 2: Identify targets without Inputs/Outputs\n' +
+        'Call get_expensive_targets (top 20). Targets without Inputs/Outputs attributes can NEVER be incremental — they always run.\n' +
+        'Call search_targets for any expensive target name to see its details.\n' +
+        '\n' +
+        'STEP 3: Look for common incrementality breakers\n' +
+        '  - Wildcard globs (e.g., **/*.cs) that pick up generated files in output directories\n' +
+        '  - Targets writing to source directories (outputs mixed with inputs)\n' +
+        '  - Missing or incorrect Inputs/Outputs on custom targets\n' +
+        '  - Targets that run multiple times (×N count from get_expensive_targets)\n' +
+        '  - Tasks like Copy/Exec without proper incremental support\n' +
+        '\n' +
+        'STEP 4: Produce an INCREMENTALITY REPORT with these sections:\n' +
+        '\n' +
+        '📊 **Incrementality Score**: Estimate what % of this build could be skipped on a no-op rebuild\n' +
+        '\n' +
+        '🔴 **Broken Incrementality** (targets that rebuild unnecessarily):\n' +
+        'For each, explain WHY it rebuilds and provide the EXACT fix:\n' +
+        '  - Missing Inputs/Outputs → Show the Target element with correct Inputs="@(Compile)" Outputs="$(IntermediateOutputPath)..." attributes\n' +
+        '  - Glob picking up generated files → Add <DefaultItemExcludes> or move output to $(IntermediateOutputPath)\n' +
+        '  - Timestamp issues → Suggest <MSBuildWarningsAsMessages> or check file system timestamps\n' +
+        '\n' +
+        '🟡 **Partially Incremental** (targets that could be improved):\n' +
+        'Targets that have some incrementality but still do extra work\n' +
+        '\n' +
+        '✅ **Correctly Incremental**: Count of targets properly skipping\n' +
+        '\n' +
+        '🔧 **Fix Plan**:\n' +
+        'Numbered list of changes to make, ordered by impact. For each fix, provide:\n' +
+        '  1. The exact MSBuild XML to add/modify\n' +
+        '  2. Which file to edit (Directory.Build.props, specific .csproj, or custom .targets)\n' +
+        '  3. How to verify: "Run `dotnet build -bl:first.binlog && dotnet build -bl:second.binlog` — second build should be <2s"\n' +
+        '\n' +
+        'End with: "To verify incrementality is fixed, build twice and compare: the second build should complete in under 2 seconds with most targets showing as skipped."',
 };
 
 export class BinlogChatParticipant {
