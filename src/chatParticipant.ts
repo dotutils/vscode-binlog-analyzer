@@ -10,12 +10,13 @@ IMPORTANT WORKFLOW:
 You have access to MCP tools from baronfel.binlog.mcp that can:
 - Load a binlog — load_binlog (call once, then use other tools)
 - Get build diagnostics (errors, warnings) — get_diagnostics
-- Analyze build timeline and performance — get_expensive_targets, get_expensive_tasks, get_project_build_times
-- List and inspect MSBuild projects — list_projects, find_expensive_projects
-- Search build events — search_logs, search_targets
-- Examine evaluations — list_evaluations, get_evaluation_global_properties
-- Analyze Roslyn analyzers — get_expensive_analyzers
-- List source files — list_source_files
+- Analyze build timeline and performance — get_expensive_targets, get_expensive_tasks, get_project_build_time
+- List and inspect MSBuild projects — list_projects, get_expensive_projects
+- Search build events — search_binlog, search_targets_by_name, search_tasks_by_name
+- Inspect targets/tasks — get_target_info_by_name, get_task_info, list_tasks_in_target, get_project_target_list
+- Examine evaluations — list_evaluations, get_evaluation_global_properties, get_evaluation_properties_by_name
+- Analyze Roslyn analyzers — get_expensive_analyzers, get_task_analyzers
+- List source files — list_files_from_binlog
 
 When answering questions:
 1. Call load_binlog ONCE at the start with the full binlog path
@@ -81,41 +82,40 @@ const COMMAND_PROMPTS: Record<string, string> = {
         '6. End with concrete next steps the developer can copy-paste into their build files',
     incremental: 'Analyze build INCREMENTALITY — determine if this build is doing unnecessary work that could be skipped on rebuild. Follow these steps:\n' +
         '\n' +
-        'STEP 1: Search for rebuild-reason messages\n' +
-        'Call search_logs with these queries (one at a time):\n' +
-        '  - "Building target" — finds targets that rebuilt and why\n' +
-        '  - "not up to date" — finds up-to-date check failures\n' +
-        '  - "newer than output" — finds input files that triggered rebuild\n' +
-        '  - "doesn\'t exist" — finds missing output files forcing rebuild\n' +
-        '  - "out-of-date" — finds out-of-date explanations\n' +
+        'STEP 1: Get target execution data\n' +
+        'Call get_expensive_targets with top_number=20. Look at the skippedCount vs executionCount for each target:\n' +
+        '  - skippedCount=0 with high executionCount → target NEVER skips, likely not incremental\n' +
+        '  - skippedCount > 0 → target has some incrementality\n' +
+        '  - skippedCount = executionCount → target is fully incremental (always skips when up-to-date)\n' +
         '\n' +
-        'STEP 2: Identify targets without Inputs/Outputs\n' +
-        'Call get_expensive_targets (top 20). Targets without Inputs/Outputs attributes can NEVER be incremental — they always run.\n' +
-        'Call search_targets for any expensive target name to see its details.\n' +
+        'STEP 2: Search for skip/rebuild messages\n' +
+        'Call search_binlog with these queries (one at a time):\n' +
+        '  - "skipping" — finds "Skipping target X because all output files are up-to-date"\n' +
+        '  - "up-to-date" — finds up-to-date check messages\n' +
+        '  - "out of date" — finds targets that rebuilt because outputs were stale\n' +
+        '  - "Building target" — finds explicit rebuild-reason messages\n' +
         '\n' +
-        'STEP 3: Look for common incrementality breakers\n' +
-        '  - Wildcard globs (e.g., **/*.cs) that pick up generated files in output directories\n' +
-        '  - Targets writing to source directories (outputs mixed with inputs)\n' +
-        '  - Missing or incorrect Inputs/Outputs on custom targets\n' +
-        '  - Targets that run multiple times (×N count from get_expensive_targets)\n' +
-        '  - Tasks like Copy/Exec without proper incremental support\n' +
+        'STEP 3: Drill into specific targets\n' +
+        'For each expensive target with skippedCount=0, call search_targets_by_name to see which projects ran it and which skipped it.\n' +
+        'Call get_target_info_by_name for specific project+target to see its Inputs/Outputs configuration.\n' +
         '\n' +
         'STEP 4: Produce an INCREMENTALITY REPORT with these sections:\n' +
         '\n' +
-        '📊 **Incrementality Score**: Estimate what % of this build could be skipped on a no-op rebuild\n' +
+        '📊 **Incrementality Score**: Calculate = (total skipped target executions / total target executions) × 100%\n' +
+        'Use actual skippedCount and executionCount from get_expensive_targets data.\n' +
         '\n' +
-        '🔴 **Broken Incrementality** (targets that rebuild unnecessarily):\n' +
-        'For each, explain WHY it rebuilds and provide the EXACT fix:\n' +
-        '  - Missing Inputs/Outputs → Show the Target element with correct Inputs="@(Compile)" Outputs="$(IntermediateOutputPath)..." attributes\n' +
+        '🔴 **Never Skips** (targets with skippedCount=0 and high duration):\n' +
+        'For each, explain likely reasons and provide the EXACT fix:\n' +
+        '  - SDK targets (CoreCompile, ResolveAssemblyReferences) → These are expected to run on clean builds. On no-op rebuilds they should skip. Suggest user build twice and check.\n' +
+        '  - Custom targets missing Inputs/Outputs → Show the Target element with correct Inputs="@(Compile)" Outputs="$(IntermediateOutputPath)..." attributes\n' +
         '  - Glob picking up generated files → Add <DefaultItemExcludes> or move output to $(IntermediateOutputPath)\n' +
-        '  - Timestamp issues → Suggest <MSBuildWarningsAsMessages> or check file system timestamps\n' +
         '\n' +
-        '🟡 **Partially Incremental** (targets that could be improved):\n' +
-        'Targets that have some incrementality but still do extra work\n' +
+        '🟡 **Sometimes Skips** (targets with 0 < skippedCount < executionCount):\n' +
+        'These run in some projects but skip in others — investigate why\n' +
         '\n' +
-        '✅ **Correctly Incremental**: Count of targets properly skipping\n' +
+        '✅ **Always Skips**: Targets that properly skip every time (skippedCount = executionCount)\n' +
         '\n' +
-        '🔧 **Fix Plan**:\n' +
+        '🔧 **Action Plan**:\n' +
         'Numbered list of changes to make, ordered by impact. For each fix, provide:\n' +
         '  1. The exact MSBuild XML to add/modify\n' +
         '  2. Which file to edit (Directory.Build.props, specific .csproj, or custom .targets)\n' +
