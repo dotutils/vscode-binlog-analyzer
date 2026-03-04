@@ -9,6 +9,7 @@ import * as telemetry from './telemetry';
 let diagnosticsProvider: BinlogDiagnosticsProvider | undefined;
 let chatParticipant: BinlogChatParticipant | undefined;
 let treeDataProvider: BinlogTreeDataProvider | undefined;
+let binlogTreeView: vscode.TreeView<BinlogTreeItem> | undefined;
 let mcpClient: McpClient | undefined;
 let binlogDocProvider: BinlogDocumentProvider | undefined;
 let currentBinlogPath: string | undefined;
@@ -37,6 +38,7 @@ export function activate(context: vscode.ExtensionContext) {
         treeDataProvider,
         showCollapseAll: true
     });
+    binlogTreeView = treeView;
     context.subscriptions.push(treeView);
 
     // Status bar item showing loaded binlog count
@@ -412,10 +414,12 @@ export function activate(context: vscode.ExtensionContext) {
             await redactSecrets(targetPath);
         }),
         vscode.commands.registerCommand('binlog.copyItem', async (treeItem?: BinlogTreeItem) => {
-            if (!treeItem) { return; }
-            const text = treeItem.fullText
-                || (typeof treeItem.tooltip === 'string' ? treeItem.tooltip : '')
-                || (typeof treeItem.label === 'string' ? treeItem.label : '');
+            // Context menu passes treeItem; keybinding doesn't — fall back to selection
+            const item = treeItem || binlogTreeView?.selection?.[0];
+            if (!item) { return; }
+            const text = item.fullText
+                || (typeof item.tooltip === 'string' ? item.tooltip : '')
+                || (typeof item.label === 'string' ? item.label : '');
             if (text) {
                 await vscode.env.clipboard.writeText(text);
                 vscode.window.setStatusBarMessage('$(clippy) Copied to clipboard', 2000);

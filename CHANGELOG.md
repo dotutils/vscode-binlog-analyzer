@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.0 (Preview)
+
+### New Features
+- **`/perf` command** — deep performance analysis with prioritized actionable optimization suggestions (🔴 high / 🟡 medium / 🟢 quick wins)
+- **`/incremental` command** — analyze build incrementality using target skip/execution ratios, find targets that rebuild unnecessarily
+- **Copy support** — Ctrl+C copies selected tree item; right-click context menu on errors, warnings, perf items; "Copy All Errors/Warnings" on section headers
+- **`.binlog` file association** — open `.binlog` files directly in VS Code via File > Open or drag & drop
+
+### Improvements
+- **Faster activation** — reduced startup delays by ~2.5s (MCP fast-retry, earlier settings load, `workspaceContains` activation)
+- **Better performance prompts** — system prompt includes MSBuild optimization playbook mapping targets to specific properties/flags
+- **Fixed tool names** — system prompt now references correct MCP server tools (`search_binlog`, `search_targets_by_name`, etc.)
+- **Fixed Slowest Tasks** showing 0ms — parser now checks `totalDurationMs` field
+
+### Bug Fixes
+- Fixed `load_binlog` parameter discovery (uses `listTools()` to find correct param name)
+- Fixed baronfel.binlog.mcp link in README
+
 ## 0.1.0 (Preview)
 
 ### Features
