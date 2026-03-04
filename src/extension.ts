@@ -44,6 +44,15 @@ export function activate(context: vscode.ExtensionContext) {
     statusBarItem.command = 'binlog.manageBinlogs';
     context.subscriptions.push(statusBarItem);
 
+    // Custom editor for .binlog files — opens the file and triggers the analysis flow
+    context.subscriptions.push(
+        vscode.window.registerCustomEditorProvider(
+            'binlog-analyzer.binlogViewer',
+            new BinlogEditorProvider(context),
+            { supportsMultipleEditorsPerDocument: false }
+        )
+    );
+
     // URI handler: vscode://binlog-analyzer/open?path={binlogPath}&path={binlogPath2}...
     context.subscriptions.push(
         vscode.window.registerUriHandler({
@@ -1055,4 +1064,67 @@ async function redactSecrets(binlogPath: string) {
 export function deactivate() {
     diagnosticsProvider?.dispose();
     mcpClient?.dispose();
+}
+
+/**
+ * Custom readonly editor for .binlog files.
+ * When a user opens a .binlog file in VS Code (e.g. File → Open, double-click in Explorer),
+ * this provider loads it into the analyzer and shows a summary webview.
+ */
+class BinlogEditorProvider implements vscode.CustomReadonlyEditorProvider {
+    constructor(private readonly context: vscode.ExtensionContext) {}
+
+    openCustomDocument(uri: vscode.Uri): vscode.CustomDocument {
+        return { uri, dispose() {} };
+    }
+
+    resolveCustomEditor(
+        document: vscode.CustomDocument,
+        webviewPanel: vscode.WebviewPanel,
+    ): void {
+        const filePath = document.uri.fsPath;
+        const fileName = getFileName(filePath);
+
+        // Show a simple webview indicating the file is being loaded
+        webviewPanel.webview.html = this.getHtml(fileName, filePath);
+
+        // Trigger the standard binlog loading flow
+        handleBinlogOpen([filePath], this.context);
+    }
+
+    private getHtml(fileName: string, filePath: string): string {
+        return `<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body {
+            font-family: var(--vscode-font-family);
+            color: var(--vscode-foreground);
+            background: var(--vscode-editor-background);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .container { text-align: center; max-width: 500px; }
+        h2 { margin-bottom: 8px; }
+        .path { opacity: 0.7; font-size: 12px; word-break: break-all; margin-bottom: 24px; }
+        .hint { opacity: 0.6; font-size: 13px; margin-top: 16px; }
+        .icon { font-size: 48px; margin-bottom: 16px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="icon">📊</div>
+        <h2>${fileName}</h2>
+        <div class="path">${filePath.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</div>
+        <p>This binlog has been loaded into the <strong>Binlog Explorer</strong> sidebar.</p>
+        <p class="hint">Use <code>@binlog</code> in Copilot Chat to analyze the build,<br/>
+        or expand the tree in the sidebar to explore.</p>
+    </div>
+</body>
+</html>`;
+    }
 }

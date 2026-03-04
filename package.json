@@ -38,7 +38,8 @@
   ],
   "activationEvents": [
     "onUri",
-    "onView:binlogExplorer"
+    "onView:binlogExplorer",
+    "onCustomEditor:binlog-analyzer.binlogViewer"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -184,6 +185,18 @@
         }
       }
     },
+    "customEditors": [
+      {
+        "viewType": "binlog-analyzer.binlogViewer",
+        "displayName": "MSBuild Binlog Analyzer",
+        "selector": [
+          {
+            "filenamePattern": "*.binlog"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
     "chatParticipants": [
       {
         "id": "binlog-analyzer.binlog",
