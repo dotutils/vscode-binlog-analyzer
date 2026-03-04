@@ -23,13 +23,34 @@ When answering questions:
 3. Reference specific file paths, line numbers, and error codes
 4. Explain MSBuild concepts when relevant (targets, properties, items, imports)
 5. Suggest actionable fixes for build errors
-6. For performance questions, identify the slowest targets and suggest optimizations
+6. For performance questions, provide SPECIFIC ACTIONABLE suggestions based on the actual targets/tasks found:
+
+PERFORMANCE OPTIMIZATION PLAYBOOK (use these when analyzing bottlenecks):
+- ResolveAssemblyReferences is slow → Reduce transitive references, set ReferenceOutputAssembly="false" on non-API deps, consider <DisableTransitiveProjectReferences>true</DisableTransitiveProjectReferences>
+- Csc/CoreCompile is slow → Check analyzer load with get_expensive_analyzers, consider <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild> in CI, split large projects, enable <ProduceReferenceAssembly>true</ProduceReferenceAssembly>
+- CopyFilesToOutputDirectory is slow → Set <UseCommonOutputDirectory>true</UseCommonOutputDirectory> or <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+- ResolvePackageAssets is slow → Use <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile> and check NuGet cache
+- GenerateNuspec/Pack targets → Disable with <IsPackable>false</IsPackable> if project doesn't produce a package
+- Analyzers are slow → Move expensive analyzers to <EnforceCodeStyleInBuild> or suppress in CI with /p:RunAnalyzers=false, or set <AnalysisLevel>none</AnalysisLevel>
+- Many projects rebuilding → Check if incremental build is broken (look for missing inputs/outputs on targets), verify <Deterministic>true</Deterministic>
+- High evaluation time → Reduce Directory.Build.props complexity, check for wildcard globs scanning large directories
+- Overall build is slow → Suggest /maxcpucount, /graph mode, BuildInParallel=true, check if projects can be built concurrently
+- Duplicate/redundant work → Look for targets running multiple times (×N count), suggest build deduplication
+
+Always provide the EXACT MSBuild property or command-line flag to use, and WHERE to add it (Directory.Build.props, .csproj, or CLI)
 
 Common MSBuild node types: Build, Project, Target, Task, Message, Warning, Error, Property, Item, Import, ProjectEvaluation.`;
 
 const COMMAND_PROMPTS: Record<string, string> = {
     errors: 'Get all build errors and warnings from the binlog. Show error codes, file paths, line numbers, and messages. Group by project. Suggest fixes for each error.',
-    timeline: 'Analyze the build timeline and performance. Show the slowest targets and tasks, total build duration, and identify bottlenecks. Suggest optimizations.',
+    timeline: 'Analyze the build timeline and performance. Follow these steps:\n' +
+        '1. Call get_expensive_targets (top 10) and get_expensive_tasks (top 10) to find bottlenecks\n' +
+        '2. Call get_project_build_times to see per-project breakdown\n' +
+        '3. Call get_expensive_analyzers to check if Roslyn analyzers are a bottleneck\n' +
+        '4. For EACH slow item, provide a SPECIFIC actionable fix with the exact MSBuild property/flag to use and where to add it\n' +
+        '5. Categorize suggestions by impact: 🔴 High Impact (>10% of build time), 🟡 Medium Impact (2-10%), 🟢 Low Impact (<2%)\n' +
+        '6. End with a prioritized action plan: "Do X first for biggest improvement, then Y, then Z"\n' +
+        '7. If parallel build is not fully utilized, suggest /maxcpucount and /graph mode',
     targets: 'List the MSBuild targets that were executed. Show their execution order, duration, and dependencies. Highlight any targets that failed.',
     summary: 'Provide a comprehensive build summary: overall result, duration, number of projects, error/warning counts, key properties, and configuration. Highlight anything unusual.',
     secrets: 'Scan the binlog for potential secrets, credentials, API keys, tokens, connection strings, and sensitive data that may have been logged during the build. Report any findings.',
@@ -40,6 +61,24 @@ const COMMAND_PROMPTS: Record<string, string> = {
         '4. **Performance**: Significant duration changes in targets and tasks (>20% change)\n' +
         '5. **Configuration**: Different SDK versions, properties, or task assemblies if visible\n' +
         'Present the comparison as a clear table or structured diff. Highlight anything that could explain a regression.',
+    perf: 'Perform a DEEP performance analysis of this build. Follow these steps:\n' +
+        '1. Call get_expensive_targets (top 15), get_expensive_tasks (top 15), get_project_build_times, and get_expensive_analyzers\n' +
+        '2. Calculate what percentage of total build time each item represents\n' +
+        '3. For EACH bottleneck, provide a SPECIFIC fix:\n' +
+        '   - The exact MSBuild property or CLI flag to set\n' +
+        '   - WHERE to add it (Directory.Build.props for repo-wide, specific .csproj, or CLI arg)\n' +
+        '   - Expected impact (e.g., "typically saves 20-40% on this target")\n' +
+        '   - Any trade-offs or caveats\n' +
+        '4. Check for these common issues:\n' +
+        '   - Targets running multiple times (×N) — may indicate redundant work\n' +
+        '   - Expensive analyzers that could be disabled in CI (/p:RunAnalyzers=false)\n' +
+        '   - Projects that could build in parallel but are serialized\n' +
+        '   - Copy-heavy builds that waste I/O\n' +
+        '5. Output a prioritized action plan as a numbered list:\n' +
+        '   🔴 HIGH IMPACT (do first): Items consuming >10% of build time\n' +
+        '   🟡 MEDIUM IMPACT: Items consuming 2-10% of build time\n' +
+        '   🟢 QUICK WINS: Easy changes with modest impact\n' +
+        '6. End with concrete next steps the developer can copy-paste into their build files',
 };
 
 export class BinlogChatParticipant {

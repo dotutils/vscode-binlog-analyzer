@@ -228,6 +228,10 @@
           {
             "name": "compare",
             "description": "Compare two loaded binlogs to spot regressions and configuration differences"
+          },
+          {
+            "name": "perf",
+            "description": "Deep performance analysis with prioritized actionable optimization suggestions"
           }
         ]
       }
