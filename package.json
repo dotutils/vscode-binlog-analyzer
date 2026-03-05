@@ -2,7 +2,7 @@
   "name": "binlog-analyzer",
   "displayName": "MSBuild Binlog Analyzer",
   "description": "Analyze MSBuild binary logs with Copilot Chat and MCP tools",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "preview": true,
   "publisher": "dotutils",
   "license": "MIT",
@@ -152,6 +152,21 @@
       {
         "command": "binlog.copyAllWarnings",
         "title": "Copy All Warnings"
+      },
+      {
+        "command": "binlog.openInStructuredLogViewer",
+        "title": "Binlog: Open in Structured Log Viewer",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "binlog.showTimeline",
+        "title": "Binlog: Show Build Timeline",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "binlog.compareTimelines",
+        "title": "Binlog: Compare Build Timelines",
+        "icon": "$(diff)"
       }
     ],
     "configuration": {
@@ -287,6 +302,11 @@
           "command": "binlog.addFile",
           "when": "view == binlogExplorer",
           "group": "navigation"
+        },
+        {
+          "command": "binlog.showTimeline",
+          "when": "view == binlogExplorer",
+          "group": "navigation"
         }
       ],
       "view/item/context": [
@@ -294,6 +314,11 @@
           "command": "binlog.removeFile",
           "when": "view == binlogExplorer && viewItem == binlogFile",
           "group": "inline"
+        },
+        {
+          "command": "binlog.openInStructuredLogViewer",
+          "when": "view == binlogExplorer && viewItem == binlogFile",
+          "group": "2_open"
         },
         {
           "command": "binlog.copyItem",

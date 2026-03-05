@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.3.0 (Preview)
+
+### New Features
+- **📊 Build Timeline webview** — visual horizontal bar chart of target/task durations and project build times with summary stats
+- **📊 Comparison Timeline webview** — side-by-side bar chart comparing two binlogs with per-item % delta, NEW/REMOVED badges, and color-coded faster/slower indicators
+- **🔍 CodeLens on project files** — `.csproj`/`.vbproj`/`.fsproj` files show "Analyze with @binlog", error/warning counts, and "Build Timeline" as clickable CodeLens
+- **💡 Quick Fix code actions** — "Fix with Copilot" and "Suppress with #pragma" quick fixes on every binlog diagnostic in the Problems panel
+- **🔗 Open in Structured Log Viewer** — right-click a loaded binlog in the tree to open in the desktop app (with fallback to download if not installed)
+- **📊 Enhanced status bar** — shows error/warning counts alongside binlog count (e.g., `📄 2 binlogs · ⚠ 5 · ❌ 12`)
+
+### Bug Fixes
+- **Fixed Problems panel** — was always empty; now populates from MCP `get_diagnostics` data with click-to-navigate to source file and line
+- **Fixed false "rebuild detected" notifications** — now checks file `mtime` instead of reacting to access-only filesystem events
+- **Fixed workspace folder switch losing binlogs** — binlog paths now persist in `globalState`; workspace folder changes re-apply MCP config and copilot instructions automatically
+- **Fixed "Set workspace folder" appending instead of replacing** — now replaces all workspace folders with the selected one
+- **Fixed chat participant crashing on tool history** — corrupted tool call/result history from previous turns no longer causes `invalid_request_body` errors; auto-retries with fresh context
+- **Fixed stale MCP server entries** — cleans up broken `binlog-mcp` entries with bare command names from workspace settings
+
+### Improvements
+- **Zero duplicate MCP calls** — diagnostics provider reuses tree view's prefetched data via event instead of making a separate `get_diagnostics` call
+- **Progress notifications** — workspace folder changes show "Setting workspace folder..." progress
+- **Binlog Explorer re-focuses** after workspace folder changes
+- **Cross-machine dialog** now routes to smart `setWorkspaceFolder` with candidate detection
+
 ## 0.2.0 (Preview)
 
 ### New Features

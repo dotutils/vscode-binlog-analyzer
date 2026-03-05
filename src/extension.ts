@@ -198,10 +198,15 @@ export function activate(context: vscode.ExtensionContext) {
             });
 
             if (uris && uris.length > 0) {
-                // Add the folder to the workspace without reloading the window
                 const folderUri = uris[0];
                 const folders = vscode.workspace.workspaceFolders || [];
-                vscode.workspace.updateWorkspaceFolders(folders.length, 0, { uri: folderUri });
+                await vscode.window.withProgress(
+                    { location: vscode.ProgressLocation.Notification, title: 'Setting workspace folder...' },
+                    async () => {
+                        vscode.workspace.updateWorkspaceFolders(0, folders.length, { uri: folderUri });
+                        await new Promise(r => setTimeout(r, 500));
+                    }
+                );
             }
         })
     );
@@ -289,12 +294,26 @@ export function activate(context: vscode.ExtensionContext) {
 
                 if (!folderUri) { return; }
 
-                // Save binlog paths before workspace change so they survive reload
-                const config = vscode.workspace.getConfiguration('binlogAnalyzer');
-                await config.update('activeBinlogs', allBinlogPaths, vscode.ConfigurationTarget.Global);
-
-                // Open the folder properly (single-root, proper title)
-                await vscode.commands.executeCommand('vscode.openFolder', folderUri, false);
+                // Replace all workspace folders with just the selected one
+                // This preserves loaded binlogs and extension state (no window reload)
+                const folders = vscode.workspace.workspaceFolders || [];
+                const alreadyOnly = folders.length === 1 &&
+                    folders[0].uri.fsPath.toLowerCase() === folderUri.fsPath.toLowerCase();
+                if (!alreadyOnly) {
+                    await vscode.window.withProgress(
+                        { location: vscode.ProgressLocation.Notification, title: 'Setting workspace folder...' },
+                        async () => {
+                            vscode.workspace.updateWorkspaceFolders(
+                                0, folders.length, { uri: folderUri! }
+                            );
+                            // Small delay for workspace change to propagate
+                            await new Promise(r => setTimeout(r, 500));
+                        }
+                    );
+                }
+                vscode.window.showInformationMessage(
+                    `Workspace folder set to: ${folderUri.fsPath}`
+                );
             } catch (err: any) {
                 vscode.window.showErrorMessage(`Failed to set workspace folder: ${err?.message || err}`);
             }
@@ -385,6 +404,65 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
+    // Command: Open in Structured Log Viewer (reverse bridge)
+    context.subscriptions.push(
+        vscode.commands.registerCommand('binlog.openInStructuredLogViewer', async (treeItem?: any) => {
+            let targetPath = currentBinlogPath;
+            if (treeItem?.tooltip) {
+                const tip = String(treeItem.tooltip).split('\n')[0];
+                if (tip && tip.endsWith('.binlog')) { targetPath = tip; }
+            }
+            if (!targetPath) {
+                vscode.window.showWarningMessage('No binlog loaded.');
+                return;
+            }
+            // Launch with OS default app (Structured Log Viewer registers .binlog)
+            const { exec } = require('child_process');
+            exec(`start "" "${targetPath}"`, (err: Error | null) => {
+                if (err) {
+                    // No app registered for .binlog — offer to reveal in Explorer or install SLV
+                    vscode.window.showWarningMessage(
+                        'No application is registered for .binlog files. Install MSBuild Structured Log Viewer to open binlogs.',
+                        'Download Viewer',
+                        'Reveal in Explorer'
+                    ).then(choice => {
+                        if (choice === 'Download Viewer') {
+                            vscode.env.openExternal(vscode.Uri.parse('https://msbuildlog.com/'));
+                        } else if (choice === 'Reveal in Explorer') {
+                            exec(`explorer /select,"${targetPath}"`);
+                        }
+                    });
+                }
+            });
+        })
+    );
+
+    // Command: Show Build Timeline (webview)
+    context.subscriptions.push(
+        vscode.commands.registerCommand('binlog.showTimeline', async () => {
+            if (!mcpClient) {
+                vscode.window.showWarningMessage('MCP client not ready. Wait for binlog to finish loading.');
+                return;
+            }
+            await showTimelineWebview(context);
+        })
+    );
+
+    // Command: Compare Build Timelines (webview with two binlogs side-by-side)
+    context.subscriptions.push(
+        vscode.commands.registerCommand('binlog.compareTimelines', async () => {
+            if (!mcpClient) {
+                vscode.window.showWarningMessage('MCP client not ready. Wait for binlog to finish loading.');
+                return;
+            }
+            if (allBinlogPaths.length < 2) {
+                vscode.window.showWarningMessage('Two binlogs required for comparison. Use "Binlog: Add File" to load a second one.');
+                return;
+            }
+            await showComparisonTimelineWebview(context);
+        })
+    );
+
     // Command: Scan for Secrets
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.scanSecrets', async () => {
@@ -453,17 +531,28 @@ export function activate(context: vscode.ExtensionContext) {
     // Register diagnostics
     context.subscriptions.push(diagnosticsProvider);
 
+    // Register CodeLens for .csproj files
+    registerCodeLensProvider(context);
+
     // Auto-load binlogs from settings (written by Structured Log Viewer or workspace change)
     const config = vscode.workspace.getConfiguration('binlogAnalyzer');
     const savedBinlogs = config.get<string[]>('activeBinlogs', []);
-    // Clear settings immediately to prevent stale data on next activation
-    config.update('activeBinlogs', undefined, vscode.ConfigurationTarget.Workspace).then(() => {}, () => {});
-    config.update('activeBinlogs', undefined, vscode.ConfigurationTarget.Global).then(() => {}, () => {});
+    // Also check globalState (survives workspace folder changes)
+    const globalStateBinlogs = context.globalState.get<string[]>('binlog.loadedPaths', []);
+    const binlogsToLoad = savedBinlogs.length > 0 ? savedBinlogs : globalStateBinlogs;
 
     if (savedBinlogs.length > 0) {
+        // Clear activeBinlogs setting after reading to prevent stale data
+        setTimeout(() => {
+            config.update('activeBinlogs', undefined, vscode.ConfigurationTarget.Workspace).then(() => {}, () => {});
+            config.update('activeBinlogs', undefined, vscode.ConfigurationTarget.Global).then(() => {}, () => {});
+        }, 3000);
+    }
+
+    if (binlogsToLoad.length > 0) {
         // Verify files still exist
         const fs = require('fs');
-        const validBinlogs = savedBinlogs.filter((p: string) => {
+        const validBinlogs = binlogsToLoad.filter((p: string) => {
             try { return fs.existsSync(p); } catch { return false; }
         });
         if (validBinlogs.length > 0) {
@@ -475,16 +564,41 @@ export function activate(context: vscode.ExtensionContext) {
             }, 500);
         }
     }
+
+    // Listen for workspace folder changes — re-apply MCP config and refresh UI
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeWorkspaceFolders(async () => {
+            if (allBinlogPaths.length > 0) {
+                const cfg = vscode.workspace.getConfiguration('binlogAnalyzer');
+                await configureMcpServer(allBinlogPaths, cfg);
+                await writeCopilotInstructions(allBinlogPaths);
+                // Re-focus the Binlog Explorer so it's visible after workspace change
+                vscode.commands.executeCommand('binlogExplorer.focus');
+            }
+        })
+    );
 }
 
 async function handleBinlogOpen(binlogPaths: string[], context: vscode.ExtensionContext) {
     telemetry.trackBinlogLoad(binlogPaths.length, openedViaUri ? 'uri' : 'file');
     allBinlogPaths = [...binlogPaths];
     currentBinlogPath = binlogPaths[0];
+    // Persist binlog paths in globalState so they survive workspace folder changes
+    context.globalState.update('binlog.loadedPaths', allBinlogPaths);
     chatParticipant?.setBinlogPaths(binlogPaths);
     treeDataProvider?.setLoading(true);
     treeDataProvider?.setBinlogPaths(binlogPaths);
     updateStatusBar();
+
+    // Subscribe to tree's diagnostics data to populate Problems panel (zero extra MCP calls)
+    if (treeDataProvider && diagnosticsProvider) {
+        const sub = treeDataProvider.onDiagnosticsRaw((data) => {
+            const config = vscode.workspace.getConfiguration('binlogAnalyzer');
+            diagnosticsProvider!.loadFromRawData(data, config);
+            updateStatusBar();
+            sub.dispose();
+        });
+    }
 
     // Reveal the Binlog Explorer sidebar immediately so user sees loading state
     vscode.commands.executeCommand('binlogExplorer.focus');
@@ -510,11 +624,6 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
 
     // Watch binlog files for changes (e.g. rebuild regenerates the binlog)
     setupBinlogWatchers(binlogPaths, context);
-
-    // Load diagnostics to Problems panel in the background
-    if (autoLoad && diagnosticsProvider) {
-        diagnosticsProvider.loadFromBinlog(binlogPaths[0], config).catch(() => {});
-    }
     vscode.commands.executeCommand(
         'workbench.action.chat.open',
         `@binlog Binlog "${fileName}"${multi} is loaded. What would you like to analyze?`
@@ -532,7 +641,7 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
             'Dismiss'
         );
         if (action === 'Open Project Folder') {
-            vscode.commands.executeCommand('binlog.openProjectFolder');
+            vscode.commands.executeCommand('binlog.setWorkspaceFolder');
         }
     }
 
@@ -546,10 +655,17 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
 /** Watch binlog files for changes — auto-reload when rebuild regenerates the binlog */
 function setupBinlogWatchers(binlogPaths: string[], context: vscode.ExtensionContext) {
     const path = require('path');
+    const fs = require('fs');
 
     // Dispose previous watchers
     for (const w of binlogWatchers) { w.dispose(); }
     binlogWatchers = [];
+
+    // Record initial mtimes so we only alert on real content changes
+    const lastMtimes = new Map<string, number>();
+    for (const p of binlogPaths) {
+        try { lastMtimes.set(p, fs.statSync(p).mtimeMs); } catch { /* ignore */ }
+    }
 
     let reloadDebounce: NodeJS.Timeout | undefined;
 
@@ -560,6 +676,14 @@ function setupBinlogWatchers(binlogPaths: string[], context: vscode.ExtensionCon
         const watcher = vscode.workspace.createFileSystemWatcher(pattern, true, false, true);
 
         watcher.onDidChange(() => {
+            // Check if mtime actually changed (filters out access-only events)
+            try {
+                const newMtime = fs.statSync(binlogPath).mtimeMs;
+                const oldMtime = lastMtimes.get(binlogPath) || 0;
+                if (newMtime === oldMtime) { return; } // Access-only, not a real write
+                lastMtimes.set(binlogPath, newMtime);
+            } catch { return; }
+
             // Debounce: binlog writes can trigger multiple change events
             if (reloadDebounce) { clearTimeout(reloadDebounce); }
             reloadDebounce = setTimeout(async () => {
@@ -659,6 +783,9 @@ async function removeBinlogs(toRemove: Set<string | undefined>) {
         currentBinlogPath = allBinlogPaths[0];
     }
 
+    // Update persisted state
+    extensionContext?.globalState.update('binlog.loadedPaths', allBinlogPaths);
+
     chatParticipant?.setBinlogPaths(allBinlogPaths);
     treeDataProvider?.setBinlogPaths(allBinlogPaths);
     updateStatusBar();
@@ -682,10 +809,25 @@ function updateStatusBar() {
     }
 
     const count = allBinlogPaths.length;
-    statusBarItem.text = `$(file-binary) ${count} binlog${count > 1 ? 's' : ''}`;
+    const diag = diagnosticsProvider?.getDiagnosticCounts();
+    const errorCount = diag?.errorCount || 0;
+    const warningCount = diag?.warningCount || 0;
+
+    let text = `$(file-binary) ${count} binlog${count > 1 ? 's' : ''}`;
+    if (errorCount > 0 || warningCount > 0) {
+        const parts: string[] = [];
+        if (errorCount > 0) { parts.push(`$(error) ${errorCount}`); }
+        if (warningCount > 0) { parts.push(`$(warning) ${warningCount}`); }
+        text += ` · ${parts.join(' ')}`;
+    }
+    statusBarItem.text = text;
+
     statusBarItem.tooltip = new vscode.MarkdownString(
         `**Loaded Binlogs (${count})**\n\n` +
         allBinlogPaths.map((p, i) => `${i === 0 ? '🔹' : '📎'} \`${getFileName(p)}\`  \n_${p}_`).join('\n\n') +
+        (errorCount > 0 || warningCount > 0
+            ? `\n\n---\n❌ ${errorCount} error(s) · ⚠️ ${warningCount} warning(s)`
+            : '') +
         `\n\n---\nClick to manage binlogs`
     );
     statusBarItem.show();
@@ -863,6 +1005,13 @@ async function configureMcpServer(binlogPaths: string[], config: vscode.Workspac
     // Write to workspace settings
     const mcpConfig = vscode.workspace.getConfiguration('mcp');
     const servers = mcpConfig.get<Record<string, unknown>>('servers', {});
+    // Remove any broken bare-command entries that cause ENOENT
+    for (const [key, val] of Object.entries(servers)) {
+        const srv = val as Record<string, unknown>;
+        if (srv.command === 'binlog.mcp' || srv.command === 'binlog-mcp') {
+            delete servers[key];
+        }
+    }
     servers['baronfel_binlog_mcp'] = serverConfig;
 
     try {
@@ -1099,6 +1248,480 @@ async function redactSecrets(binlogPath: string) {
 export function deactivate() {
     diagnosticsProvider?.dispose();
     mcpClient?.dispose();
+    codeLensProvider?.dispose();
+}
+
+/**
+ * Build Timeline Webview — shows a horizontal bar chart of target/task durations.
+ */
+async function showTimelineWebview(context: vscode.ExtensionContext) {
+    if (!mcpClient) { return; }
+
+    const panel = vscode.window.createWebviewPanel(
+        'binlogTimeline',
+        `Build Timeline — ${getFileName(currentBinlogPath || 'binlog')}`,
+        vscode.ViewColumn.One,
+        { enableScripts: true }
+    );
+
+    // Fetch data from MCP
+    let targetsData: Record<string, any> = {};
+    let tasksData: Record<string, any> = {};
+    let projectsData: Record<string, any> = {};
+
+    try {
+        const [targetsResult, tasksResult, projectsResult] = await Promise.all([
+            mcpClient.callTool('get_expensive_targets', { top_number: 15 }),
+            mcpClient.callTool('get_expensive_tasks', { top_number: 15 }),
+            mcpClient.callTool('list_projects'),
+        ]);
+        targetsData = JSON.parse(targetsResult.text);
+        tasksData = JSON.parse(tasksResult.text);
+        projectsData = JSON.parse(projectsResult.text);
+    } catch {
+        panel.webview.html = '<html><body><h2>Failed to load timeline data</h2></body></html>';
+        return;
+    }
+
+    // Build target bars
+    const targetBars = Object.entries(targetsData)
+        .map(([name, info]: [string, any]) => ({
+            name,
+            durationMs: info.inclusiveDurationMs || info.totalDurationMs || info.durationMs || 0,
+            count: info.executionCount || 1,
+            skipped: info.skippedCount || 0,
+        }))
+        .filter(t => t.durationMs > 0)
+        .sort((a, b) => b.durationMs - a.durationMs);
+
+    const taskBars = Object.entries(tasksData)
+        .map(([name, info]: [string, any]) => ({
+            name,
+            durationMs: info.inclusiveDurationMs || info.totalDurationMs || info.durationMs || 0,
+            count: info.executionCount || 1,
+        }))
+        .filter(t => t.durationMs > 0)
+        .sort((a, b) => b.durationMs - a.durationMs);
+
+    // Compute project build times
+    const projectBars = Object.entries(projectsData)
+        .map(([id, proj]: [string, any]) => {
+            const file = proj.projectFile || '';
+            const targets = proj.entryTargets || {};
+            const totalMs = Object.values(targets).reduce(
+                (sum: number, t: any) => sum + (t.durationMs || 0), 0
+            );
+            return { name: extractFileName(file), durationMs: totalMs };
+        })
+        .filter(p => p.durationMs > 0)
+        .sort((a, b) => b.durationMs - a.durationMs)
+        .slice(0, 15);
+
+    // Deduplicate projects by name
+    const seenProjects = new Set<string>();
+    const uniqueProjectBars = projectBars.filter(p => {
+        if (seenProjects.has(p.name)) { return false; }
+        seenProjects.add(p.name);
+        return true;
+    });
+
+    const maxTargetMs = targetBars[0]?.durationMs || 1;
+    const maxTaskMs = taskBars[0]?.durationMs || 1;
+    const maxProjectMs = uniqueProjectBars[0]?.durationMs || 1;
+
+    function formatDuration(ms: number): string {
+        return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
+    }
+
+    function renderBars(items: { name: string; durationMs: number; count?: number; skipped?: number }[], maxMs: number, color: string): string {
+        return items.map(item => {
+            const pct = Math.max(2, (item.durationMs / maxMs) * 100);
+            const meta = item.count && item.count > 1 ? ` <span class="count">×${item.count}</span>` : '';
+            const skipBadge = item.skipped !== undefined && item.skipped > 0
+                ? ` <span class="skip-badge">⏭ ${item.skipped} skipped</span>` : '';
+            return `<div class="bar-row">
+                <div class="bar-label" title="${item.name}">${item.name}${meta}${skipBadge}</div>
+                <div class="bar-track">
+                    <div class="bar-fill" style="width:${pct}%;background:${color}"></div>
+                </div>
+                <div class="bar-value">${formatDuration(item.durationMs)}</div>
+            </div>`;
+        }).join('');
+    }
+
+    panel.webview.html = `<!DOCTYPE html>
+<html>
+<head>
+<style>
+    body {
+        font-family: var(--vscode-font-family);
+        color: var(--vscode-foreground);
+        background: var(--vscode-editor-background);
+        padding: 20px;
+        max-width: 900px;
+        margin: 0 auto;
+    }
+    h1 { font-size: 1.4em; margin-bottom: 4px; }
+    h2 { font-size: 1.1em; margin-top: 24px; margin-bottom: 8px; color: var(--vscode-descriptionForeground); }
+    .bar-row { display: flex; align-items: center; margin: 3px 0; height: 24px; }
+    .bar-label {
+        width: 280px; min-width: 280px;
+        font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        padding-right: 8px;
+    }
+    .bar-track {
+        flex: 1; height: 18px; background: var(--vscode-editor-inactiveSelectionBackground);
+        border-radius: 3px; overflow: hidden;
+    }
+    .bar-fill { height: 100%; border-radius: 3px; transition: width 0.5s ease; min-width: 2px; }
+    .bar-value { width: 70px; text-align: right; font-size: 12px; padding-left: 8px; font-variant-numeric: tabular-nums; }
+    .count { color: var(--vscode-descriptionForeground); font-size: 11px; }
+    .skip-badge {
+        color: var(--vscode-charts-green);
+        font-size: 10px; margin-left: 4px;
+    }
+    .section-icon { margin-right: 6px; }
+    .summary {
+        display: flex; gap: 24px; margin: 12px 0 20px 0;
+        padding: 12px 16px; border-radius: 6px;
+        background: var(--vscode-editor-inactiveSelectionBackground);
+    }
+    .summary-item { text-align: center; }
+    .summary-value { font-size: 1.6em; font-weight: bold; }
+    .summary-label { font-size: 11px; color: var(--vscode-descriptionForeground); }
+</style>
+</head>
+<body>
+    <h1>📊 Build Timeline</h1>
+    <p style="color:var(--vscode-descriptionForeground)">${getFileName(currentBinlogPath || '')}</p>
+
+    <div class="summary">
+        <div class="summary-item">
+            <div class="summary-value">${uniqueProjectBars.length}</div>
+            <div class="summary-label">Projects</div>
+        </div>
+        <div class="summary-item">
+            <div class="summary-value">${targetBars.length}</div>
+            <div class="summary-label">Targets</div>
+        </div>
+        <div class="summary-item">
+            <div class="summary-value">${formatDuration(maxTargetMs)}</div>
+            <div class="summary-label">Slowest Target</div>
+        </div>
+    </div>
+
+    <h2><span class="section-icon">🔥</span>Slowest Targets</h2>
+    ${renderBars(targetBars, maxTargetMs, 'var(--vscode-charts-red, #f14c4c)')}
+
+    <h2><span class="section-icon">🔧</span>Slowest Tasks</h2>
+    ${renderBars(taskBars, maxTaskMs, 'var(--vscode-charts-blue, #3794ff)')}
+
+    <h2><span class="section-icon">📁</span>Project Build Times</h2>
+    ${renderBars(uniqueProjectBars, maxProjectMs, 'var(--vscode-charts-green, #89d185)')}
+</body>
+</html>`;
+}
+
+/**
+ * Comparison Timeline Webview — side-by-side bar chart comparing two binlogs.
+ */
+async function showComparisonTimelineWebview(context: vscode.ExtensionContext) {
+    if (!mcpClient || allBinlogPaths.length < 2) { return; }
+
+    const pathA = allBinlogPaths[0];
+    const pathB = allBinlogPaths[1];
+    const nameA = getFileName(pathA);
+    const nameB = getFileName(pathB);
+
+    const panel = vscode.window.createWebviewPanel(
+        'binlogCompareTimeline',
+        `Compare: ${nameA} vs ${nameB}`,
+        vscode.ViewColumn.One,
+        { enableScripts: true }
+    );
+
+    // Fetch data for both binlogs
+    interface PerfData {
+        targets: Record<string, any>;
+        tasks: Record<string, any>;
+    }
+
+    async function fetchPerfData(binlogPath: string): Promise<PerfData> {
+        const [targetsResult, tasksResult] = await Promise.all([
+            mcpClient!.callTool('get_expensive_targets', { top_number: 15, binlog_file: binlogPath }),
+            mcpClient!.callTool('get_expensive_tasks', { top_number: 15, binlog_file: binlogPath }),
+        ]);
+        return {
+            targets: JSON.parse(targetsResult.text),
+            tasks: JSON.parse(tasksResult.text),
+        };
+    }
+
+    let dataA: PerfData, dataB: PerfData;
+    try {
+        [dataA, dataB] = await Promise.all([fetchPerfData(pathA), fetchPerfData(pathB)]);
+    } catch {
+        panel.webview.html = '<html><body><h2>Failed to load comparison data. Make sure both binlogs are loaded in the MCP server.</h2></body></html>';
+        return;
+    }
+
+    function parseBars(data: Record<string, any>): Map<string, number> {
+        const map = new Map<string, number>();
+        for (const [name, info] of Object.entries(data)) {
+            map.set(name, info.inclusiveDurationMs || info.totalDurationMs || info.durationMs || 0);
+        }
+        return map;
+    }
+
+    function formatDuration(ms: number): string {
+        return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
+    }
+
+    // Merge target names from both builds
+    const targetsA = parseBars(dataA.targets);
+    const targetsB = parseBars(dataB.targets);
+    const allTargetNames = [...new Set([...targetsA.keys(), ...targetsB.keys()])];
+
+    const tasksA = parseBars(dataA.tasks);
+    const tasksB = parseBars(dataB.tasks);
+    const allTaskNames = [...new Set([...tasksA.keys(), ...tasksB.keys()])];
+
+    // Sort by max duration across both builds
+    allTargetNames.sort((a, b) =>
+        Math.max(targetsB.get(b) || 0, targetsA.get(b) || 0) -
+        Math.max(targetsA.get(a) || 0, targetsB.get(a) || 0)
+    );
+    allTaskNames.sort((a, b) =>
+        Math.max(tasksB.get(b) || 0, tasksA.get(b) || 0) -
+        Math.max(tasksA.get(a) || 0, tasksB.get(a) || 0)
+    );
+
+    function renderComparisonBars(
+        names: string[],
+        mapA: Map<string, number>,
+        mapB: Map<string, number>,
+    ): string {
+        const maxMs = Math.max(
+            ...[...mapA.values(), ...mapB.values(), 1]
+        );
+        return names.map(name => {
+            const msA = mapA.get(name) || 0;
+            const msB = mapB.get(name) || 0;
+            const pctA = Math.max(1, (msA / maxMs) * 100);
+            const pctB = Math.max(1, (msB / maxMs) * 100);
+            const delta = msA > 0 ? ((msB - msA) / msA * 100) : (msB > 0 ? 100 : 0);
+            const deltaSign = delta > 0 ? '+' : '';
+            const deltaClass = delta > 5 ? 'delta-worse' : delta < -5 ? 'delta-better' : 'delta-neutral';
+            const deltaStr = msA > 0 || msB > 0 ? `<span class="${deltaClass}">${deltaSign}${delta.toFixed(0)}%</span>` : '';
+            // Show "NEW" or "REMOVED" badges
+            const badge = msA === 0 && msB > 0 ? '<span class="badge-new">NEW</span>'
+                : msA > 0 && msB === 0 ? '<span class="badge-removed">REMOVED</span>' : '';
+
+            return `<div class="cmp-row">
+                <div class="cmp-label" title="${name}">${name} ${badge}</div>
+                <div class="cmp-bars">
+                    <div class="cmp-bar-pair">
+                        <div class="cmp-bar-track">
+                            <div class="cmp-bar-fill bar-a" style="width:${pctA}%"></div>
+                        </div>
+                        <div class="cmp-bar-val">${msA > 0 ? formatDuration(msA) : '—'}</div>
+                    </div>
+                    <div class="cmp-bar-pair">
+                        <div class="cmp-bar-track">
+                            <div class="cmp-bar-fill bar-b" style="width:${pctB}%"></div>
+                        </div>
+                        <div class="cmp-bar-val">${msB > 0 ? formatDuration(msB) : '—'}</div>
+                    </div>
+                </div>
+                <div class="cmp-delta">${deltaStr}</div>
+            </div>`;
+        }).join('');
+    }
+
+    // Summary stats
+    const totalA = [...targetsA.values()].reduce((s, v) => s + v, 0);
+    const totalB = [...targetsB.values()].reduce((s, v) => s + v, 0);
+    const totalDelta = totalA > 0 ? ((totalB - totalA) / totalA * 100) : 0;
+    const totalDeltaClass = totalDelta > 5 ? 'delta-worse' : totalDelta < -5 ? 'delta-better' : 'delta-neutral';
+
+    panel.webview.html = `<!DOCTYPE html>
+<html>
+<head>
+<style>
+    body {
+        font-family: var(--vscode-font-family);
+        color: var(--vscode-foreground);
+        background: var(--vscode-editor-background);
+        padding: 20px; max-width: 1000px; margin: 0 auto;
+    }
+    h1 { font-size: 1.4em; margin-bottom: 4px; }
+    h2 { font-size: 1.1em; margin-top: 28px; margin-bottom: 8px; color: var(--vscode-descriptionForeground); }
+    .legend {
+        display: flex; gap: 20px; margin: 8px 0 16px 0; font-size: 12px;
+        color: var(--vscode-descriptionForeground);
+    }
+    .legend-swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
+    .summary {
+        display: flex; gap: 24px; margin: 12px 0 20px 0;
+        padding: 14px 20px; border-radius: 6px;
+        background: var(--vscode-editor-inactiveSelectionBackground);
+    }
+    .summary-item { text-align: center; }
+    .summary-value { font-size: 1.5em; font-weight: bold; }
+    .summary-label { font-size: 11px; color: var(--vscode-descriptionForeground); }
+
+    .cmp-row { display: flex; align-items: center; margin: 4px 0; }
+    .cmp-label {
+        width: 240px; min-width: 240px; font-size: 12px;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        padding-right: 8px;
+    }
+    .cmp-bars { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+    .cmp-bar-pair { display: flex; align-items: center; height: 14px; }
+    .cmp-bar-track {
+        flex: 1; height: 12px;
+        background: var(--vscode-editor-inactiveSelectionBackground);
+        border-radius: 2px; overflow: hidden;
+    }
+    .cmp-bar-fill { height: 100%; border-radius: 2px; min-width: 2px; transition: width 0.5s ease; }
+    .bar-a { background: var(--vscode-charts-blue, #3794ff); opacity: 0.85; }
+    .bar-b { background: var(--vscode-charts-orange, #d18616); opacity: 0.85; }
+    .cmp-bar-val {
+        width: 55px; text-align: right; font-size: 11px; padding-left: 6px;
+        font-variant-numeric: tabular-nums; color: var(--vscode-descriptionForeground);
+    }
+    .cmp-delta { width: 65px; text-align: right; font-size: 11px; padding-left: 8px; font-weight: 600; }
+
+    .delta-worse { color: var(--vscode-charts-red, #f14c4c); }
+    .delta-better { color: var(--vscode-charts-green, #89d185); }
+    .delta-neutral { color: var(--vscode-descriptionForeground); }
+
+    .badge-new {
+        font-size: 9px; padding: 1px 4px; border-radius: 3px; margin-left: 4px;
+        background: var(--vscode-charts-orange, #d18616); color: #fff; font-weight: 600;
+    }
+    .badge-removed {
+        font-size: 9px; padding: 1px 4px; border-radius: 3px; margin-left: 4px;
+        background: var(--vscode-descriptionForeground); color: var(--vscode-editor-background); font-weight: 600;
+    }
+</style>
+</head>
+<body>
+    <h1>📊 Build Comparison</h1>
+
+    <div class="legend">
+        <span><span class="legend-swatch" style="background:var(--vscode-charts-blue,#3794ff)"></span> A: ${nameA}</span>
+        <span><span class="legend-swatch" style="background:var(--vscode-charts-orange,#d18616)"></span> B: ${nameB}</span>
+    </div>
+
+    <div class="summary">
+        <div class="summary-item">
+            <div class="summary-value">${formatDuration(totalA)}</div>
+            <div class="summary-label">Build A (targets)</div>
+        </div>
+        <div class="summary-item">
+            <div class="summary-value">${formatDuration(totalB)}</div>
+            <div class="summary-label">Build B (targets)</div>
+        </div>
+        <div class="summary-item">
+            <div class="summary-value ${totalDeltaClass}">${totalDelta > 0 ? '+' : ''}${totalDelta.toFixed(1)}%</div>
+            <div class="summary-label">Delta</div>
+        </div>
+    </div>
+
+    <h2><span style="margin-right:6px">🔥</span>Target Comparison</h2>
+    ${renderComparisonBars(allTargetNames, targetsA, targetsB)}
+
+    <h2><span style="margin-right:6px">🔧</span>Task Comparison</h2>
+    ${renderComparisonBars(allTaskNames, tasksA, tasksB)}
+</body>
+</html>`;
+}
+
+function extractFileName(filePath: string): string {
+    return filePath.split(/[/\\]/).pop() || filePath;
+}
+
+/**
+ * CodeLens provider for .csproj files — shows build time and diagnostic counts.
+ */
+let codeLensProvider: vscode.Disposable | undefined;
+
+function registerCodeLensProvider(context: vscode.ExtensionContext) {
+    if (codeLensProvider) { return; } // Already registered
+
+    const provider = new BinlogCodeLensProvider();
+    codeLensProvider = vscode.languages.registerCodeLensProvider(
+        { pattern: '**/*.{csproj,vbproj,fsproj,props,targets}' },
+        provider
+    );
+    context.subscriptions.push(codeLensProvider);
+}
+
+class BinlogCodeLensProvider implements vscode.CodeLensProvider {
+    private _onDidChange = new vscode.EventEmitter<void>();
+    readonly onDidChangeCodeLenses = this._onDidChange.event;
+
+    provideCodeLenses(document: vscode.TextDocument): vscode.CodeLens[] {
+        if (!treeDataProvider || !mcpClient) { return []; }
+
+        const fileName = document.uri.fsPath.split(/[/\\]/).pop() || '';
+        const summary = treeDataProvider.getDiagnosticsSummary();
+        const projectFiles = treeDataProvider.getProjectFiles();
+
+        // Check if this file is a project in the loaded binlog
+        const matchingProject = projectFiles.find(p => {
+            const pName = p.split(/[/\\]/).pop() || '';
+            return pName.toLowerCase() === fileName.toLowerCase();
+        });
+
+        if (!matchingProject) { return []; }
+
+        // Find the <Project line
+        let projectLine = 0;
+        for (let i = 0; i < Math.min(document.lineCount, 10); i++) {
+            if (document.lineAt(i).text.includes('<Project')) {
+                projectLine = i;
+                break;
+            }
+        }
+
+        const range = new vscode.Range(projectLine, 0, projectLine, 0);
+        const lenses: vscode.CodeLens[] = [];
+
+        // Build time from tree data
+        const diagSummary = summary;
+        const errorCount = diagSummary.errorCount;
+        const warnCount = diagSummary.warningCount;
+
+        const parts: string[] = [];
+        if (errorCount > 0) { parts.push(`$(error) ${errorCount} errors`); }
+        if (warnCount > 0) { parts.push(`$(warning) ${warnCount} warnings`); }
+
+        // "Ask @binlog" lens
+        lenses.push(new vscode.CodeLens(range, {
+            title: `$(tools) Analyze with @binlog`,
+            command: 'workbench.action.chat.open',
+            arguments: [`@binlog analyze the build of ${fileName} — show errors, performance bottlenecks, and optimization suggestions`],
+        }));
+
+        if (parts.length > 0) {
+            lenses.push(new vscode.CodeLens(range, {
+                title: parts.join(' · '),
+                command: 'workbench.actions.view.problems',
+                arguments: [],
+            }));
+        }
+
+        // Timeline lens
+        lenses.push(new vscode.CodeLens(range, {
+            title: `$(graph) Build Timeline`,
+            command: 'binlog.showTimeline',
+            arguments: [],
+        }));
+
+        return lenses;
+    }
 }
 
 /**

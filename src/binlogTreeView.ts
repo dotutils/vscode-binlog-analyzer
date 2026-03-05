@@ -78,6 +78,10 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         }
     }
 
+    private _onDiagnosticsRaw = new vscode.EventEmitter<unknown>();
+    /** Fires with raw MCP diagnostics data after prefetch — avoids duplicate MCP calls */
+    readonly onDiagnosticsRaw = this._onDiagnosticsRaw.event;
+
     /** Pre-fetch all data so tree expansion is instant */
     private async prefetch() {
         if (!this.mcpClient) { return; }
@@ -101,6 +105,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                             this.projectsCache = this.parseProjectData(data, result.text);
                         } else if (c.cache === 'diagnostics') {
                             this.parseDiagnosticsData(data);
+                            this._onDiagnosticsRaw.fire(data);
                         } else if (c.cache === 'targets') {
                             this.targetsCache = this.parsePerfItems(result.text, 'flame');
                         } else if (c.cache === 'tasks') {

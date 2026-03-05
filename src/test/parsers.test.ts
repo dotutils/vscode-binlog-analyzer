@@ -7,6 +7,11 @@ import {
     parseProjects,
     parseDiagnostics,
     getProjectRootCandidates,
+    parseMcpDiagnostics,
+    filterDiagnosticsBySeverity,
+    wasFileModified,
+    computePerfComparison,
+    McpDiagnostic,
 } from '../parsers';
 
 suite('Parsers', () => {
@@ -216,6 +221,155 @@ suite('Parsers', () => {
             );
             const result = getProjectRootCandidates(paths);
             assert.ok(result.length <= 10);
+        });
+    });
+
+    suite('parseMcpDiagnostics', () => {
+        test('parses standard MCP diagnostics response', () => {
+            const data = {
+                diagnostics: [
+                    { severity: 'Error', code: 'CS0246', message: 'Type not found', file: 'C:/src/Foo.cs', lineNumber: 10, columnNumber: 5 },
+                    { severity: 'Warning', code: 'CS0168', message: 'Unused variable', file: 'C:/src/Bar.cs', lineNumber: 20 },
+                ],
+                errorCount: 1,
+                warningCount: 1,
+            };
+            const result = parseMcpDiagnostics(data);
+            assert.strictEqual(result.length, 2);
+            assert.strictEqual(result[0].severity, 'error');
+            assert.strictEqual(result[0].code, 'CS0246');
+            assert.strictEqual(result[0].file, 'C:/src/Foo.cs');
+            assert.strictEqual(result[0].line, 10);
+            assert.strictEqual(result[0].column, 5);
+            assert.strictEqual(result[1].severity, 'warning');
+        });
+
+        test('handles alternative property casing', () => {
+            const data = {
+                diagnostics: [
+                    { Severity: 'Error', Code: 'BC30451', Message: 'Name not declared', File: 'C:/src/X.vb', LineNumber: 5, ColumnNumber: 3 },
+                ],
+            };
+            const result = parseMcpDiagnostics(data);
+            assert.strictEqual(result.length, 1);
+            assert.strictEqual(result[0].code, 'BC30451');
+            assert.strictEqual(result[0].file, 'C:/src/X.vb');
+        });
+
+        test('handles empty diagnostics array', () => {
+            assert.deepStrictEqual(parseMcpDiagnostics({ diagnostics: [] }), []);
+        });
+
+        test('handles null/undefined input', () => {
+            assert.deepStrictEqual(parseMcpDiagnostics(null), []);
+            assert.deepStrictEqual(parseMcpDiagnostics(undefined), []);
+        });
+
+        test('handles missing fields with defaults', () => {
+            const data = { diagnostics: [{ message: 'Something failed' }] };
+            const result = parseMcpDiagnostics(data);
+            assert.strictEqual(result.length, 1);
+            assert.strictEqual(result[0].line, 1);
+            assert.strictEqual(result[0].column, 1);
+            assert.strictEqual(result[0].severity, 'info');
+            assert.strictEqual(result[0].file, '');
+        });
+
+        test('maps info severity correctly', () => {
+            const data = { diagnostics: [{ severity: 'Info', message: 'Note' }] };
+            const result = parseMcpDiagnostics(data);
+            assert.strictEqual(result[0].severity, 'info');
+        });
+    });
+
+    suite('filterDiagnosticsBySeverity', () => {
+        const diags: McpDiagnostic[] = [
+            { file: 'a.cs', line: 1, column: 1, message: 'err', code: 'E1', severity: 'error' },
+            { file: 'b.cs', line: 2, column: 1, message: 'warn', code: 'W1', severity: 'warning' },
+            { file: 'c.cs', line: 3, column: 1, message: 'info', code: 'I1', severity: 'info' },
+        ];
+
+        test('Error filter returns only errors', () => {
+            const result = filterDiagnosticsBySeverity(diags, 'Error');
+            assert.strictEqual(result.length, 1);
+            assert.strictEqual(result[0].severity, 'error');
+        });
+
+        test('Warning filter returns errors and warnings', () => {
+            const result = filterDiagnosticsBySeverity(diags, 'Warning');
+            assert.strictEqual(result.length, 2);
+        });
+
+        test('Info filter returns all', () => {
+            const result = filterDiagnosticsBySeverity(diags, 'Info');
+            assert.strictEqual(result.length, 3);
+        });
+    });
+
+    suite('wasFileModified', () => {
+        test('returns true when mtime changed', () => {
+            assert.ok(wasFileModified(1000, 999));
+        });
+
+        test('returns false when mtime is the same', () => {
+            assert.ok(!wasFileModified(1000, 1000));
+        });
+    });
+
+    suite('computePerfComparison', () => {
+        test('computes delta between two builds', () => {
+            const mapA = new Map([['Csc', 5000], ['ResolveRefs', 3000]]);
+            const mapB = new Map([['Csc', 6000], ['ResolveRefs', 2000]]);
+            const result = computePerfComparison(mapA, mapB);
+            const csc = result.find(r => r.name === 'Csc')!;
+            assert.strictEqual(csc.durationA, 5000);
+            assert.strictEqual(csc.durationB, 6000);
+            assert.strictEqual(csc.status, 'slower');
+            assert.ok(csc.deltaPct > 0);
+
+            const refs = result.find(r => r.name === 'ResolveRefs')!;
+            assert.strictEqual(refs.status, 'faster');
+        });
+
+        test('detects new targets', () => {
+            const mapA = new Map<string, number>();
+            const mapB = new Map([['NewTarget', 1000]]);
+            const result = computePerfComparison(mapA, mapB);
+            assert.strictEqual(result[0].status, 'new');
+        });
+
+        test('detects removed targets', () => {
+            const mapA = new Map([['OldTarget', 1000]]);
+            const mapB = new Map<string, number>();
+            const result = computePerfComparison(mapA, mapB);
+            assert.strictEqual(result[0].status, 'removed');
+        });
+
+        test('marks small changes as same', () => {
+            const mapA = new Map([['Csc', 1000]]);
+            const mapB = new Map([['Csc', 1040]]); // 4% change, under default 5% threshold
+            const result = computePerfComparison(mapA, mapB);
+            assert.strictEqual(result[0].status, 'same');
+        });
+
+        test('respects custom threshold', () => {
+            const mapA = new Map([['Csc', 1000]]);
+            const mapB = new Map([['Csc', 1040]]);
+            const result = computePerfComparison(mapA, mapB, 3); // 3% threshold
+            assert.strictEqual(result[0].status, 'slower');
+        });
+
+        test('sorts by max duration descending', () => {
+            const mapA = new Map([['Small', 100], ['Big', 5000]]);
+            const mapB = new Map([['Small', 200], ['Big', 4000]]);
+            const result = computePerfComparison(mapA, mapB);
+            assert.strictEqual(result[0].name, 'Big');
+            assert.strictEqual(result[1].name, 'Small');
+        });
+
+        test('handles empty maps', () => {
+            const result = computePerfComparison(new Map(), new Map());
+            assert.strictEqual(result.length, 0);
         });
     });
 });

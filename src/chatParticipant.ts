@@ -216,17 +216,23 @@ export class BinlogChatParticipant {
         // Build messages
         const messages = [
             vscode.LanguageModelChatMessage.User(SYSTEM_PROMPT),
-            // Include conversation history for context
-            ...context.history.map(turn => {
+            // Include conversation history — only text-based turns
+            // Skip turns that involved tool calls (they can't be faithfully reconstructed
+            // and cause "messages with role 'tool' must be a response to a preceding
+            // message with 'tool_calls'" errors)
+            ...context.history.flatMap(turn => {
                 if (turn instanceof vscode.ChatResponseTurn) {
-                    const parts = turn.response
+                    const textParts = turn.response
                         .filter((p): p is vscode.ChatResponseMarkdownPart => p instanceof vscode.ChatResponseMarkdownPart)
                         .map(p => p.value.value);
-                    return vscode.LanguageModelChatMessage.Assistant(parts.join(''));
+                    const text = textParts.join('');
+                    // Skip empty responses (likely tool-only turns)
+                    if (!text.trim()) { return []; }
+                    return [vscode.LanguageModelChatMessage.Assistant(text)];
                 } else {
-                    return vscode.LanguageModelChatMessage.User(
-                        (turn as vscode.ChatRequestTurn).prompt
-                    );
+                    const prompt = (turn as vscode.ChatRequestTurn).prompt;
+                    if (!prompt.trim()) { return []; }
+                    return [vscode.LanguageModelChatMessage.User(prompt)];
                 }
             }),
             vscode.LanguageModelChatMessage.User(userMessage),
@@ -248,8 +254,29 @@ export class BinlogChatParticipant {
             await this.processResponse(chatRequest, messages, model, tools, stream, token);
 
         } catch (err) {
-            if (err instanceof vscode.LanguageModelError) {
-                stream.markdown(`⚠️ Model error: ${err.message}\n\nTry using the **Build Analysis** chat mode instead — it has MCP tools pre-configured.`);
+            const errMsg = err instanceof Error ? err.message : String(err);
+            // Handle corrupted tool history — retry without conversation history
+            if (errMsg.includes('invalid_request_body') || errMsg.includes('tool_calls') || errMsg.includes("role 'tool'")) {
+                const freshMessages = [
+                    vscode.LanguageModelChatMessage.User(SYSTEM_PROMPT),
+                    vscode.LanguageModelChatMessage.User(userMessage),
+                ];
+                try {
+                    const retryRequest = await model.sendRequest(
+                        freshMessages,
+                        {
+                            tools: tools as unknown as vscode.LanguageModelChatTool[],
+                            toolMode: vscode.LanguageModelChatToolMode.Auto,
+                        },
+                        token
+                    );
+                    await this.processResponse(retryRequest, freshMessages, model, tools, stream, token);
+                } catch (retryErr) {
+                    const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+                    stream.markdown(`⚠️ Error: ${retryMsg}\n\nTry starting a **new chat** or use the **Build Analysis** chat mode instead.`);
+                }
+            } else if (err instanceof vscode.LanguageModelError) {
+                stream.markdown(`⚠️ Model error: ${errMsg}\n\nTry using the **Build Analysis** chat mode instead — it has MCP tools pre-configured.`);
             } else {
                 throw err;
             }
@@ -319,16 +346,32 @@ export class BinlogChatParticipant {
             );
 
             // Continue conversation with tool results
-            const nextRequest = await model.sendRequest(
-                messages,
-                {
-                    tools: tools as unknown as vscode.LanguageModelChatTool[],
-                    toolMode: vscode.LanguageModelChatToolMode.Auto,
-                },
-                token
-            );
+            try {
+                const nextRequest = await model.sendRequest(
+                    messages,
+                    {
+                        tools: tools as unknown as vscode.LanguageModelChatTool[],
+                        toolMode: vscode.LanguageModelChatToolMode.Auto,
+                    },
+                    token
+                );
 
-            await this.processResponse(nextRequest, messages, model, tools, stream, token, depth + 1);
+                await this.processResponse(nextRequest, messages, model, tools, stream, token, depth + 1);
+            } catch (err) {
+                // Handle invalid_request_body errors from malformed tool message history
+                const msg = err instanceof Error ? err.message : String(err);
+                if (msg.includes('invalid_request_body') || msg.includes('tool_calls')) {
+                    // Retry without tools — just get a text response
+                    const retryRequest = await model.sendRequest(messages, {}, token);
+                    for await (const part of retryRequest.stream) {
+                        if (part instanceof vscode.LanguageModelTextPart) {
+                            stream.markdown(part.value);
+                        }
+                    }
+                } else {
+                    throw err;
+                }
+            }
         }
     }
 
