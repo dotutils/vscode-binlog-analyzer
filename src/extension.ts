@@ -199,14 +199,7 @@ export function activate(context: vscode.ExtensionContext) {
 
             if (uris && uris.length > 0) {
                 const folderUri = uris[0];
-                const folders = vscode.workspace.workspaceFolders || [];
-                await vscode.window.withProgress(
-                    { location: vscode.ProgressLocation.Notification, title: 'Setting workspace folder...' },
-                    async () => {
-                        vscode.workspace.updateWorkspaceFolders(0, folders.length, { uri: folderUri });
-                        await new Promise(r => setTimeout(r, 500));
-                    }
-                );
+                await vscode.commands.executeCommand('vscode.openFolder', folderUri, false);
             }
         })
     );
@@ -294,26 +287,14 @@ export function activate(context: vscode.ExtensionContext) {
 
                 if (!folderUri) { return; }
 
-                // Replace all workspace folders with just the selected one
-                // This preserves loaded binlogs and extension state (no window reload)
+                // Open the folder — this reloads the window but binlog paths
+                // are persisted in globalState and will auto-load on re-activation
                 const folders = vscode.workspace.workspaceFolders || [];
                 const alreadyOnly = folders.length === 1 &&
                     folders[0].uri.fsPath.toLowerCase() === folderUri.fsPath.toLowerCase();
                 if (!alreadyOnly) {
-                    await vscode.window.withProgress(
-                        { location: vscode.ProgressLocation.Notification, title: 'Setting workspace folder...' },
-                        async () => {
-                            vscode.workspace.updateWorkspaceFolders(
-                                0, folders.length, { uri: folderUri! }
-                            );
-                            // Small delay for workspace change to propagate
-                            await new Promise(r => setTimeout(r, 500));
-                        }
-                    );
+                    await vscode.commands.executeCommand('vscode.openFolder', folderUri, false);
                 }
-                vscode.window.showInformationMessage(
-                    `Workspace folder set to: ${folderUri.fsPath}`
-                );
             } catch (err: any) {
                 vscode.window.showErrorMessage(`Failed to set workspace folder: ${err?.message || err}`);
             }
@@ -534,22 +515,24 @@ export function activate(context: vscode.ExtensionContext) {
     // Register CodeLens for .csproj files
     registerCodeLensProvider(context);
 
-    // Auto-load binlogs from settings (written by Structured Log Viewer or workspace change)
+    // Auto-load binlogs from activeBinlogs setting (written by Structured Log Viewer)
+    // or from globalState (survives workspace folder changes / window reloads)
     const config = vscode.workspace.getConfiguration('binlogAnalyzer');
     const savedBinlogs = config.get<string[]>('activeBinlogs', []);
-    // Also check globalState (survives workspace folder changes)
     const globalStateBinlogs = context.globalState.get<string[]>('binlog.loadedPaths', []);
+
+    // Prefer activeBinlogs (explicit trigger from Structured Log Viewer)
     const binlogsToLoad = savedBinlogs.length > 0 ? savedBinlogs : globalStateBinlogs;
 
-    if (savedBinlogs.length > 0) {
-        // Clear activeBinlogs setting after reading to prevent stale data
-        setTimeout(() => {
-            config.update('activeBinlogs', undefined, vscode.ConfigurationTarget.Workspace).then(() => {}, () => {});
-            config.update('activeBinlogs', undefined, vscode.ConfigurationTarget.Global).then(() => {}, () => {});
-        }, 3000);
-    }
-
     if (binlogsToLoad.length > 0) {
+        if (savedBinlogs.length > 0) {
+            // Clear activeBinlogs setting after reading to prevent stale data
+            setTimeout(() => {
+                config.update('activeBinlogs', undefined, vscode.ConfigurationTarget.Workspace).then(() => {}, () => {});
+                config.update('activeBinlogs', undefined, vscode.ConfigurationTarget.Global).then(() => {}, () => {});
+            }, 3000);
+        }
+
         // Verify files still exist
         const fs = require('fs');
         const validBinlogs = binlogsToLoad.filter((p: string) => {
@@ -559,9 +542,12 @@ export function activate(context: vscode.ExtensionContext) {
             // Short delay to let URI handler claim priority if both fire
             setTimeout(() => {
                 if (!openedViaUri) {
-                    handleBinlogOpen(validBinlogs, context);
+                    handleBinlogOpen(validBinlogs, context, false);
                 }
             }, 500);
+        } else {
+            // All paths are gone — clear globalState
+            context.globalState.update('binlog.loadedPaths', undefined);
         }
     }
 
@@ -571,7 +557,9 @@ export function activate(context: vscode.ExtensionContext) {
             if (allBinlogPaths.length > 0) {
                 const cfg = vscode.workspace.getConfiguration('binlogAnalyzer');
                 await configureMcpServer(allBinlogPaths, cfg);
-                await writeCopilotInstructions(allBinlogPaths);
+                await cleanupBinlogInstructions();
+                // Refresh tree so workspace label updates
+                treeDataProvider?.fireChanged();
                 // Re-focus the Binlog Explorer so it's visible after workspace change
                 vscode.commands.executeCommand('binlogExplorer.focus');
             }
@@ -579,7 +567,7 @@ export function activate(context: vscode.ExtensionContext) {
     );
 }
 
-async function handleBinlogOpen(binlogPaths: string[], context: vscode.ExtensionContext) {
+async function handleBinlogOpen(binlogPaths: string[], context: vscode.ExtensionContext, interactive: boolean = true) {
     telemetry.trackBinlogLoad(binlogPaths.length, openedViaUri ? 'uri' : 'file');
     allBinlogPaths = [...binlogPaths];
     currentBinlogPath = binlogPaths[0];
@@ -601,7 +589,9 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
     }
 
     // Reveal the Binlog Explorer sidebar immediately so user sees loading state
-    vscode.commands.executeCommand('binlogExplorer.focus');
+    if (interactive) {
+        vscode.commands.executeCommand('binlogExplorer.focus');
+    }
 
     const config = vscode.workspace.getConfiguration('binlogAnalyzer');
     const autoLoad = config.get<boolean>('autoLoad', true);
@@ -611,7 +601,7 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
 
     // Configure MCP server for Copilot Chat (fast — just writes config)
     await configureMcpServer(allBinlogPaths, config);
-    await writeCopilotInstructions(allBinlogPaths);
+    await cleanupBinlogInstructions();
 
     // Start the private MCP client for tree view in the background (non-blocking)
     // This way Copilot Chat is usable immediately while the tree loads
@@ -624,31 +614,44 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
 
     // Watch binlog files for changes (e.g. rebuild regenerates the binlog)
     setupBinlogWatchers(binlogPaths, context);
-    vscode.commands.executeCommand(
-        'workbench.action.chat.open',
-        `@binlog Binlog "${fileName}"${multi} is loaded. What would you like to analyze?`
-    );
 
-    // Check if binlog likely came from a different machine
-    const crossMachineHint = detectCrossMachineBinlog(binlogPaths[0]);
-
-    if (crossMachineHint) {
-        telemetry.trackCrossMachine();
-        const action = await vscode.window.showWarningMessage(
-            `This binlog appears to be from a different machine. ` +
-            `Open your local project folder so Copilot can navigate source files.`,
-            'Open Project Folder',
-            'Dismiss'
+    // Only open chat and steal focus when user explicitly loaded a binlog
+    if (interactive) {
+        vscode.commands.executeCommand(
+            'workbench.action.chat.open',
+            `@binlog Binlog "${fileName}"${multi} is loaded. What would you like to analyze?`
         );
-        if (action === 'Open Project Folder') {
-            vscode.commands.executeCommand('binlog.setWorkspaceFolder');
-        }
     }
 
-    const isFirstUse = !context.globalState.get<boolean>('binlog.hasSeenWelcome');
-    if (isFirstUse) {
-        context.globalState.update('binlog.hasSeenWelcome', true);
-        showGettingStarted();
+    // If workspace doesn't match binlog location, suggest updating it
+    if (interactive) {
+        const path = require('path');
+        const binlogDir = path.dirname(binlogPaths[0]);
+        const folders = vscode.workspace.workspaceFolders || [];
+        const currentWs = folders[0]?.uri.fsPath?.toLowerCase();
+        const normalizedBinlogDir = binlogDir.toLowerCase();
+
+        const wsMatchesBinlog = currentWs &&
+            (normalizedBinlogDir.startsWith(currentWs) || currentWs.startsWith(normalizedBinlogDir));
+
+        if (!wsMatchesBinlog) {
+            const binlogName = getFileName(binlogPaths[0]);
+            const action = await vscode.window.showWarningMessage(
+                `"${binlogName}" appears to be from a different project than the current workspace. ` +
+                `Update workspace folder so Copilot can navigate source files.`,
+                'Set Workspace Folder',
+                'Dismiss'
+            );
+            if (action === 'Set Workspace Folder') {
+                vscode.commands.executeCommand('binlog.setWorkspaceFolder');
+            }
+        }
+
+        const isFirstUse = !context.globalState.get<boolean>('binlog.hasSeenWelcome');
+        if (isFirstUse) {
+            context.globalState.update('binlog.hasSeenWelcome', true);
+            showGettingStarted();
+        }
     }
 }
 
@@ -803,6 +806,9 @@ async function removeBinlogs(toRemove: Set<string | undefined>) {
 function updateStatusBar() {
     if (!statusBarItem) return;
 
+    // Update context for menu visibility
+    vscode.commands.executeCommand('setContext', 'binlog.hasLoadedBinlogs', allBinlogPaths.length > 0);
+
     if (allBinlogPaths.length === 0) {
         statusBarItem.hide();
         return;
@@ -885,10 +891,9 @@ function showGettingStarted() {
 }
 
 /**
- * Writes .github/copilot-instructions.md in the workspace so that
- * Copilot Chat knows the binlog paths and never calls load_binlog.
+ * Cleans up any binlog-instructions.md files that were previously written by the extension.
  */
-async function writeCopilotInstructions(binlogPaths: string[]) {
+async function cleanupBinlogInstructions() {
     const fs = require('fs');
     const pathMod = require('path');
 
@@ -896,30 +901,16 @@ async function writeCopilotInstructions(binlogPaths: string[]) {
     if (!workspaceFolder) { return; }
 
     const githubDir = pathMod.join(workspaceFolder, '.github');
-    const instructionsPath = pathMod.join(githubDir, 'copilot-instructions.md');
-
-    const pathsList = binlogPaths.map(p => `- \`${p}\``).join('\n');
-    const primaryPath = binlogPaths[0];
-
-    const content = `# Binlog Analyzer Instructions
-
-## Loaded Binlogs
-${pathsList}
-
-## CRITICAL Rules for MCP Tool Calls
-- Call \`load_binlog\` with \`path\` set to \`${primaryPath}\` ONLY ONCE at the start of the conversation. If you already called load_binlog earlier in this conversation, do NOT call it again — the data persists.
-- All analysis tools require \`binlog_file\` parameter — always use the full absolute path: \`${primaryPath}\`
-- **NEVER use relative filenames** — always use the full path above
-- Available analysis tools: \`get_diagnostics\`, \`list_projects\`, \`get_expensive_targets\`, \`get_expensive_tasks\`, \`get_expensive_projects\`, \`search_binlog\`, \`get_project_build_time\`, \`search_targets_by_name\`, \`search_tasks_by_name\`
-`;
-
-    try {
-        if (!fs.existsSync(githubDir)) {
-            fs.mkdirSync(githubDir, { recursive: true });
-        }
-        fs.writeFileSync(instructionsPath, content, 'utf8');
-    } catch {
-        // Non-fatal
+    for (const filename of ['binlog-instructions.md', 'copilot-instructions.md']) {
+        const filePath = pathMod.join(githubDir, filename);
+        try {
+            if (fs.existsSync(filePath)) {
+                const content = fs.readFileSync(filePath, 'utf8');
+                if (content.startsWith('# Binlog Analyzer Instructions')) {
+                    fs.unlinkSync(filePath);
+                }
+            }
+        } catch { /* Non-fatal */ }
     }
 }
 

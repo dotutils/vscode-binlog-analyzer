@@ -2,7 +2,7 @@
   "name": "binlog-analyzer",
   "displayName": "MSBuild Binlog Analyzer",
   "description": "Analyze MSBuild binary logs with Copilot Chat and MCP tools",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "preview": true,
   "publisher": "dotutils",
   "license": "MIT",
@@ -39,8 +39,7 @@
   "activationEvents": [
     "onUri",
     "onView:binlogExplorer",
-    "onCustomEditor:binlog-analyzer.binlogViewer",
-    "workspaceContains:.vscode/settings.json"
+    "onCustomEditor:binlog-analyzer.binlogViewer"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -305,7 +304,7 @@
         },
         {
           "command": "binlog.showTimeline",
-          "when": "view == binlogExplorer",
+          "when": "view == binlogExplorer && binlog.hasLoadedBinlogs",
           "group": "navigation"
         }
       ],

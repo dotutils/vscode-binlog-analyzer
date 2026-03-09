@@ -78,6 +78,11 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         }
     }
 
+    /** Fire tree change event without clearing caches (e.g. to update labels) */
+    fireChanged() {
+        this._onDidChangeTreeData.fire(undefined);
+    }
+
     private _onDiagnosticsRaw = new vscode.EventEmitter<unknown>();
     /** Fires with raw MCP diagnostics data after prefetch — avoids duplicate MCP calls */
     readonly onDiagnosticsRaw = this._onDiagnosticsRaw.event;
@@ -255,12 +260,34 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             projectsNode.nodeKind = 'root-projects';
             projectsNode.iconPath = new vscode.ThemeIcon('project');
             const projCount = this.projectsCache ? `(${this.projectsCache.length})` : '';
-            const wsFolder = vscode.workspace.workspaceFolders?.[0]?.name;
-            projectsNode.description = wsFolder
-                ? `${projCount}  ⟵ ${wsFolder}`
-                : projCount;
+
+            // Show source context: workspace folder if it matches binlog, otherwise binlog's parent dir
+            const path = require('path');
+            const wsFolder = vscode.workspace.workspaceFolders?.[0];
+            const binlogDir = this.binlogPaths.length > 0 ? path.dirname(this.binlogPaths[0]) : '';
+            let sourceLabel = '';
+            let sourceTooltip = '';
+
             if (wsFolder) {
-                projectsNode.tooltip = `Workspace: ${vscode.workspace.workspaceFolders![0].uri.fsPath}`;
+                const wsPath = wsFolder.uri.fsPath.toLowerCase();
+                const binlogDirLower = binlogDir.toLowerCase();
+                if (binlogDirLower.startsWith(wsPath) || wsPath.startsWith(binlogDirLower)) {
+                    sourceLabel = wsFolder.name;
+                    sourceTooltip = `Workspace: ${wsFolder.uri.fsPath}`;
+                } else {
+                    sourceLabel = path.basename(binlogDir);
+                    sourceTooltip = `Binlog source: ${binlogDir}`;
+                }
+            } else if (binlogDir) {
+                sourceLabel = path.basename(binlogDir);
+                sourceTooltip = `Binlog source: ${binlogDir}`;
+            }
+
+            projectsNode.description = sourceLabel
+                ? `${projCount}  ⟵ ${sourceLabel}`
+                : projCount;
+            if (sourceTooltip) {
+                projectsNode.tooltip = sourceTooltip;
             }
             items.push(projectsNode);
 

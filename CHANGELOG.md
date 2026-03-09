@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.0 (Preview)
+
+### Improvements
+- **Workspace mismatch warning** — when loading a binlog from a different project, shows a non-intrusive warning with "Set Workspace Folder" button instead of auto-reloading
+- **Smarter project label** — Projects node shows the binlog's source directory name when workspace doesn't match, instead of a stale workspace name
+- **No more file pollution** — removed `binlog-instructions.md` / `copilot-instructions.md` creation; extension no longer writes any files to your project directory
+- **Clean folder open** — "Set Workspace Folder" uses `vscode.openFolder` for a clean transition without multi-root workspace prompts
+- **Binlog persistence across reloads** — binlog paths survive window reloads (workspace folder changes) via globalState, auto-loading silently on re-activation
+
+### Bug Fixes
+- **Fixed extension self-activating** — removed over-eager globalState auto-loading that caused the extension to steal chat focus on every VS Code startup; now only auto-loads from `activeBinlogs` setting or globalState (with narrow activation events)
+- **Fixed "save workspace" dialog** — replaced `updateWorkspaceFolders` with `vscode.openFolder` to avoid VS Code prompting to save untitled workspace files
+- **Fixed timeline button showing without binlog** — gated behind `binlog.hasLoadedBinlogs` context key
+
 ## 0.3.0 (Preview)
 
 ### New Features
