@@ -87,13 +87,13 @@ suite('Parsers', () => {
             assert.ok(result[0].targetNames.includes('Build'));
         });
 
-        test('deduplicates projects by label', () => {
+        test('deduplicates projects by id, not label', () => {
             const data = {
                 '1': { projectFile: 'C:/src/A/Foo.csproj', entryTargets: {} },
                 '2': { projectFile: 'C:/src/B/Foo.csproj', entryTargets: {} },
             };
             const result = parseProjects(data);
-            assert.strictEqual(result.length, 1);
+            assert.strictEqual(result.length, 2, 'Same filename in different dirs should be kept');
         });
 
         test('handles empty data', () => {

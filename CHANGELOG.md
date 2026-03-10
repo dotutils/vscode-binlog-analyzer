@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.0 (Preview)
+
+### New Features
+- **E2E test suite** — VS Code integration tests via `@vscode/test-electron` (16 tests covering extension discovery, manifest validation, activation)
+- **`validateBinlogPath`** — rejects non-`.binlog` files with clear error messages
+- **Workspace flow tests** — 15 scenario tests covering open binlog → select workspace → switch binlog → update workspace
+
+### Bug Fixes
+- **Fixed workspace false positives** — `workspaceMatchesBinlog` now respects directory boundaries (`C:\src\app` no longer matches `C:\src\app-v2`)
+- **Fixed project deduplication** — projects with same filename in different directories (e.g. two `Common.csproj`) are no longer dropped
+- **Fixed severity classification** — `isError`/`isWarning` use exact matching; `WarningAsError` correctly classified as error
+- **Fixed line/column 0 handling** — explicit line `0` is preserved instead of silently becoming `1`
+- **Fixed NaN line numbers** — non-numeric line values default to `1` instead of `NaN`
+- **Fixed filter case sensitivity** — `filterDiagnosticsBySeverity` now works with any casing
+- **Fixed perf comparison case sensitivity** — `Build` and `build` are merged as one item
+- **Fixed `extractFileName` trailing separator** — `C:\src\` returns `src` instead of full path
+- **Fixed negative durations** — clamped to 0 to prevent `"-0.1s"` labels
+
 ## 0.4.0 (Preview)
 
 ### Improvements

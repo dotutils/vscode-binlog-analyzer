@@ -22,7 +22,8 @@ export interface ParsedDiagnostic {
 }
 
 export function extractFileName(path: string): string {
-    return path.split(/[/\\]/).pop() || path;
+    const name = path.replace(/[/\\]+$/, '').split(/[/\\]/).pop();
+    return name || path;
 }
 
 export function extractDirectory(path: string): string {
@@ -35,11 +36,13 @@ export function extractDirectory(path: string): string {
 }
 
 export function isError(severity: string): boolean {
-    return /error/i.test(String(severity));
+    const s = String(severity).toLowerCase();
+    return s === 'error' || s === 'criticalerror' || s === 'warningaserror';
 }
 
 export function isWarning(severity: string): boolean {
-    return /warn/i.test(String(severity));
+    const s = String(severity).toLowerCase();
+    return s === 'warning' || s === 'warn';
 }
 
 export function parseProjects(data: unknown): ParsedProject[] {
@@ -48,9 +51,9 @@ export function parseProjects(data: unknown): ParsedProject[] {
         for (const [id, proj] of Object.entries(data as Record<string, any>)) {
             const file = proj.projectFile || proj.ProjectFile || '';
             const targets = proj.entryTargets || {};
-            const totalMs = Object.values(targets).reduce(
+            const totalMs = Math.max(0, Object.values(targets).reduce(
                 (sum: number, t: any) => sum + (t.durationMs || 0), 0
-            );
+            ));
             const targetNames = Object.values(targets)
                 .map((t: any) => t.targetName)
                 .join(', ');
@@ -71,11 +74,11 @@ export function parseProjects(data: unknown): ParsedProject[] {
             });
         }
     }
-    // Deduplicate by label
+    // Deduplicate by id (not label — same filename in different dirs should be kept)
     const seen = new Set<string>();
     return items.filter(i => {
-        if (seen.has(i.label)) { return false; }
-        seen.add(i.label);
+        if (seen.has(i.id)) { return false; }
+        seen.add(i.id);
         return true;
     });
 }
@@ -168,10 +171,13 @@ export function parseMcpDiagnostics(data: unknown): McpDiagnostic[] {
         const severity: 'error' | 'warning' | 'info' =
             /error/i.test(sev) ? 'error' : /warn/i.test(sev) ? 'warning' : 'info';
 
+        const rawLine = d.lineNumber ?? d.LineNumber ?? d.line;
+        const rawCol = d.columnNumber ?? d.ColumnNumber ?? d.column;
+
         results.push({
             file: String(d.file || d.File || d.projectFile || ''),
-            line: Number(d.lineNumber || d.LineNumber || d.line || 1),
-            column: Number(d.columnNumber || d.ColumnNumber || d.column || 1),
+            line: rawLine != null ? (Number.isFinite(Number(rawLine)) ? Number(rawLine) : 1) : 1,
+            column: rawCol != null ? (Number.isFinite(Number(rawCol)) ? Number(rawCol) : 1) : 1,
             endLine: d.endLineNumber ? Number(d.endLineNumber) : undefined,
             endColumn: d.endColumnNumber ? Number(d.endColumnNumber) : undefined,
             message: String(d.message || d.Message || d.text || ''),
@@ -200,11 +206,11 @@ export function filterDiagnosticsBySeverity(
     diagnostics: McpDiagnostic[],
     minSeverity: string
 ): McpDiagnostic[] {
-    const levels: Record<string, number> = { 'Error': 0, 'Warning': 1, 'Info': 2 };
-    const minLevel = levels[minSeverity] ?? 1;
+    const levels: Record<string, number> = { 'error': 0, 'warning': 1, 'info': 2 };
+    const minLevel = levels[minSeverity.toLowerCase()] ?? 1;
 
     return diagnostics.filter(d => {
-        const diagLevel = levels[d.severity.charAt(0).toUpperCase() + d.severity.slice(1)] ?? 2;
+        const diagLevel = levels[d.severity.toLowerCase()] ?? 2;
         return diagLevel <= minLevel;
     });
 }
@@ -226,11 +232,25 @@ export function computePerfComparison(
     mapB: Map<string, number>,
     thresholdPct: number = 5
 ): ComparisonItem[] {
-    const allNames = [...new Set([...mapA.keys(), ...mapB.keys()])];
+    // Merge keys case-insensitively, preserving original casing from mapA or mapB
+    const nameMap = new Map<string, string>(); // lowercase → original
+    for (const k of mapA.keys()) { nameMap.set(k.toLowerCase(), k); }
+    for (const k of mapB.keys()) { if (!nameMap.has(k.toLowerCase())) { nameMap.set(k.toLowerCase(), k); } }
+    const allNames = [...nameMap.values()];
+
+    // Build case-insensitive lookup
+    const getA = (name: string) => {
+        for (const [k, v] of mapA) { if (k.toLowerCase() === name.toLowerCase()) { return v; } }
+        return 0;
+    };
+    const getB = (name: string) => {
+        for (const [k, v] of mapB) { if (k.toLowerCase() === name.toLowerCase()) { return v; } }
+        return 0;
+    };
 
     return allNames.map(name => {
-        const a = mapA.get(name) || 0;
-        const b = mapB.get(name) || 0;
+        const a = getA(name);
+        const b = getB(name);
         const deltaPct = a > 0 ? ((b - a) / a * 100) : (b > 0 ? 100 : 0);
         let status: ComparisonItem['status'] = 'same';
         if (a === 0 && b > 0) { status = 'new'; }
@@ -242,4 +262,57 @@ export function computePerfComparison(
     }).sort((a, b) =>
         Math.max(b.durationA, b.durationB) - Math.max(a.durationA, a.durationB)
     );
+}
+
+/**
+ * Checks if a workspace folder matches a binlog's location.
+ * Returns true if binlog dir is a parent/child of workspace, or vice versa.
+ */
+export function workspaceMatchesBinlog(workspacePath: string | undefined, binlogPath: string): boolean {
+    if (!workspacePath) { return false; }
+    const path = require('path');
+    const binlogDir = path.dirname(binlogPath).toLowerCase().replace(/[/\\]+$/, '');
+    const ws = workspacePath.toLowerCase().replace(/[/\\]+$/, '');
+    if (binlogDir === ws) { return true; }
+    const sep = path.sep.toLowerCase();
+    return binlogDir.startsWith(ws + sep) || ws.startsWith(binlogDir + sep);
+}
+
+/**
+ * Determines the best source label for the Projects tree node.
+ * Shows workspace name if it matches the binlog, otherwise the binlog's parent dir name.
+ */
+export function getSourceLabel(
+    workspacePath: string | undefined,
+    workspaceName: string | undefined,
+    binlogPath: string
+): { label: string; tooltip: string } {
+    const path = require('path');
+    const binlogDir = path.dirname(binlogPath);
+
+    if (workspacePath && workspaceMatchesBinlog(workspacePath, binlogPath)) {
+        return {
+            label: workspaceName || path.basename(workspacePath),
+            tooltip: `Workspace: ${workspacePath}`,
+        };
+    }
+
+    return {
+        label: path.basename(binlogDir),
+        tooltip: `Binlog source: ${binlogDir}`,
+    };
+}
+
+/**
+ * Validates that a file path looks like a binlog file.
+ * Returns an error message if invalid, or null if valid.
+ */
+export function validateBinlogPath(filePath: string): string | null {
+    if (!filePath || filePath.trim().length === 0) {
+        return 'File path is empty';
+    }
+    if (!filePath.toLowerCase().endsWith('.binlog')) {
+        return `Expected a .binlog file, got: ${extractFileName(filePath)}`;
+    }
+    return null;
 }
