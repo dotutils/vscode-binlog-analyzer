@@ -1357,30 +1357,50 @@ async function optimizeBuildFlow(context: vscode.ExtensionContext) {
         `BASELINE BINLOG: ${baselineBinlog}\n` +
         `OPTIMIZED BINLOG (will be created): ${optimizedBinlogPath}`;
 
-    // Step 6: Show a persistent "Compare Results" notification instead of auto-watching.
-    // MSBuild creates the binlog at the START of the build and writes progressively,
-    // so file-watcher-based approaches fire too early during evaluation pauses.
-    const compareAction = 'Compare Results';
-    const showCompareNotification = () => {
-        vscode.window.showInformationMessage(
-            `🔄 Optimize build in progress. Click "${compareAction}" after the build finishes in the terminal.`,
-            compareAction,
-            'Dismiss'
-        ).then(async action => {
-            optimizeInProgress = false;
-            if (action === compareAction) {
-                if (fs.existsSync(optimizedBinlogPath)) {
-                    await loadOptimizedAndCompare(context, baselineBinlog, optimizedBinlogPath);
-                } else {
-                    vscode.window.showWarningMessage(
-                        `Optimized binlog not found at ${optimizedBinlogPath}. Make sure the build completed.`
-                    );
-                }
+    // Step 6: Auto-detect when optimized binlog is ready using polling with stabilization.
+    // MSBuild creates the file at build start and writes progressively, so we need to wait
+    // for the file size to stop changing for a sustained period before loading.
+    const POLL_INTERVAL = 10_000;   // check every 10 seconds
+    const STABLE_READINGS = 3;      // need 3 consecutive same-size readings (30s stable)
+    let stableCount = 0;
+    let lastSize = -1;
+    let pollTimer: NodeJS.Timeout | undefined;
+
+    const pollForCompletion = async () => {
+        try {
+            if (!fs.existsSync(optimizedBinlogPath)) {
+                stableCount = 0;
+                lastSize = -1;
+                pollTimer = setTimeout(pollForCompletion, POLL_INTERVAL);
+                return;
             }
-        });
+            const stat = fs.statSync(optimizedBinlogPath);
+            if (stat.size > 0 && stat.size === lastSize) {
+                stableCount++;
+                if (stableCount >= STABLE_READINGS) {
+                    // File has been stable for 30+ seconds — build is done
+                    optimizeInProgress = false;
+                    await loadOptimizedAndCompare(context, baselineBinlog, optimizedBinlogPath);
+                    return;
+                }
+            } else {
+                stableCount = 0;
+                lastSize = stat.size;
+            }
+            pollTimer = setTimeout(pollForCompletion, POLL_INTERVAL);
+        } catch {
+            pollTimer = setTimeout(pollForCompletion, POLL_INTERVAL);
+        }
     };
 
-    showCompareNotification();
+    // Start polling after a 15-second initial delay (build hasn't started yet)
+    pollTimer = setTimeout(pollForCompletion, 15_000);
+
+    // Safety timeout: stop polling after 15 minutes
+    setTimeout(() => {
+        if (pollTimer) { clearTimeout(pollTimer); }
+        if (optimizeInProgress) { optimizeInProgress = false; }
+    }, 15 * 60 * 1000);
 
     // Step 7: Launch Copilot agent to apply changes
     vscode.commands.executeCommand('workbench.action.chat.open', {
