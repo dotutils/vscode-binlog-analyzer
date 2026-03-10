@@ -4,6 +4,14 @@ import * as vscode from 'vscode';
 // otherwise silently no-ops. All events are anonymized and respect VS Code telemetry settings.
 
 let reporter: TelemetryReporter | undefined;
+let telemetryLog: vscode.OutputChannel | undefined;
+
+function log(msg: string) {
+    if (!telemetryLog) {
+        telemetryLog = vscode.window.createOutputChannel('Binlog Analyzer Telemetry');
+    }
+    telemetryLog.appendLine(`[${new Date().toISOString().substring(11, 19)}] ${msg}`);
+}
 
 interface TelemetryReporter {
     sendTelemetryEvent(name: string, properties?: Record<string, string>, measurements?: Record<string, number>): void;
@@ -18,23 +26,31 @@ interface TelemetryReporter {
 export function initTelemetry(context: vscode.ExtensionContext): void {
     try {
         // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const { default: TelemetryReporterClass } = require('@vscode/extension-telemetry');
-        // Using a placeholder key — replace with real Application Insights connection string for production
+        const mod = require('@vscode/extension-telemetry');
+        log(`Module loaded. Keys: ${Object.keys(mod).join(', ')}`);
+        const TelemetryReporterClass = mod.default;
+        if (!TelemetryReporterClass) {
+            log('ERROR: No default export found');
+            return;
+        }
         const connectionString = 'InstrumentationKey=a7eb229a-c9eb-41c5-817b-62f0b74bfa78;IngestionEndpoint=https://swedencentral-0.in.applicationinsights.azure.com/;LiveEndpoint=https://swedencentral.livediagnostics.monitor.azure.com/;ApplicationId=dd1de234-9886-4f22-830b-36147303383e';
         reporter = new TelemetryReporterClass(connectionString);
         context.subscriptions.push(reporter as unknown as vscode.Disposable);
-    } catch {
-        // Telemetry package not available — silently no-op
+        log('Reporter initialized successfully');
+    } catch (err) {
+        log(`Failed to initialize: ${err instanceof Error ? err.stack || err.message : String(err)}`);
     }
 }
 
 /** Track extension activation */
 export function trackActivation(): void {
+    log(`trackActivation — reporter: ${!!reporter}`);
     reporter?.sendTelemetryEvent('activation');
 }
 
 /** Track binlog loaded */
 export function trackBinlogLoad(count: number, source: 'uri' | 'file' | 'settings'): void {
+    log(`trackBinlogLoad — count: ${count}, source: ${source}`);
     reporter?.sendTelemetryEvent('binlogLoad', { source }, { count });
 }
 
