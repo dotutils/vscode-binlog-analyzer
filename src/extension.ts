@@ -1402,6 +1402,9 @@ async function loadOptimizedAndCompare(
 
     await handleBinlogOpen(allBinlogPaths, context, false);
 
+    // Replace watchers: only watch baseline, not optimized (it was just written and may still settle)
+    setupBinlogWatchers([baselineBinlog], context);
+
     vscode.window.showInformationMessage(
         `✅ Optimized build complete! Both binlogs loaded for comparison.`,
         'Show Comparison Timeline',
