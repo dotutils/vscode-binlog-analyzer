@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as telemetry from './telemetry';
 
 const SYSTEM_PROMPT = `You are an MSBuild build analysis expert embedded in VS Code. You help developers understand and fix build issues using MSBuild binary log (binlog) files.
 
@@ -26,17 +27,22 @@ When answering questions:
 5. Suggest actionable fixes for build errors
 6. For performance questions, provide SPECIFIC ACTIONABLE suggestions based on the actual targets/tasks found:
 
-PERFORMANCE OPTIMIZATION PLAYBOOK (use these when analyzing bottlenecks):
-- ResolveAssemblyReferences is slow → Reduce transitive references, set ReferenceOutputAssembly="false" on non-API deps, consider <DisableTransitiveProjectReferences>true</DisableTransitiveProjectReferences>
+PERFORMANCE OPTIMIZATION PLAYBOOK (based on MSBuild team practices from dotnet/msbuild issues/PRs):
+- ResolveAssemblyReferences is slow → Reduce transitive references, set ReferenceOutputAssembly="false" on non-API deps, consider <DisableTransitiveProjectReferences>true</DisableTransitiveProjectReferences>. RAR runs unconditionally even on incremental builds (MSBuild #2015). Trim unused PackageReferences.
 - Csc/CoreCompile is slow → Check analyzer load with get_expensive_analyzers, consider <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild> in CI, split large projects, enable <ProduceReferenceAssembly>true</ProduceReferenceAssembly>
-- CopyFilesToOutputDirectory is slow → Set <UseCommonOutputDirectory>true</UseCommonOutputDirectory> or <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
-- ResolvePackageAssets is slow → Use <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile> and check NuGet cache
+- CopyFilesToOutputDirectory is slow → Set <UseCommonOutputDirectory>true</UseCommonOutputDirectory> or <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>. Use <SkipCopyUnchangedFiles>true</SkipCopyUnchangedFiles>. Consider --artifacts-path on .NET 8+.
+- ResolvePackageAssets is slow → Use <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile> and check NuGet cache. Use --no-restore in CI after explicit restore step.
+- NuGetSdkResolver overhead → Adds 180-400ms per project evaluation even when restored (MSBuild #4025). Avoid NuGet-based SDK resolvers if possible.
 - GenerateNuspec/Pack targets → Disable with <IsPackable>false</IsPackable> if project doesn't produce a package
 - Analyzers are slow → Move expensive analyzers to <EnforceCodeStyleInBuild> or suppress in CI with /p:RunAnalyzers=false, or set <AnalysisLevel>none</AnalysisLevel>
 - Many projects rebuilding → Check if incremental build is broken (look for missing inputs/outputs on targets), verify <Deterministic>true</Deterministic>
-- High evaluation time → Reduce Directory.Build.props complexity, check for wildcard globs scanning large directories
+- High evaluation time → Reduce Directory.Build.props complexity, check for wildcard globs scanning large directories. Use <EnableDefaultItems>false</EnableDefaultItems> for legacy projects.
 - Overall build is slow → Suggest /maxcpucount, /graph mode, BuildInParallel=true, check if projects can be built concurrently
 - Duplicate/redundant work → Look for targets running multiple times (×N count), suggest build deduplication
+- ResolveProjectReferences shows huge time → MISLEADING — includes time waiting for dependent projects (MSBuild #3135). Focus on self-time of actual tasks.
+- Incrementality anti-pattern → Targets with Inputs/Outputs that generate Items via Tasks: when skipped, Items disappear (MSBuild #13206). Separate computation targets from execution targets.
+- Copy task batching → Avoid accidentally batching Copy tasks — runs once per item instead of batch (MSBuild #12884). Use batch-friendly patterns.
+- Build output layout → Use --artifacts-path (.NET 8+) for centralized output, reducing redundant file copies across projects
 
 Always provide the EXACT MSBuild property or command-line flag to use, and WHERE to add it (Directory.Build.props, .csproj, or CLI)
 
@@ -55,13 +61,11 @@ const COMMAND_PROMPTS: Record<string, string> = {
     targets: 'List the MSBuild targets that were executed. Show their execution order, duration, and dependencies. Highlight any targets that failed.',
     summary: 'Provide a comprehensive build summary: overall result, duration, number of projects, error/warning counts, key properties, and configuration. Highlight anything unusual.',
     secrets: 'Scan the binlog for potential secrets, credentials, API keys, tokens, connection strings, and sensitive data that may have been logged during the build. Report any findings.',
-    compare: 'Compare the two loaded binlogs side by side. For EACH binlog, call list_projects, get_diagnostics, get_expensive_targets (top 5), and get_expensive_tasks (top 5) using the respective binlog_file path. Then produce a structured comparison highlighting KEY DIFFERENCES across these dimensions:\n' +
-        '1. **Build Result**: Did one succeed and the other fail?\n' +
-        '2. **Errors & Warnings**: New/removed diagnostics between the two builds\n' +
-        '3. **Projects**: Added/removed projects, different target lists\n' +
-        '4. **Performance**: Significant duration changes in targets and tasks (>20% change)\n' +
-        '5. **Configuration**: Different SDK versions, properties, or task assemblies if visible\n' +
-        'Present the comparison as a clear table or structured diff. Highlight anything that could explain a regression.',
+    compare: 'Compare the two loaded binlogs. For EACH binlog, call get_expensive_targets (top 3) and get_diagnostics. Then produce a comparison:\n' +
+        '1. **Build Result**: Success/failure for each\n' +
+        '2. **Errors & Warnings**: New/removed diagnostics\n' +
+        '3. **Performance**: Duration changes in top targets (>20% change)\n' +
+        'Present as a structured diff. Keep response concise.',
     perf: 'Perform a DEEP performance analysis of this build. Follow these steps:\n' +
         '1. Call get_expensive_targets (top 15), get_expensive_tasks (top 15), get_project_build_times, and get_expensive_analyzers\n' +
         '2. Calculate what percentage of total build time each item represents\n' +
@@ -153,6 +157,11 @@ export class BinlogChatParticipant {
         // Build the user prompt — combine slash command context with user text
         const commandPrompt = request.command ? COMMAND_PROMPTS[request.command] || '' : '';
 
+        // Track slash command usage
+        if (request.command) {
+            telemetry.trackSlashCommand(request.command);
+        }
+
         // For /compare, require two binlogs and provide both paths explicitly
         if (request.command === 'compare') {
             if (this.binlogPaths.length < 2) {
@@ -214,13 +223,12 @@ export class BinlogChatParticipant {
         }
 
         // Build messages
+        // For /compare, skip history to avoid token overflow (two binlogs = lots of tool data)
+        const includeHistory = request.command !== 'compare';
         const messages = [
             vscode.LanguageModelChatMessage.User(SYSTEM_PROMPT),
-            // Include conversation history — only text-based turns
-            // Skip turns that involved tool calls (they can't be faithfully reconstructed
-            // and cause "messages with role 'tool' must be a response to a preceding
-            // message with 'tool_calls'" errors)
-            ...context.history.flatMap(turn => {
+            // Include conversation history — only text-based turns (skip for /compare)
+            ...(includeHistory ? context.history.flatMap(turn => {
                 if (turn instanceof vscode.ChatResponseTurn) {
                     const textParts = turn.response
                         .filter((p): p is vscode.ChatResponseMarkdownPart => p instanceof vscode.ChatResponseMarkdownPart)
@@ -234,7 +242,7 @@ export class BinlogChatParticipant {
                     if (!prompt.trim()) { return []; }
                     return [vscode.LanguageModelChatMessage.User(prompt)];
                 }
-            }),
+            }) : []),
             vscode.LanguageModelChatMessage.User(userMessage),
         ];
 
@@ -255,6 +263,7 @@ export class BinlogChatParticipant {
 
         } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
+            telemetry.trackError('chatParticipant', err);
             // Handle corrupted tool history — retry without conversation history
             if (errMsg.includes('invalid_request_body') || errMsg.includes('tool_calls') || errMsg.includes("role 'tool'")) {
                 const freshMessages = [

@@ -2,7 +2,7 @@
   "name": "binlog-analyzer",
   "displayName": "MSBuild Binlog Analyzer",
   "description": "Analyze MSBuild binary logs with Copilot Chat and MCP tools",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "preview": true,
   "publisher": "dotutils",
   "license": "MIT",
@@ -166,6 +166,11 @@
         "command": "binlog.compareTimelines",
         "title": "Binlog: Compare Build Timelines",
         "icon": "$(diff)"
+      },
+      {
+        "command": "binlog.optimizeBuild",
+        "title": "Binlog: Optimize Build (Apply & Compare)",
+        "icon": "$(sparkle)"
       }
     ],
     "configuration": {

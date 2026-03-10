@@ -531,6 +531,14 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             actions.push(fix);
         }
 
+        // Optimize Build action
+        const optimize = new BinlogTreeItem('Optimize build...', vscode.TreeItemCollapsibleState.None);
+        optimize.nodeKind = 'action';
+        optimize.command = { command: 'binlog.optimizeBuild', title: 'Optimize' };
+        optimize.iconPath = new vscode.ThemeIcon('rocket');
+        optimize.description = 'apply & compare';
+        actions.push(optimize);
+
         return actions;
     }
 

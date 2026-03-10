@@ -5,6 +5,9 @@ import { BinlogTreeDataProvider, BinlogTreeItem } from './binlogTreeView';
 import { McpClient } from './mcpClient';
 import { BinlogDocumentProvider, BINLOG_SCHEME, openBinlogDocument } from './binlogDocumentProvider';
 import * as telemetry from './telemetry';
+import * as path from 'path';
+import * as fs from 'fs';
+import * as os from 'os';
 
 let diagnosticsProvider: BinlogDiagnosticsProvider | undefined;
 let chatParticipant: BinlogChatParticipant | undefined;
@@ -18,6 +21,9 @@ let statusBarItem: vscode.StatusBarItem | undefined;
 let extensionContext: vscode.ExtensionContext | undefined;
 let openedViaUri = false;
 let binlogWatchers: vscode.FileSystemWatcher[] = [];
+let optimizeInProgress = false;
+let cachedToolExePath: string | null | undefined; // undefined = not searched yet
+let codeLensRegistered = false;
 
 export function activate(context: vscode.ExtensionContext) {
     extensionContext = context;
@@ -76,6 +82,7 @@ export function activate(context: vscode.ExtensionContext) {
     // Command: Load File (file picker) — replaces all loaded binlogs
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.loadFile', async () => {
+            telemetry.trackCommand('loadFile');
             const uris = await vscode.window.showOpenDialog({
                 canSelectFiles: true,
                 canSelectFolders: false,
@@ -93,6 +100,7 @@ export function activate(context: vscode.ExtensionContext) {
     // Command: Add Binlog — adds more binlogs to the current session
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.addFile', async () => {
+            telemetry.trackCommand('addFile');
             const uris = await vscode.window.showOpenDialog({
                 canSelectFiles: true,
                 canSelectFolders: false,
@@ -111,6 +119,7 @@ export function activate(context: vscode.ExtensionContext) {
     // Command: Remove Binlog — remove a binlog from the session
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.removeFile', async (treeItem?: any) => {
+            telemetry.trackCommand('removeFile');
             // If called from tree item inline button, remove that specific binlog
             if (treeItem && treeItem.tooltip) {
                 const path = String(treeItem.tooltip).split('\n')[0];
@@ -244,7 +253,6 @@ export function activate(context: vscode.ExtensionContext) {
             try {
                 // Try to find candidate folders from binlog project paths
                 const candidates = treeDataProvider?.getProjectRootCandidates() || [];
-                const fs = require('fs');
                 const existing: string[] = candidates.filter((c: string) => {
                     try { return fs.existsSync(c); } catch { return false; }
                 });
@@ -304,6 +312,7 @@ export function activate(context: vscode.ExtensionContext) {
     // Command: Fix All Issues — launches Copilot agent to fix all build errors/warnings
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.fixAllIssues', async () => {
+            telemetry.trackCommand('fixAllIssues');
             if (!currentBinlogPath) {
                 vscode.window.showWarningMessage('No binlog loaded.');
                 return;
@@ -388,6 +397,7 @@ export function activate(context: vscode.ExtensionContext) {
     // Command: Open in Structured Log Viewer (reverse bridge)
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.openInStructuredLogViewer', async (treeItem?: any) => {
+            telemetry.trackCommand('openInStructuredLogViewer');
             let targetPath = currentBinlogPath;
             if (treeItem?.tooltip) {
                 const tip = String(treeItem.tooltip).split('\n')[0];
@@ -421,6 +431,7 @@ export function activate(context: vscode.ExtensionContext) {
     // Command: Show Build Timeline (webview)
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.showTimeline', async () => {
+            telemetry.trackCommand('showTimeline');
             if (!mcpClient) {
                 vscode.window.showWarningMessage('MCP client not ready. Wait for binlog to finish loading.');
                 return;
@@ -432,6 +443,7 @@ export function activate(context: vscode.ExtensionContext) {
     // Command: Compare Build Timelines (webview with two binlogs side-by-side)
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.compareTimelines', async () => {
+            telemetry.trackCommand('compareTimelines');
             if (!mcpClient) {
                 vscode.window.showWarningMessage('MCP client not ready. Wait for binlog to finish loading.');
                 return;
@@ -444,9 +456,26 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
+    // Command: Optimize Build — apply perf recommendations, rebuild, compare
+    context.subscriptions.push(
+        vscode.commands.registerCommand('binlog.optimizeBuild', async () => {
+            telemetry.trackCommand('optimizeBuild');
+            if (!currentBinlogPath) {
+                vscode.window.showWarningMessage('No binlog loaded.');
+                return;
+            }
+            if (!mcpClient) {
+                vscode.window.showWarningMessage('MCP client not ready. Wait for binlog to finish loading.');
+                return;
+            }
+            await optimizeBuildFlow(context);
+        })
+    );
+
     // Command: Scan for Secrets
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.scanSecrets', async () => {
+            telemetry.trackCommand('scanSecrets');
             const targetPath = currentBinlogPath;
             if (!targetPath) {
                 vscode.window.showWarningMessage('No binlog loaded. Use "Binlog: Load File" first.');
@@ -459,6 +488,7 @@ export function activate(context: vscode.ExtensionContext) {
     // Command: Redact Secrets
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.redactSecrets', async () => {
+            telemetry.trackCommand('redactSecrets');
             let targetPath = currentBinlogPath;
             if (!targetPath) {
                 const uris = await vscode.window.showOpenDialog({
@@ -534,7 +564,6 @@ export function activate(context: vscode.ExtensionContext) {
         }
 
         // Verify files still exist
-        const fs = require('fs');
         const validBinlogs = binlogsToLoad.filter((p: string) => {
             try { return fs.existsSync(p); } catch { return false; }
         });
@@ -599,18 +628,22 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
     const fileName = getFileName(binlogPaths[0]);
     const multi = binlogPaths.length > 1 ? ` (+${binlogPaths.length - 1} more)` : '';
 
-    // Configure MCP server for Copilot Chat (fast — just writes config)
-    await configureMcpServer(allBinlogPaths, config);
-    await cleanupBinlogInstructions();
+    // Configure MCP server for Copilot Chat and start tree client in parallel
+    // cleanupBinlogInstructions is fire-and-forget (non-critical cleanup of old files)
+    cleanupBinlogInstructions().catch(() => {});
 
-    // Start the private MCP client for tree view in the background (non-blocking)
-    // This way Copilot Chat is usable immediately while the tree loads
-    startMcpClientForTree(allBinlogPaths).then(() => {
+    // Start MCP config and tree client concurrently — configureMcpServer writes settings
+    // for Copilot Chat while startMcpClientForTree spawns the private MCP subprocess
+    const mcpConfigPromise = configureMcpServer(allBinlogPaths, config);
+    const treeClientPromise = startMcpClientForTree(allBinlogPaths).then(() => {
         treeDataProvider?.setLoading(false);
     }).catch((err) => {
         treeDataProvider?.setLoading(false);
         telemetry.trackMcpError('startMcpClient', String(err));
     });
+
+    // Wait for MCP config (needed before Copilot Chat works) but tree loads in background
+    await mcpConfigPromise;
 
     // Watch binlog files for changes (e.g. rebuild regenerates the binlog)
     setupBinlogWatchers(binlogPaths, context);
@@ -625,7 +658,6 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
 
     // If workspace doesn't match binlog location, suggest updating it
     if (interactive) {
-        const path = require('path');
         const binlogDir = path.dirname(binlogPaths[0]);
         const folders = vscode.workspace.workspaceFolders || [];
         const currentWs = folders[0]?.uri.fsPath?.toLowerCase();
@@ -657,9 +689,6 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
 
 /** Watch binlog files for changes — auto-reload when rebuild regenerates the binlog */
 function setupBinlogWatchers(binlogPaths: string[], context: vscode.ExtensionContext) {
-    const path = require('path');
-    const fs = require('fs');
-
     // Dispose previous watchers
     for (const w of binlogWatchers) { w.dispose(); }
     binlogWatchers = [];
@@ -671,6 +700,7 @@ function setupBinlogWatchers(binlogPaths: string[], context: vscode.ExtensionCon
     }
 
     let reloadDebounce: NodeJS.Timeout | undefined;
+    let reloading = false;
 
     for (const binlogPath of binlogPaths) {
         const dir = path.dirname(binlogPath);
@@ -679,11 +709,13 @@ function setupBinlogWatchers(binlogPaths: string[], context: vscode.ExtensionCon
         const watcher = vscode.workspace.createFileSystemWatcher(pattern, true, false, true);
 
         watcher.onDidChange(() => {
+            if (reloading || optimizeInProgress) { return; } // Suppress during reload or optimize flow
+
             // Check if mtime actually changed (filters out access-only events)
             try {
                 const newMtime = fs.statSync(binlogPath).mtimeMs;
                 const oldMtime = lastMtimes.get(binlogPath) || 0;
-                if (newMtime === oldMtime) { return; } // Access-only, not a real write
+                if (newMtime === oldMtime) { return; }
                 lastMtimes.set(binlogPath, newMtime);
             } catch { return; }
 
@@ -696,7 +728,13 @@ function setupBinlogWatchers(binlogPaths: string[], context: vscode.ExtensionCon
                     'Dismiss'
                 );
                 if (action === 'Reload') {
-                    handleBinlogOpen(allBinlogPaths, context);
+                    reloading = true;
+                    await handleBinlogOpen(allBinlogPaths, context, false);
+                    // Update mtimes after reload so watchers don't re-fire
+                    for (const p of binlogPaths) {
+                        try { lastMtimes.set(p, fs.statSync(p).mtimeMs); } catch { /* ignore */ }
+                    }
+                    reloading = false;
                 }
             }, 2000);
         });
@@ -711,9 +749,6 @@ function setupBinlogWatchers(binlogPaths: string[], context: vscode.ExtensionCon
  * whether the binlog's parent directory matches the current workspace.
  */
 function detectCrossMachineBinlog(binlogPath: string): boolean {
-    const fs = require('fs');
-    const path = require('path');
-
     // Check if the binlog file itself exists locally
     if (!fs.existsSync(binlogPath)) {
         return true; // Path doesn't exist locally — definitely cross-machine
@@ -894,15 +929,12 @@ function showGettingStarted() {
  * Cleans up any binlog-instructions.md files that were previously written by the extension.
  */
 async function cleanupBinlogInstructions() {
-    const fs = require('fs');
-    const pathMod = require('path');
-
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (!workspaceFolder) { return; }
 
-    const githubDir = pathMod.join(workspaceFolder, '.github');
+    const githubDir = path.join(workspaceFolder, '.github');
     for (const filename of ['binlog-instructions.md', 'copilot-instructions.md']) {
-        const filePath = pathMod.join(githubDir, filename);
+        const filePath = path.join(githubDir, filename);
         try {
             if (fs.existsSync(filePath)) {
                 const content = fs.readFileSync(filePath, 'utf8');
@@ -942,6 +974,7 @@ async function startMcpClientForTree(binlogPaths: string[]) {
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.warn('Failed to start MCP client for tree view:', msg);
+        telemetry.trackError('startMcpClientForTree', err);
     }
 }
 
@@ -1006,13 +1039,13 @@ async function configureMcpServer(binlogPaths: string[], config: vscode.Workspac
     servers['baronfel_binlog_mcp'] = serverConfig;
 
     try {
-        await mcpConfig.update('servers', servers, vscode.ConfigurationTarget.Workspace);
-    } catch {
         await mcpConfig.update('servers', servers, vscode.ConfigurationTarget.Global);
+    } catch {
+        // Fallback — should not happen
     }
 
-    // Also update user-level mcp.json if it exists (VS Code reads from both)
-    await updateUserMcpJson(serverConfig);
+    // Also update user-level mcp.json if it exists (fire-and-forget — not on critical path)
+    updateUserMcpJson(serverConfig).catch(() => {});
 }
 
 /**
@@ -1020,10 +1053,6 @@ async function configureMcpServer(binlogPaths: string[], config: vscode.Workspac
  * to fix any broken binlog-mcp entries and add our properly configured one.
  */
 async function updateUserMcpJson(serverConfig: Record<string, unknown>) {
-    const path = require('path');
-    const fs = require('fs');
-    const os = require('os');
-
     // VS Code user mcp.json location
     const isWindows = process.platform === 'win32';
     const mcpJsonPath = isWindows
@@ -1061,10 +1090,6 @@ async function updateUserMcpJson(serverConfig: Record<string, unknown>) {
 
 async function installBinlogMcpTool(): Promise<string | null> {
     const cp = require('child_process');
-    const os = require('os');
-    const path = require('path');
-    const fs = require('fs');
-
     const result = await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: 'Installing binlog MCP server (dotnet tool)...' },
         () => new Promise<string | null>((resolve) => {
@@ -1091,9 +1116,8 @@ async function installBinlogMcpTool(): Promise<string | null> {
 }
 
 function findBinlogMcpTool(): string | null {
-    const os = require('os');
-    const path = require('path');
-    const fs = require('fs');
+    // Return cached result if available (avoid repeated PATH scans)
+    if (cachedToolExePath !== undefined) { return cachedToolExePath; }
 
     const homeDir = os.homedir();
     const isWindows = process.platform === 'win32';
@@ -1102,6 +1126,7 @@ function findBinlogMcpTool(): string | null {
     // Global dotnet tools are installed in ~/.dotnet/tools/
     const globalToolPath = path.join(homeDir, '.dotnet', 'tools', exeName);
     if (fs.existsSync(globalToolPath)) {
+        cachedToolExePath = globalToolPath;
         return globalToolPath;
     }
 
@@ -1111,6 +1136,7 @@ function findBinlogMcpTool(): string | null {
         const candidate = path.join(dir, exeName);
         try {
             if (fs.existsSync(candidate)) {
+                cachedToolExePath = candidate;
                 return candidate;
             }
         } catch {
@@ -1118,6 +1144,7 @@ function findBinlogMcpTool(): string | null {
         }
     }
 
+    cachedToolExePath = null;
     return null;
 }
 
@@ -1130,8 +1157,6 @@ async function scanForSecrets(binlogPath: string) {
     // The StructuredLogger.Utils SecretsSearch scans the binlog's StringTable
     // for common secrets, explicit secrets, and usernames.
     const { exec } = require('child_process');
-    const path = require('path');
-
     await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: 'Scanning binlog for secrets...' },
         () => new Promise<void>((resolve) => {
@@ -1240,6 +1265,152 @@ export function deactivate() {
     diagnosticsProvider?.dispose();
     mcpClient?.dispose();
     codeLensProvider?.dispose();
+}
+
+/**
+ * Optimize Build Flow — analyzes perf, lets user pick optimizations,
+ * applies changes via Copilot, rebuilds, and compares the new binlog.
+ */
+async function optimizeBuildFlow(context: vscode.ExtensionContext) {
+    if (!mcpClient || !currentBinlogPath) { return; }
+    const baselineBinlog = currentBinlogPath;
+
+    // Suppress rebuild notifications during the optimize flow
+    optimizeInProgress = true;
+
+    // Step 1: Get perf data from MCP
+    const [targetsResult, tasksResult] = await Promise.allSettled([
+        mcpClient.callTool('get_expensive_targets', { top_number: 10 }),
+        mcpClient.callTool('get_expensive_tasks', { top_number: 10 }),
+    ]);
+
+    const targetsText = targetsResult.status === 'fulfilled' ? targetsResult.value.text : '';
+    const tasksText = tasksResult.status === 'fulfilled' ? tasksResult.value.text : '';
+
+    if (!targetsText && !tasksText) {
+        vscode.window.showWarningMessage('Could not retrieve performance data from binlog.');
+        optimizeInProgress = false;
+        return;
+    }
+
+    // Step 2: Build optimization suggestions (based on MSBuild team best practices from dotnet/msbuild)
+    const suggestions: vscode.QuickPickItem[] = [
+        { label: '$(zap) Enable Parallel Builds', description: 'Use /maxcpucount and /graph mode for project-level parallelism', picked: true },
+        { label: '$(beaker) Optimize CoreCompile', description: 'ProduceReferenceAssembly + disable analyzers in CI (/p:RunAnalyzers=false)', picked: true },
+        { label: '$(file-symlink-directory) Reduce File Copy Overhead', description: 'UseCommonOutputDirectory, CopyLocalLockFileAssemblies=false, SkipCopyUnchangedFiles', picked: true },
+        { label: '$(history) Improve Incrementality', description: 'Add Inputs/Outputs to custom targets, separate computation from execution targets', picked: true },
+        { label: '$(search) Optimize RAR (ResolveAssemblyReferences)', description: 'Reduce transitive refs, DisableTransitiveProjectReferences, trim unused PackageReferences', picked: false },
+        { label: '$(package) Optimize NuGet Restore', description: 'RestoreUseStaticGraphEvaluation + RestorePackagesWithLockFile + --no-restore in CI', picked: false },
+        { label: '$(folder) Use Artifacts Output Layout', description: '--artifacts-path for centralized output (.NET 8+), reduces redundant copies', picked: false },
+        { label: '$(symbol-property) Enable Build Caching', description: 'Use /graph isolation for safe caching, Deterministic=true', picked: false },
+    ];
+
+    // Step 3: Let user pick which optimizations to apply
+    const selected = await vscode.window.showQuickPick(suggestions, {
+        canPickMany: true,
+        title: 'Select Optimizations to Apply',
+        placeHolder: 'Pick the optimizations you want to apply, then Copilot will implement them',
+    });
+
+    if (!selected || selected.length === 0) { optimizeInProgress = false; return; }
+
+    // Step 4: Infer build command from the binlog
+    const projectFiles = treeDataProvider?.getProjectFiles() || [];
+    const slnFiles = projectFiles.filter(f => /\.sln$/i.test(f));
+    const buildTarget = slnFiles.length > 0
+        ? slnFiles[0] : (projectFiles.length === 1 ? projectFiles[0] : '');
+    const binlogDir = path.dirname(baselineBinlog);
+    const optimizedBinlogPath = path.join(binlogDir, 'optimized.binlog');
+    const buildCmd = buildTarget
+        ? `dotnet build "${buildTarget}" -bl:"${optimizedBinlogPath}"`
+        : `dotnet build -bl:"${optimizedBinlogPath}"`;
+
+    // Step 5: Build the Copilot prompt with selected optimizations + rebuild + compare
+    const selectedLabels = selected.map(s => s.label.replace(/\$\([^)]+\)\s*/g, '') + ': ' + s.description).join('\n  - ');
+
+    const prompt =
+        `Apply the following build performance optimizations to this project, then rebuild and verify the improvement.\n\n` +
+        `**SELECTED OPTIMIZATIONS:**\n  - ${selectedLabels}\n\n` +
+        `**PERFORMANCE DATA (baseline):**\n` +
+        `Expensive targets (includes skippedCount for incrementality):\n${targetsText.substring(0, 2000)}\n\n` +
+        `Expensive tasks:\n${tasksText.substring(0, 2000)}\n\n` +
+        `**INSTRUCTIONS:**\n\n` +
+        `**STEP 1 — ANALYZE:** Look at the performance data above and the selected optimizations.\n` +
+        `For each optimization, determine which files to modify (Directory.Build.props, specific .csproj, or CLI args).\n` +
+        `For incrementality: targets with skippedCount=0 and high executionCount are never skipping — they need Inputs/Outputs attributes.\n` +
+        `IMPORTANT (from MSBuild team #13206): Targets with Inputs/Outputs that generate Items via Tasks have a subtle bug — when the target is skipped, the Items disappear. Separate computation targets (always-run, no Inputs/Outputs) from execution targets.\n\n` +
+        `**STEP 2 — APPLY:** Make the changes:\n` +
+        `  - Create or modify \`Directory.Build.props\` in the repo root for repo-wide properties\n` +
+        `  - Add the MSBuild properties/flags needed for each selected optimization\n` +
+        `  - For custom targets without Inputs/Outputs, add appropriate file globs\n` +
+        `  - Add XML comments explaining what each property does\n` +
+        `  - For RAR optimization: check if DisableTransitiveProjectReferences or ReferenceOutputAssembly="false" can reduce reference graph\n` +
+        `  - For artifacts output: use --artifacts-path on .NET 8+ to centralize build output and eliminate redundant copies\n` +
+        `  - NOTE: ResolveProjectReferences total time is misleading — it includes time waiting on dependent projects (per MSBuild #3135). Focus on self-time of actual tasks.\n\n` +
+        `**STEP 3 — REBUILD:** Run this command in the terminal:\n` +
+        `  \`${buildCmd}\`\n` +
+        `  This generates a new binlog at: ${optimizedBinlogPath}\n\n` +
+        `**STEP 4 — REPORT:** After the build completes, summarize:\n` +
+        `  - What files were changed and what properties were added\n` +
+        `  - Whether the build succeeded\n` +
+        `  - Tell the user to check the Binlog Explorer — the optimized binlog will auto-load for comparison\n\n` +
+        `BASELINE BINLOG: ${baselineBinlog}\n` +
+        `OPTIMIZED BINLOG (will be created): ${optimizedBinlogPath}`;
+
+    // Step 6: Show a persistent "Compare Results" notification instead of auto-watching.
+    // MSBuild creates the binlog at the START of the build and writes progressively,
+    // so file-watcher-based approaches fire too early during evaluation pauses.
+    const compareAction = 'Compare Results';
+    const showCompareNotification = () => {
+        vscode.window.showInformationMessage(
+            `🔄 Optimize build in progress. Click "${compareAction}" after the build finishes in the terminal.`,
+            compareAction,
+            'Dismiss'
+        ).then(async action => {
+            optimizeInProgress = false;
+            if (action === compareAction) {
+                if (fs.existsSync(optimizedBinlogPath)) {
+                    await loadOptimizedAndCompare(context, baselineBinlog, optimizedBinlogPath);
+                } else {
+                    vscode.window.showWarningMessage(
+                        `Optimized binlog not found at ${optimizedBinlogPath}. Make sure the build completed.`
+                    );
+                }
+            }
+        });
+    };
+
+    showCompareNotification();
+
+    // Step 7: Launch Copilot agent to apply changes
+    vscode.commands.executeCommand('workbench.action.chat.open', {
+        query: prompt,
+        isPartialQuery: false,
+    });
+}
+
+async function loadOptimizedAndCompare(
+    context: vscode.ExtensionContext,
+    baselineBinlog: string,
+    optimizedBinlog: string
+) {
+    if (!fs.existsSync(optimizedBinlog)) { return; }
+
+    // Load both binlogs for comparison
+    allBinlogPaths = [baselineBinlog, optimizedBinlog];
+    currentBinlogPath = baselineBinlog;
+
+    await handleBinlogOpen(allBinlogPaths, context, false);
+
+    vscode.window.showInformationMessage(
+        `✅ Optimized build complete! Both binlogs loaded for comparison.`,
+        'Show Comparison Timeline',
+        'Dismiss'
+    ).then(action => {
+        if (action === 'Show Comparison Timeline') {
+            vscode.commands.executeCommand('binlog.compareTimelines');
+        }
+    });
 }
 
 /**

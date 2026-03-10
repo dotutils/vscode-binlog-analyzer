@@ -1,6 +1,8 @@
 .vscode
 .vscode-test
 node_modules
+!node_modules/@vscode/extension-telemetry/**
+!node_modules/@microsoft/**
 src
 tsconfig.json
 **/*.map

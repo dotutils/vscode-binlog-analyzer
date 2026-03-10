@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.0 (Preview)
+
+### New Features
+- **Optimize Build flow** — 🚀 "Optimize build..." action in Binlog Explorer with 8 optimization categories (parallel builds, CoreCompile, file copy, incrementality, RAR, NuGet, artifacts output, build caching). Copilot applies selected optimizations, rebuilds, and loads both binlogs for comparison.
+- **MSBuild team best practices** — optimization playbook enriched with recommendations from dotnet/msbuild issues (#2015 RAR, #4025 NuGetSdkResolver, #3135 self-time, #13206 incrementality anti-patterns, #12884 Copy batching)
+- **RAR optimization option** — dedicated "Optimize RAR" suggestion: DisableTransitiveProjectReferences, trim unused PackageReferences
+- **Artifacts Output Layout** — suggests `--artifacts-path` (.NET 8+) for centralized build output
+
+### Bug Fixes
+- **Fixed rebuild popup noise during optimize flow** — `optimizeInProgress` flag suppresses binlog watcher notifications while optimization build runs
+- **Fixed premature comparison loading** — replaced unreliable file watcher with user-triggered "Compare Results" button (MSBuild creates binlog at build start, not end)
+- **Fixed `/compare` token limit** — slimmed down compare prompt and skips conversation history to stay within token budget
+- **Fixed telemetry not reporting** — `@microsoft/*` transitive dependencies (1DS SDK) were missing from VSIX; now bundled correctly
+
+### Improvements
+- **Full telemetry coverage** — all 10 user-facing commands and 8 slash commands now tracked, plus error tracking in chat participant and MCP client
+- **Faster startup** — top-level imports instead of inline `require()`, cached `findBinlogMcpTool()` result, parallelized MCP config + tree client startup, fire-and-forget cleanup
+- **MCP config writes non-blocking** — `updateUserMcpJson` no longer blocks the critical path
+
 ## 0.5.0 (Preview)
 
 ### New Features
