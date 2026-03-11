@@ -25,6 +25,12 @@ let optimizeInProgress = false;
 let cachedToolExePath: string | null | undefined; // undefined = not searched yet
 let codeLensRegistered = false;
 
+/** Returns a globalState key scoped to the current workspace folder, or a fallback for no-workspace. */
+function binlogStateKey(): string {
+    const ws = vscode.workspace.workspaceFolders?.[0]?.uri.toString();
+    return ws ? `binlog.loadedPaths:${ws}` : 'binlog.loadedPaths:__noworkspace__';
+}
+
 export function activate(context: vscode.ExtensionContext) {
     extensionContext = context;
     telemetry.initTelemetry(context);
@@ -301,6 +307,9 @@ export function activate(context: vscode.ExtensionContext) {
                 const alreadyOnly = folders.length === 1 &&
                     folders[0].uri.fsPath.toLowerCase() === folderUri.fsPath.toLowerCase();
                 if (!alreadyOnly) {
+                    // Pre-save binlog paths under the NEW workspace key so they survive the reload
+                    const targetKey = `binlog.loadedPaths:${folderUri.toString()}`;
+                    context.globalState.update(targetKey, allBinlogPaths);
                     await vscode.commands.executeCommand('vscode.openFolder', folderUri, false);
                 }
             } catch (err: any) {
@@ -546,18 +555,18 @@ export function activate(context: vscode.ExtensionContext) {
     registerCodeLensProvider(context);
 
     // Auto-load binlogs from activeBinlogs setting (written by Structured Log Viewer)
-    // or from workspaceState (scoped to this workspace, survives window reloads)
+    // or from globalState keyed by workspace URI (survives workspace folder changes)
     const config = vscode.workspace.getConfiguration('binlogAnalyzer');
     const savedBinlogs = config.get<string[]>('activeBinlogs', []);
-    const workspaceStateBinlogs = context.workspaceState.get<string[]>('binlog.loadedPaths', []);
+    const persistedBinlogs = context.globalState.get<string[]>(binlogStateKey(), []);
 
-    // Migration: clear old globalState to prevent cross-workspace bleed
+    // Migration: clear old un-keyed globalState to prevent cross-workspace bleed
     if (context.globalState.get<string[]>('binlog.loadedPaths')) {
         context.globalState.update('binlog.loadedPaths', undefined);
     }
 
     // Prefer activeBinlogs (explicit trigger from Structured Log Viewer)
-    const binlogsToLoad = savedBinlogs.length > 0 ? savedBinlogs : workspaceStateBinlogs;
+    const binlogsToLoad = savedBinlogs.length > 0 ? savedBinlogs : persistedBinlogs;
 
     if (binlogsToLoad.length > 0) {
         if (savedBinlogs.length > 0) {
@@ -581,7 +590,7 @@ export function activate(context: vscode.ExtensionContext) {
             }, 500);
         } else {
             // All paths are gone — clear globalState
-            context.workspaceState.update('binlog.loadedPaths', undefined);
+            context.globalState.update(binlogStateKey(), undefined);
         }
     }
 
@@ -605,8 +614,8 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
     telemetry.trackBinlogLoad(binlogPaths.length, openedViaUri ? 'uri' : 'file');
     allBinlogPaths = [...binlogPaths];
     currentBinlogPath = binlogPaths[0];
-    // Persist binlog paths in workspaceState (scoped to this workspace, not shared across projects)
-    context.workspaceState.update('binlog.loadedPaths', allBinlogPaths);
+    // Persist binlog paths in globalState keyed by workspace URI (survives workspace changes)
+    context.globalState.update(binlogStateKey(), allBinlogPaths);
     chatParticipant?.setBinlogPaths(binlogPaths);
     treeDataProvider?.setLoading(true);
     treeDataProvider?.setBinlogPaths(binlogPaths);
@@ -827,7 +836,7 @@ async function removeBinlogs(toRemove: Set<string | undefined>) {
     }
 
     // Update persisted state
-    extensionContext?.workspaceState.update('binlog.loadedPaths', allBinlogPaths);
+    extensionContext?.globalState.update(binlogStateKey(), allBinlogPaths);
 
     chatParticipant?.setBinlogPaths(allBinlogPaths);
     treeDataProvider?.setBinlogPaths(allBinlogPaths);
