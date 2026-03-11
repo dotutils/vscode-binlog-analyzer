@@ -1049,48 +1049,38 @@ async function configureMcpServer(binlogPaths: string[], config: vscode.Workspac
         // Fallback — should not happen
     }
 
-    // Also update user-level mcp.json if it exists (fire-and-forget — not on critical path)
-    updateUserMcpJson(serverConfig).catch(() => {});
+    // Also clean up user-level mcp.json if it has our entry (no longer needed — VS Code settings suffice)
+    cleanupUserMcpJson().catch(() => {});
 }
 
 /**
- * Updates the user-level mcp.json (~/.config/Code/User/mcp.json or %APPDATA%/Code/User/mcp.json)
- * to fix any broken binlog-mcp entries and add our properly configured one.
+ * Removes our baronfel_binlog_mcp entry from user-level mcp.json.
+ * The VS Code mcp.servers setting is sufficient; writing to mcp.json
+ * causes cross-workspace bleed with stale binlog paths.
  */
-async function updateUserMcpJson(serverConfig: Record<string, unknown>) {
-    // VS Code user mcp.json location
+async function cleanupUserMcpJson() {
     const isWindows = process.platform === 'win32';
     const mcpJsonPath = isWindows
         ? path.join(process.env.APPDATA || '', 'Code', 'User', 'mcp.json')
         : path.join(os.homedir(), '.config', 'Code', 'User', 'mcp.json');
 
     try {
-        let mcpData: { servers?: Record<string, unknown> } = { servers: {} };
+        if (!fs.existsSync(mcpJsonPath)) { return; }
+        const content = fs.readFileSync(mcpJsonPath, 'utf8');
+        const mcpData = JSON.parse(content) as { servers?: Record<string, unknown> };
+        if (!mcpData.servers) { return; }
 
-        if (fs.existsSync(mcpJsonPath)) {
-            const content = fs.readFileSync(mcpJsonPath, 'utf8');
-            mcpData = JSON.parse(content);
-        }
-
-        if (!mcpData.servers) {
-            mcpData.servers = {};
-        }
-
-        // Remove any broken bare-command binlog-mcp entries
-        if (mcpData.servers['binlog-mcp']) {
-            const existing = mcpData.servers['binlog-mcp'] as Record<string, unknown>;
-            if (existing.command === 'binlog.mcp') {
-                delete mcpData.servers['binlog-mcp'];
+        let changed = false;
+        for (const key of ['baronfel_binlog_mcp', 'binlog-mcp']) {
+            if (mcpData.servers[key]) {
+                delete mcpData.servers[key];
+                changed = true;
             }
         }
-
-        // Write our properly configured entry
-        mcpData.servers['baronfel_binlog_mcp'] = serverConfig;
-
-        fs.writeFileSync(mcpJsonPath, JSON.stringify(mcpData, null, 2), 'utf8');
-    } catch {
-        // Non-fatal
-    }
+        if (changed) {
+            fs.writeFileSync(mcpJsonPath, JSON.stringify(mcpData, null, 2), 'utf8');
+        }
+    } catch { /* non-fatal */ }
 }
 
 async function installBinlogMcpTool(): Promise<string | null> {
