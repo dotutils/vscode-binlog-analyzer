@@ -651,8 +651,10 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
     const mcpConfigPromise = configureMcpServer(allBinlogPaths, config);
     const treeClientPromise = startMcpClientForTree(allBinlogPaths).then(() => {
         treeDataProvider?.setLoading(false);
+        updateStatusBar(); // Switch from spinning to final state
     }).catch((err) => {
         treeDataProvider?.setLoading(false);
+        updateStatusBar();
         telemetry.trackMcpError('startMcpClient', String(err));
     });
 
@@ -864,16 +866,22 @@ function updateStatusBar() {
     }
 
     const count = allBinlogPaths.length;
+    const isLoading = treeDataProvider?.isLoading?.() ?? false;
     const diag = diagnosticsProvider?.getDiagnosticCounts();
     const errorCount = diag?.errorCount || 0;
     const warningCount = diag?.warningCount || 0;
 
-    let text = `$(file-binary) ${count} binlog${count > 1 ? 's' : ''}`;
-    if (errorCount > 0 || warningCount > 0) {
-        const parts: string[] = [];
-        if (errorCount > 0) { parts.push(`$(error) ${errorCount}`); }
-        if (warningCount > 0) { parts.push(`$(warning) ${warningCount}`); }
-        text += ` · ${parts.join(' ')}`;
+    let text: string;
+    if (isLoading) {
+        text = `$(loading~spin) Loading ${count} binlog${count > 1 ? 's' : ''}...`;
+    } else {
+        text = `$(file-binary) ${count} binlog${count > 1 ? 's' : ''}`;
+        if (errorCount > 0 || warningCount > 0) {
+            const parts: string[] = [];
+            if (errorCount > 0) { parts.push(`$(error) ${errorCount}`); }
+            if (warningCount > 0) { parts.push(`$(warning) ${warningCount}`); }
+            text += ` · ${parts.join(' ')}`;
+        }
     }
     statusBarItem.text = text;
 

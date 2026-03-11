@@ -40,7 +40,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
 
     private binlogPaths: string[] = [];
     private mcpClient: McpClient | null = null;
-    private isLoading = false;
+    private _isLoading = false;
 
     // Cached data from MCP calls
     private projectsCache: TreeNodeData[] | null = null;
@@ -57,8 +57,12 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
     }
 
     setLoading(loading: boolean) {
-        this.isLoading = loading;
+        this._isLoading = loading;
         this._onDidChangeTreeData.fire(undefined);
+    }
+
+    isLoading(): boolean {
+        return this._isLoading;
     }
 
     setMcpClient(client: McpClient | null) {
@@ -224,13 +228,13 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
     }
 
     private getRootChildren(): BinlogTreeItem[] {
-        if (this.binlogPaths.length === 0 && !this.isLoading) {
+        if (this.binlogPaths.length === 0 && !this._isLoading) {
             return [];
         }
 
         const items: BinlogTreeItem[] = [];
 
-        if (this.isLoading && this.binlogPaths.length === 0) {
+        if (this._isLoading && this.binlogPaths.length === 0) {
             // Show loading placeholder before binlog paths arrive
             const loading = new BinlogTreeItem(
                 'Loading binlog...',
@@ -322,7 +326,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             perfNode.nodeKind = 'root-perf';
             perfNode.iconPath = new vscode.ThemeIcon('dashboard');
             items.push(perfNode);
-        } else if (this.isLoading) {
+        } else if (this._isLoading) {
             // MCP client not ready yet — show loading indicator
             const loading = new BinlogTreeItem(
                 'Analyzing binlog...',
