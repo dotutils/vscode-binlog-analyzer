@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.1 (Preview)
+
+### Bug Fixes
+- **Fixed `@binlog` chat commands returning "No binlog MCP tools found"** — restored writing MCP server config to user-level `mcp.json` which Copilot Chat needs for tool discovery
+
 ## 0.7.0 (Preview)
 
 ### New Features
