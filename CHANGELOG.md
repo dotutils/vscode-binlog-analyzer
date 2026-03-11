@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.0 (Preview)
+
+### New Features
+- **Loading spinner in status bar** — shows `⟳ Loading 1 binlog...` with animation while MCP client initializes, then switches to final state with error/warning counts
+
+### Bug Fixes
+- **Fixed cross-session binlog bleed** — binlog paths no longer leak across workspaces; now stored in globalState keyed by workspace URI
+- **Fixed binlog persistence on workspace change** — "Set Workspace Folder" pre-saves binlog paths under the target workspace key so they survive the reload
+- **Fixed stale mcp.json entries** — extension no longer writes binlog paths to user-level `mcp.json`; cleans up old entries on activation
+- **Telemetry diagnostic output** — "Binlog Analyzer Telemetry" output channel shows init status and event tracking for debugging
+
 ## 0.6.0 (Preview)
 
 ### New Features
