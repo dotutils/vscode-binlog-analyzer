@@ -546,13 +546,18 @@ export function activate(context: vscode.ExtensionContext) {
     registerCodeLensProvider(context);
 
     // Auto-load binlogs from activeBinlogs setting (written by Structured Log Viewer)
-    // or from globalState (survives workspace folder changes / window reloads)
+    // or from workspaceState (scoped to this workspace, survives window reloads)
     const config = vscode.workspace.getConfiguration('binlogAnalyzer');
     const savedBinlogs = config.get<string[]>('activeBinlogs', []);
-    const globalStateBinlogs = context.globalState.get<string[]>('binlog.loadedPaths', []);
+    const workspaceStateBinlogs = context.workspaceState.get<string[]>('binlog.loadedPaths', []);
+
+    // Migration: clear old globalState to prevent cross-workspace bleed
+    if (context.globalState.get<string[]>('binlog.loadedPaths')) {
+        context.globalState.update('binlog.loadedPaths', undefined);
+    }
 
     // Prefer activeBinlogs (explicit trigger from Structured Log Viewer)
-    const binlogsToLoad = savedBinlogs.length > 0 ? savedBinlogs : globalStateBinlogs;
+    const binlogsToLoad = savedBinlogs.length > 0 ? savedBinlogs : workspaceStateBinlogs;
 
     if (binlogsToLoad.length > 0) {
         if (savedBinlogs.length > 0) {
@@ -576,7 +581,7 @@ export function activate(context: vscode.ExtensionContext) {
             }, 500);
         } else {
             // All paths are gone — clear globalState
-            context.globalState.update('binlog.loadedPaths', undefined);
+            context.workspaceState.update('binlog.loadedPaths', undefined);
         }
     }
 
@@ -600,8 +605,8 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
     telemetry.trackBinlogLoad(binlogPaths.length, openedViaUri ? 'uri' : 'file');
     allBinlogPaths = [...binlogPaths];
     currentBinlogPath = binlogPaths[0];
-    // Persist binlog paths in globalState so they survive workspace folder changes
-    context.globalState.update('binlog.loadedPaths', allBinlogPaths);
+    // Persist binlog paths in workspaceState (scoped to this workspace, not shared across projects)
+    context.workspaceState.update('binlog.loadedPaths', allBinlogPaths);
     chatParticipant?.setBinlogPaths(binlogPaths);
     treeDataProvider?.setLoading(true);
     treeDataProvider?.setBinlogPaths(binlogPaths);
@@ -822,7 +827,7 @@ async function removeBinlogs(toRemove: Set<string | undefined>) {
     }
 
     // Update persisted state
-    extensionContext?.globalState.update('binlog.loadedPaths', allBinlogPaths);
+    extensionContext?.workspaceState.update('binlog.loadedPaths', allBinlogPaths);
 
     chatParticipant?.setBinlogPaths(allBinlogPaths);
     treeDataProvider?.setBinlogPaths(allBinlogPaths);
