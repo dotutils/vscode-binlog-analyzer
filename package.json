@@ -2,7 +2,7 @@
   "name": "binlog-analyzer",
   "displayName": "MSBuild Binlog Analyzer",
   "description": "Analyze MSBuild binary logs with Copilot Chat and MCP tools",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "preview": true,
   "publisher": "dotutils",
   "license": "MIT",

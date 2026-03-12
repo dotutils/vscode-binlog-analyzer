@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.2 (Preview)
+
+### Improvements
+- **Enhanced perf playbook with dotnet/skills best practices** — severity thresholds (RAR >5s/>15s, analyzers <30% of Csc, node utilization >80%, single target >50%), build duration benchmarks
+- **Hardlinks for Copy** — added `CreateHardLinksForCopyFilesToOutputDirectoryIfPossible` to playbook and optimize flow
+- **Conditional analyzer disable** — fixed optimize prompt to use `Condition="'$(ContinuousIntegrationBuild)' != 'true'"` pattern instead of global `/p:RunAnalyzers=false`, preserving CI enforcement
+- **Incrementality guidance** — added `FileWrites` registration, `Returns` vs `Outputs` distinction, bin/obj clash detection, `GlobalPackageReference` scope warning
+- **Build command fix** — optimize flow now includes `-m` flag for parallel builds
+- **NuGet restore separation** — explicit `dotnet restore` + `dotnet build --no-restore` pattern in optimize prompt
+
 ## 0.7.1 (Preview)
 
 ### Bug Fixes
