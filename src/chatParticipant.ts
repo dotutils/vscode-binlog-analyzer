@@ -247,11 +247,15 @@ export class BinlogChatParticipant {
         }
 
         // Build messages
-        // For /compare, use a minimal system prompt to avoid token overflow
+        // For data-heavy commands, skip history and use minimal system prompt to avoid token overflow
+        const heavyCommands = new Set(['compare', 'incremental', 'perf']);
+        const useMinimalPrompt = heavyCommands.has(request.command || '');
         const systemPrompt = request.command === 'compare'
-            ? `You are an MSBuild build analysis expert. Compare two binlog files using MCP tools. Call load_binlog ONCE per binlog, then use get_expensive_targets and get_diagnostics for each. Keep response concise.`
+            ? `You are an MSBuild build analysis expert. Compare binlog files using MCP tools. Call load_binlog ONCE per binlog, then use get_expensive_targets and get_diagnostics for each. Keep response concise.`
+            : useMinimalPrompt
+            ? `You are an MSBuild build analysis expert. Use MCP tools to analyze binlog files. Call load_binlog ONCE with the full binlog path, then use analysis tools. Every tool call MUST include the binlog_file parameter with the FULL ABSOLUTE PATH. Provide specific actionable fixes with exact MSBuild properties.`
             : SYSTEM_PROMPT;
-        const includeHistory = request.command !== 'compare';
+        const includeHistory = !useMinimalPrompt;
         const messages = [
             vscode.LanguageModelChatMessage.User(systemPrompt),
             // Include conversation history — only text-based turns (skip for /compare)
