@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.3 (Preview)
+
+### Improvements
+- **Dev Drive recommendation** — suggests enabling ReFS Dev Drive for I/O-heavy builds (reduces Copy task overhead dramatically)
+- **MSBuild Server** — added `MSBUILDUSESERVER=1` to parallel builds suggestion for better CLI incremental caching
+- **Static Graph Restore** — restored `RestoreUseStaticGraphEvaluation=true` (20s+ savings in large builds, was accidentally dropped)
+- **Project graph shape** — new guidance on wide vs deep dependency graphs (40% faster clean, 20% faster incremental)
+- **Inline task overhead** — warns about RoslynCodeTaskFactory inline tasks (~1s vs ~3ms compiled)
+- **BuildCheck** — recommends `dotnet build /check` for first-time diagnostics
+- **`RunAnalyzersDuringBuild`** — added as alternative to `RunAnalyzers` for VS startup perf
+
 ## 0.7.2 (Preview)
 
 ### Improvements
