@@ -106,7 +106,7 @@
       },
       {
         "command": "binlog.refreshTree",
-        "title": "Binlog: Refresh Tree",
+        "title": "Binlog: Reload",
         "icon": "$(refresh)"
       },
       {

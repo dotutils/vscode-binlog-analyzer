@@ -20,7 +20,6 @@ let allBinlogPaths: string[] = [];
 let statusBarItem: vscode.StatusBarItem | undefined;
 let extensionContext: vscode.ExtensionContext | undefined;
 let openedViaUri = false;
-let binlogWatchers: vscode.FileSystemWatcher[] = [];
 let optimizeInProgress = false;
 let cachedToolExePath: string | null | undefined; // undefined = not searched yet
 let codeLensRegistered = false;
@@ -246,10 +245,15 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    // Command: Refresh Tree
+    // Command: Reload Binlog — re-reads the binlog from disk (like F5 in Structured Log Viewer)
     context.subscriptions.push(
-        vscode.commands.registerCommand('binlog.refreshTree', () => {
-            treeDataProvider?.refresh();
+        vscode.commands.registerCommand('binlog.refreshTree', async () => {
+            if (allBinlogPaths.length > 0 && extensionContext) {
+                await handleBinlogOpen(allBinlogPaths, extensionContext, false);
+                vscode.window.setStatusBarMessage('$(check) Binlog reloaded', 3000);
+            } else {
+                treeDataProvider?.refresh();
+            }
         })
     );
 
@@ -661,9 +665,6 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
     // Wait for MCP config (needed before Copilot Chat works) but tree loads in background
     await mcpConfigPromise;
 
-    // Watch binlog files for changes (e.g. rebuild regenerates the binlog)
-    setupBinlogWatchers(binlogPaths, context);
-
     // Only open chat and steal focus when user explicitly loaded a binlog
     if (interactive) {
         vscode.commands.executeCommand(
@@ -700,82 +701,6 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
             context.globalState.update('binlog.hasSeenWelcome', true);
             showGettingStarted();
         }
-    }
-}
-
-/** Watch binlog files for changes — auto-reload when rebuild regenerates the binlog */
-function setupBinlogWatchers(binlogPaths: string[], context: vscode.ExtensionContext) {
-    // Dispose previous watchers
-    for (const w of binlogWatchers) { w.dispose(); }
-    binlogWatchers = [];
-
-    // Record initial mtimes so we only alert on real content changes
-    const lastMtimes = new Map<string, number>();
-    for (const p of binlogPaths) {
-        try { lastMtimes.set(p, fs.statSync(p).mtimeMs); } catch { /* ignore */ }
-    }
-
-    let reloadDebounce: NodeJS.Timeout | undefined;
-    let reloading = false;
-
-    for (const binlogPath of binlogPaths) {
-        const dir = path.dirname(binlogPath);
-        const filename = path.basename(binlogPath);
-        const pattern = new vscode.RelativePattern(dir, filename);
-        const watcher = vscode.workspace.createFileSystemWatcher(pattern, true, false, true);
-
-        watcher.onDidChange(() => {
-            if (reloading || optimizeInProgress) { return; } // Suppress during reload or optimize flow
-
-            // Check if mtime actually changed (filters out access-only events)
-            try {
-                const newMtime = fs.statSync(binlogPath).mtimeMs;
-                const oldMtime = lastMtimes.get(binlogPath) || 0;
-                if (newMtime === oldMtime) { return; }
-                lastMtimes.set(binlogPath, newMtime);
-            } catch { return; }
-
-            // Debounce: wait for file to stabilize before notifying.
-            // MSBuild writes progressively, so we need to wait for writes to stop.
-            if (reloadDebounce) { clearTimeout(reloadDebounce); }
-            let stableChecks = 0;
-            let prevSize = -1;
-            const checkStable = async () => {
-                // Re-check optimizeInProgress after delay
-                if (optimizeInProgress) { return; }
-                try {
-                    const size = fs.statSync(binlogPath).size;
-                    if (size === prevSize && size > 0) {
-                        stableChecks++;
-                        if (stableChecks >= 2) {
-                            // File stable for 20+ seconds — build is done
-                            const action = await vscode.window.showInformationMessage(
-                                `🔄 Binlog "${filename}" was updated (rebuild detected). Reload to see latest results?`,
-                                'Reload',
-                                'Dismiss'
-                            );
-                            if (action === 'Reload') {
-                                reloading = true;
-                                await handleBinlogOpen(allBinlogPaths, context, false);
-                                for (const p of binlogPaths) {
-                                    try { lastMtimes.set(p, fs.statSync(p).mtimeMs); } catch { /* ignore */ }
-                                }
-                                reloading = false;
-                            }
-                            return;
-                        }
-                    } else {
-                        stableChecks = 0;
-                        prevSize = size;
-                    }
-                    reloadDebounce = setTimeout(checkStable, 10_000);
-                } catch { /* file gone or locked */ }
-            };
-            reloadDebounce = setTimeout(checkStable, 10_000);
-        });
-
-        binlogWatchers.push(watcher);
-        context.subscriptions.push(watcher);
     }
 }
 
@@ -1410,7 +1335,7 @@ async function optimizeBuildFlow(context: vscode.ExtensionContext) {
     if (buildMode === 'quick') {
         const cmd = `dotnet build ${buildTarget_} -m -bl:"${quickPath}"`.trim();
         buildSteps = `**STEP 2 — REBUILD:** Run: \`${cmd}\`\n`;
-        reportStep = `  - Cold build time vs baseline\n  - Tell the user to check the Binlog Explorer`;
+        reportStep = `  - Cold build time vs baseline\n  - Tell the user: click the 🔄 **Reload** button in the Binlog Explorer toolbar to load the new binlog`;
         binlogFooter = `BASELINE BINLOG: ${baselineBinlog}\nOPTIMIZED BINLOG (will be created): ${quickPath}`;
         optimizedBinlogs = [quickPath];
     } else if (buildMode === 'cold-warm') {
@@ -1424,7 +1349,8 @@ async function optimizeBuildFlow(context: vscode.ExtensionContext) {
         reportStep =
             `  - Cold build time vs baseline (was it faster?)\n` +
             `  - Warm build time (should be <5s)\n` +
-            `  - Targets skipped in warm vs cold`;
+            `  - Targets skipped in warm vs cold\n` +
+            `  - Tell the user: click the 🔄 **Reload** button in the Binlog Explorer toolbar to load the updated results`;
         binlogFooter = `BASELINE BINLOG: ${baselineBinlog}\nAFTER-COLD: ${afterColdPath}\nAFTER-WARM: ${afterWarmPath}`;
         optimizedBinlogs = [afterColdPath, afterWarmPath];
     } else {
@@ -1449,7 +1375,8 @@ async function optimizeBuildFlow(context: vscode.ExtensionContext) {
             `  Produce a comparison table:\n` +
             `  | Metric | Before (cold) | Before (warm) | After (cold) | After (warm) |\n` +
             `  Show: total build time, top 3 expensive targets, targets skipped count.\n` +
-            `  Highlight: cold improvement (before_cold vs after_cold) AND warm improvement (before_warm vs after_warm).`;
+            `  Highlight: cold improvement (before_cold vs after_cold) AND warm improvement (before_warm vs after_warm).\n` +
+            `  Tell the user: click the 🔄 **Reload** button in the Binlog Explorer toolbar to load the updated results.`;
         binlogFooter = `BEFORE-COLD: ${beforeColdPath}\nBEFORE-WARM: ${beforeWarmPath}\nAFTER-COLD: ${afterColdPath}\nAFTER-WARM: ${afterWarmPath}`;
         optimizedBinlogs = [beforeColdPath, beforeWarmPath, afterColdPath, afterWarmPath];
     }
@@ -1466,7 +1393,7 @@ async function optimizeBuildFlow(context: vscode.ExtensionContext) {
         `**${applyStep} — ANALYZE & APPLY:**\n${commonAnalysis}\n\n` +
         `${buildSteps}\n` +
         `**${reportStepNum} — REPORT:**\n${reportStep}\n` +
-        `  Tell the user to check the Binlog Explorer — binlogs will auto-load for comparison.\n\n` +
+        `  Tell the user: click the 🔄 **Reload** button in the Binlog Explorer toolbar to load the updated results.\n\n` +
         `${binlogFooter}`;
 
     // Step 6: Auto-detect when optimized binlog is ready using polling with stabilization.
@@ -1545,9 +1472,6 @@ async function loadOptimizedAndCompare(
     currentBinlogPath = baselineBinlog;
 
     await handleBinlogOpen(allBinlogPaths, context, false);
-
-    // Only watch baseline — optimized binlogs are one-time artifacts
-    setupBinlogWatchers([baselineBinlog], context);
 
     const hasMultiple = binlogsToLoad.length > 2;
     vscode.window.showInformationMessage(
