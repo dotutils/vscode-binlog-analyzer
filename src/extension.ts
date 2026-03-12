@@ -1336,65 +1336,63 @@ async function optimizeBuildFlow(context: vscode.ExtensionContext) {
         ? slnFiles[0] : (projectFiles.length === 1 ? projectFiles[0] : '');
     const binlogDir = path.dirname(baselineBinlog);
 
-    // Generate unique names for cold and warm builds
+    // Generate unique names: before_warm, after_cold, after_warm
     let optimizeIndex = 1;
-    while (fs.existsSync(path.join(binlogDir, `optimized_${optimizeIndex}_cold.binlog`))
-        || fs.existsSync(path.join(binlogDir, `optimized_${optimizeIndex}_warm.binlog`))) {
+    while (fs.existsSync(path.join(binlogDir, `optimized_${optimizeIndex}_after_warm.binlog`))
+        || fs.existsSync(path.join(binlogDir, `optimized_${optimizeIndex}_before_warm.binlog`))) {
         optimizeIndex++;
     }
-    const coldBinlogName = `optimized_${optimizeIndex}_cold.binlog`;
-    const warmBinlogName = `optimized_${optimizeIndex}_warm.binlog`;
-    const coldBinlogPath = path.join(binlogDir, coldBinlogName);
-    const warmBinlogPath = path.join(binlogDir, warmBinlogName);
-    // The warm binlog is the final artifact we poll for
-    const optimizedBinlogPath = warmBinlogPath;
+    const beforeWarmName = `optimized_${optimizeIndex}_before_warm.binlog`;
+    const afterColdName = `optimized_${optimizeIndex}_after_cold.binlog`;
+    const afterWarmName = `optimized_${optimizeIndex}_after_warm.binlog`;
+    const beforeWarmPath = path.join(binlogDir, beforeWarmName);
+    const afterColdPath = path.join(binlogDir, afterColdName);
+    const afterWarmPath = path.join(binlogDir, afterWarmName);
+    // The after_warm binlog is the final artifact we poll for
+    const optimizedBinlogPath = afterWarmPath;
     // Record creation time so polling only accepts files written after this point
     const optimizeStartTime = Date.now();
 
     const buildTarget_ = buildTarget ? `"${buildTarget}"` : '';
-    const coldBuildCmd = `dotnet build ${buildTarget_} -m -bl:"${coldBinlogPath}"`.trim();
-    const warmBuildCmd = `dotnet build ${buildTarget_} -m -bl:"${warmBinlogPath}"`.trim();
+    const beforeWarmCmd = `dotnet build ${buildTarget_} -m -bl:"${beforeWarmPath}"`.trim();
+    const afterColdCmd = `dotnet build ${buildTarget_} -m -bl:"${afterColdPath}"`.trim();
+    const afterWarmCmd = `dotnet build ${buildTarget_} -m -bl:"${afterWarmPath}"`.trim();
 
-    // Step 5: Build the Copilot prompt with selected optimizations + rebuild + compare
+    // Step 5: Build the Copilot prompt with 4-build workflow
     const selectedLabels = selected.map(s => s.label.replace(/\$\([^)]+\)\s*/g, '') + ': ' + s.description).join('\n  - ');
 
     const prompt =
-        `Apply the following build performance optimizations to this project, then rebuild TWICE to measure both cold and warm (incremental) build performance.\n\n` +
+        `Apply the following build performance optimizations to this project using a 4-build comparison workflow.\n\n` +
         `**SELECTED OPTIMIZATIONS:**\n  - ${selectedLabels}\n\n` +
-        `**PERFORMANCE DATA (baseline):**\n` +
+        `**PERFORMANCE DATA (baseline cold build):**\n` +
         `Expensive targets (includes skippedCount for incrementality):\n${targetsText.substring(0, 2000)}\n\n` +
         `Expensive tasks:\n${tasksText.substring(0, 2000)}\n\n` +
         `**INSTRUCTIONS:**\n\n` +
-        `**STEP 1 — ANALYZE:** Look at the performance data above and the selected optimizations.\n` +
+        `**STEP 1 — BEFORE-CHANGES WARM BUILD:** First, capture the current warm/incremental performance BEFORE making any changes.\n` +
+        `  Run: \`${beforeWarmCmd}\`\n` +
+        `  This establishes the "before" incremental baseline.\n\n` +
+        `**STEP 2 — ANALYZE & APPLY:** Look at the performance data above and apply the selected optimizations.\n` +
         `Apply these severity thresholds: RAR >5s is concerning (>15s pathological), Analyzers should be <30% of Csc time, any single target >50% of build time is a red flag.\n` +
-        `For incrementality: targets with skippedCount=0 and high executionCount are never skipping — they need Inputs/Outputs attributes.\n` +
-        `IMPORTANT (from MSBuild team #13206): Targets with Inputs/Outputs that generate Items via Tasks have a subtle bug — when the target is skipped, the Items disappear. Separate computation targets (always-run, no Inputs/Outputs) from execution targets.\n\n` +
-        `**STEP 2 — APPLY:** Make the changes:\n` +
         `  - Create or modify \`Directory.Build.props\` in the repo root for repo-wide properties\n` +
-        `  - Add the MSBuild properties/flags needed for each selected optimization\n` +
-        `  - For analyzers: disable CONDITIONALLY, not globally. Use: <RunAnalyzers Condition="'$(ContinuousIntegrationBuild)' != 'true'">false</RunAnalyzers> to preserve CI enforcement\n` +
+        `  - For analyzers: disable CONDITIONALLY: <RunAnalyzers Condition="'$(ContinuousIntegrationBuild)' != 'true'">false</RunAnalyzers>\n` +
         `  - For file copies: enable hardlinks with <CreateHardLinksForCopyFilesToOutputDirectoryIfPossible>true</CreateHardLinksForCopyFilesToOutputDirectoryIfPossible>\n` +
-        `  - For custom targets: add Inputs/Outputs AND register generated files in <FileWrites> for clean support. Use Returns (not Outputs) when only passing items without incrementality.\n` +
-        `  - For RAR optimization: check if DisableTransitiveProjectReferences or ReferenceOutputAssembly="false" can reduce reference graph\n` +
-        `  - For NuGet: separate restore from build — \`dotnet restore\` then \`dotnet build --no-restore\`\n` +
+        `  - For custom targets: add Inputs/Outputs AND register generated files in <FileWrites>. Use Returns (not Outputs) when only passing items.\n` +
         `  - Add XML comments explaining what each property does\n` +
-        `  - NOTE: ResolveProjectReferences total time is misleading — it includes time waiting on dependent projects (per MSBuild #3135). Focus on self-time of actual tasks.\n\n` +
-        `**STEP 3 — REBUILD TWICE (cold + warm):** Run these commands in the terminal:\n` +
-        `  First build (cold — measures full compilation after changes):\n` +
-        `  \`${coldBuildCmd}\`\n\n` +
-        `  Second build (warm — measures incremental/no-op performance):\n` +
-        `  \`${warmBuildCmd}\`\n\n` +
-        `  This produces two binlogs: ${coldBinlogName} (cold) and ${warmBinlogName} (warm).\n` +
-        `  The warm build should be dramatically faster if incrementality is working correctly.\n\n` +
-        `**STEP 4 — REPORT:** After both builds complete, summarize:\n` +
-        `  - What files were changed and what properties were added\n` +
-        `  - Cold build time vs baseline (was it faster?)\n` +
-        `  - Warm build time (should be <5s for a well-optimized incremental build)\n` +
-        `  - Number of targets skipped in warm build vs cold build\n` +
-        `  - Tell the user to check the Binlog Explorer — the warm binlog will auto-load for comparison\n\n` +
-        `BASELINE BINLOG: ${baselineBinlog}\n` +
-        `COLD BUILD BINLOG (will be created): ${coldBinlogPath}\n` +
-        `WARM BUILD BINLOG (will be created): ${warmBinlogPath}`;
+        `  - IMPORTANT (MSBuild #13206): Targets with Inputs/Outputs generating Items via Tasks — separate computation from execution targets.\n` +
+        `  - NOTE: ResolveProjectReferences total time is misleading (MSBuild #3135). Focus on task self-time.\n\n` +
+        `**STEP 3 — AFTER-CHANGES COLD BUILD:** Run: \`${afterColdCmd}\`\n` +
+        `  This measures full compilation with the optimizations applied.\n\n` +
+        `**STEP 4 — AFTER-CHANGES WARM BUILD:** Run: \`${afterWarmCmd}\`\n` +
+        `  This measures incremental/no-op with the optimizations. Should be <5s if incrementality is working.\n\n` +
+        `**STEP 5 — REPORT:** After all builds complete, produce a comparison table:\n` +
+        `  | Metric | Baseline (cold) | Before (warm) | After (cold) | After (warm) |\n` +
+        `  Show: total build time, top 3 expensive targets, targets skipped count.\n` +
+        `  Highlight: cold build improvement (baseline vs after_cold) AND warm build improvement (before_warm vs after_warm).\n` +
+        `  Tell the user to check the Binlog Explorer — all binlogs will auto-load for comparison.\n\n` +
+        `BASELINE BINLOG (cold): ${baselineBinlog}\n` +
+        `BEFORE-WARM BINLOG (will be created): ${beforeWarmPath}\n` +
+        `AFTER-COLD BINLOG (will be created): ${afterColdPath}\n` +
+        `AFTER-WARM BINLOG (will be created): ${afterWarmPath}`;
 
     // Step 6: Auto-detect when optimized binlog is ready using polling with stabilization.
     // MSBuild creates the file at build start and writes progressively, so we need to wait
@@ -1426,7 +1424,7 @@ async function optimizeBuildFlow(context: vscode.ExtensionContext) {
                 if (stableCount >= STABLE_READINGS) {
                     // File has been stable for 30+ seconds — build is done
                     optimizeInProgress = false;
-                    await loadOptimizedAndCompare(context, baselineBinlog, coldBinlogPath, warmBinlogPath);
+                    await loadOptimizedAndCompare(context, baselineBinlog, [beforeWarmPath, afterColdPath, afterWarmPath]);
                     return;
                 }
             } else {
@@ -1458,13 +1456,13 @@ async function optimizeBuildFlow(context: vscode.ExtensionContext) {
 async function loadOptimizedAndCompare(
     context: vscode.ExtensionContext,
     baselineBinlog: string,
-    coldBinlog: string,
-    warmBinlog: string
+    optimizedBinlogs: string[]
 ) {
-    // Load all available binlogs: baseline + cold + warm
+    // Load all available binlogs: baseline + any optimized binlogs that exist
     const binlogsToLoad = [baselineBinlog];
-    if (fs.existsSync(coldBinlog)) { binlogsToLoad.push(coldBinlog); }
-    if (fs.existsSync(warmBinlog)) { binlogsToLoad.push(warmBinlog); }
+    for (const b of optimizedBinlogs) {
+        if (fs.existsSync(b)) { binlogsToLoad.push(b); }
+    }
 
     if (binlogsToLoad.length < 2) { return; }
 
@@ -1476,10 +1474,10 @@ async function loadOptimizedAndCompare(
     // Only watch baseline — optimized binlogs are one-time artifacts
     setupBinlogWatchers([baselineBinlog], context);
 
-    const hasWarm = fs.existsSync(warmBinlog);
+    const hasMultiple = binlogsToLoad.length > 2;
     vscode.window.showInformationMessage(
-        hasWarm
-            ? `✅ Optimized builds complete! ${binlogsToLoad.length} binlogs loaded (baseline → cold → warm).`
+        hasMultiple
+            ? `✅ Optimization complete! ${binlogsToLoad.length} binlogs loaded (baseline → before-warm → after-cold → after-warm).`
             : `✅ Optimized build complete! ${binlogsToLoad.length} binlogs loaded for comparison.`,
         'Show Comparison Timeline',
         'Dismiss'
