@@ -735,24 +735,43 @@ function setupBinlogWatchers(binlogPaths: string[], context: vscode.ExtensionCon
                 lastMtimes.set(binlogPath, newMtime);
             } catch { return; }
 
-            // Debounce: binlog writes can trigger multiple change events
+            // Debounce: wait for file to stabilize before notifying.
+            // MSBuild writes progressively, so we need to wait for writes to stop.
             if (reloadDebounce) { clearTimeout(reloadDebounce); }
-            reloadDebounce = setTimeout(async () => {
-                const action = await vscode.window.showInformationMessage(
-                    `🔄 Binlog "${filename}" was updated (rebuild detected). Reload to see latest results?`,
-                    'Reload',
-                    'Dismiss'
-                );
-                if (action === 'Reload') {
-                    reloading = true;
-                    await handleBinlogOpen(allBinlogPaths, context, false);
-                    // Update mtimes after reload so watchers don't re-fire
-                    for (const p of binlogPaths) {
-                        try { lastMtimes.set(p, fs.statSync(p).mtimeMs); } catch { /* ignore */ }
+            let stableChecks = 0;
+            let prevSize = -1;
+            const checkStable = async () => {
+                // Re-check optimizeInProgress after delay
+                if (optimizeInProgress) { return; }
+                try {
+                    const size = fs.statSync(binlogPath).size;
+                    if (size === prevSize && size > 0) {
+                        stableChecks++;
+                        if (stableChecks >= 2) {
+                            // File stable for 20+ seconds — build is done
+                            const action = await vscode.window.showInformationMessage(
+                                `🔄 Binlog "${filename}" was updated (rebuild detected). Reload to see latest results?`,
+                                'Reload',
+                                'Dismiss'
+                            );
+                            if (action === 'Reload') {
+                                reloading = true;
+                                await handleBinlogOpen(allBinlogPaths, context, false);
+                                for (const p of binlogPaths) {
+                                    try { lastMtimes.set(p, fs.statSync(p).mtimeMs); } catch { /* ignore */ }
+                                }
+                                reloading = false;
+                            }
+                            return;
+                        }
+                    } else {
+                        stableChecks = 0;
+                        prevSize = size;
                     }
-                    reloading = false;
-                }
-            }, 2000);
+                    reloadDebounce = setTimeout(checkStable, 10_000);
+                } catch { /* file gone or locked */ }
+            };
+            reloadDebounce = setTimeout(checkStable, 10_000);
         });
 
         binlogWatchers.push(watcher);
