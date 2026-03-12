@@ -73,11 +73,12 @@ const COMMAND_PROMPTS: Record<string, string> = {
     targets: 'List the MSBuild targets that were executed. Show their execution order, duration, and dependencies. Highlight any targets that failed.',
     summary: 'Provide a comprehensive build summary: overall result, duration, number of projects, error/warning counts, key properties, and configuration. Highlight anything unusual.',
     secrets: 'Scan the binlog for potential secrets, credentials, API keys, tokens, connection strings, and sensitive data that may have been logged during the build. Report any findings.',
-    compare: 'Compare the two loaded binlogs. For EACH binlog, call get_expensive_targets (top 3) and get_diagnostics. Then produce a comparison:\n' +
+    compare: 'Compare ALL loaded binlogs. For EACH binlog, call get_expensive_targets (top 3) and get_diagnostics. Then produce a comparison:\n' +
         '1. **Build Result**: Success/failure for each\n' +
         '2. **Errors & Warnings**: New/removed diagnostics\n' +
-        '3. **Performance**: Duration changes in top targets (>20% change)\n' +
-        'Present as a structured diff. Keep response concise.',
+        '3. **Performance**: Duration changes in top targets across all binlogs\n' +
+        'If there are cold/warm pairs (e.g. optimized_1_cold + optimized_1_warm), highlight the incremental improvement.\n' +
+        'Present as a structured table. Keep response concise.',
     perf: 'Perform a DEEP performance analysis of this build. Follow these steps:\n' +
         '1. Call get_expensive_targets (top 15), get_expensive_tasks (top 15), get_project_build_times, and get_expensive_analyzers\n' +
         '2. Calculate what percentage of total build time each item represents\n' +
@@ -195,9 +196,14 @@ export class BinlogChatParticipant {
 
         const binlogContext = this.binlogPaths.length > 0
             ? (request.command === 'compare' && this.binlogPaths.length >= 2
-                ? `Binlog A (first build): binlog_file="${this.binlogPaths[0]}"\n` +
-                  `Binlog B (second build): binlog_file="${this.binlogPaths[1]}"\n` +
-                  `Call load_binlog ONCE for each binlog_file, then call each analysis tool TWICE — once with each binlog_file path.`
+                ? this.binlogPaths.map((p, i) => {
+                    const name = p.split(/[/\\]/).pop() || `binlog ${i + 1}`;
+                    const label = name.includes('_cold') ? '(cold build)' :
+                                  name.includes('_warm') ? '(warm/incremental build)' :
+                                  i === 0 ? '(baseline)' : `(build ${i + 1})`;
+                    return `Binlog ${String.fromCharCode(65 + i)} ${label}: binlog_file="${p}"`;
+                  }).join('\n') + '\n' +
+                  `Call load_binlog ONCE for each binlog_file, then call get_expensive_targets and get_diagnostics for EACH binlog_file path.`
                 : `The binlog file path is: ${this.binlogPaths[0]}\n` +
                   `FIRST call load_binlog with binlog_file="${this.binlogPaths[0]}". ` +
                   `Then call analysis tools with binlog_file="${this.binlogPaths[0]}" (the full absolute path). ` +
