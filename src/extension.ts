@@ -1377,6 +1377,10 @@ async function optimizeBuildFlow(context: vscode.ExtensionContext) {
     // Step 6: Auto-detect when optimized binlog is ready using polling with stabilization.
     // MSBuild creates the file at build start and writes progressively, so we need to wait
     // for the file size to stop changing for a sustained period before loading.
+
+    // Delete any stale optimized.binlog from a previous run so we only detect a fresh one
+    try { if (fs.existsSync(optimizedBinlogPath)) { fs.unlinkSync(optimizedBinlogPath); } } catch { /* ignore */ }
+
     const POLL_INTERVAL = 10_000;   // check every 10 seconds
     const STABLE_READINGS = 3;      // need 3 consecutive same-size readings (30s stable)
     let stableCount = 0;
