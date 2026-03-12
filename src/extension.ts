@@ -1333,7 +1333,7 @@ async function optimizeBuildFlow(context: vscode.ExtensionContext) {
     const buildModes: (vscode.QuickPickItem & { mode: string })[] = [
         { label: '$(run-all) Quick — single build after changes', description: 'Fastest: apply optimizations → rebuild once', mode: 'quick', picked: true },
         { label: '$(split-horizontal) Cold + Warm — two builds after changes', description: 'Measures both compilation and incrementality improvement', mode: 'cold-warm' },
-        { label: '$(diff) Full A/B — warm before + cold & warm after', description: 'Most thorough: captures before/after incremental comparison', mode: 'full-ab' },
+        { label: '$(diff) Full A/B — clean+warm before, clean+warm after', description: 'Most thorough: clean cold & warm builds before AND after changes', mode: 'full-ab' },
     ];
 
     const modeSelection = await vscode.window.showQuickPick(buildModes, {
@@ -1361,6 +1361,7 @@ async function optimizeBuildFlow(context: vscode.ExtensionContext) {
 
     const afterColdPath = path.join(binlogDir, `optimized_${optimizeIndex}_after_cold.binlog`);
     const afterWarmPath = path.join(binlogDir, `optimized_${optimizeIndex}_after_warm.binlog`);
+    const beforeColdPath = path.join(binlogDir, `optimized_${optimizeIndex}_before_cold.binlog`);
     const beforeWarmPath = path.join(binlogDir, `optimized_${optimizeIndex}_before_warm.binlog`);
     const quickPath = path.join(binlogDir, `optimized_${optimizeIndex}.binlog`);
 
@@ -1408,28 +1409,34 @@ async function optimizeBuildFlow(context: vscode.ExtensionContext) {
         binlogFooter = `BASELINE BINLOG: ${baselineBinlog}\nAFTER-COLD: ${afterColdPath}\nAFTER-WARM: ${afterWarmPath}`;
         optimizedBinlogs = [afterColdPath, afterWarmPath];
     } else {
-        // full-ab
+        // full-ab: clean → cold → warm BEFORE changes, then clean → cold → warm AFTER changes
+        const cleanCmd = `dotnet clean ${buildTarget_}`.trim();
+        const bcCmd = `dotnet build ${buildTarget_} -m -bl:"${beforeColdPath}"`.trim();
         const bwCmd = `dotnet build ${buildTarget_} -m -bl:"${beforeWarmPath}"`.trim();
         const coldCmd = `dotnet build ${buildTarget_} -m -bl:"${afterColdPath}"`.trim();
         const warmCmd = `dotnet build ${buildTarget_} -m -bl:"${afterWarmPath}"`.trim();
         buildSteps =
-            `**STEP 1 — BEFORE-CHANGES WARM BUILD:** Run: \`${bwCmd}\`\n` +
-            `  Capture current incremental performance BEFORE changes.\n\n` +
-            `**STEP 3 — AFTER-CHANGES COLD BUILD:** Run: \`${coldCmd}\`\n` +
-            `  Full compilation with optimizations.\n\n` +
-            `**STEP 4 — AFTER-CHANGES WARM BUILD:** Run: \`${warmCmd}\`\n` +
-            `  Incremental with optimizations. Should be <5s.\n`;
+            `**STEP 1 — BEFORE-CHANGES BASELINE:** Run these 3 commands to establish a clean before-baseline:\n` +
+            `  \`${cleanCmd}\`\n` +
+            `  \`${bcCmd}\`\n` +
+            `  \`${bwCmd}\`\n` +
+            `  This gives us a clean cold build AND a warm/incremental build BEFORE any changes.\n\n` +
+            `**STEP 3 — AFTER-CHANGES BUILDS:** After applying optimizations, run:\n` +
+            `  \`${cleanCmd}\`\n` +
+            `  \`${coldCmd}\`\n` +
+            `  \`${warmCmd}\`\n` +
+            `  This gives us a clean cold build AND a warm build AFTER changes.\n`;
         reportStep =
             `  Produce a comparison table:\n` +
-            `  | Metric | Baseline (cold) | Before (warm) | After (cold) | After (warm) |\n` +
+            `  | Metric | Before (cold) | Before (warm) | After (cold) | After (warm) |\n` +
             `  Show: total build time, top 3 expensive targets, targets skipped count.\n` +
-            `  Highlight: cold improvement (baseline vs after_cold) AND warm improvement (before_warm vs after_warm).`;
-        binlogFooter = `BASELINE BINLOG: ${baselineBinlog}\nBEFORE-WARM: ${beforeWarmPath}\nAFTER-COLD: ${afterColdPath}\nAFTER-WARM: ${afterWarmPath}`;
-        optimizedBinlogs = [beforeWarmPath, afterColdPath, afterWarmPath];
+            `  Highlight: cold improvement (before_cold vs after_cold) AND warm improvement (before_warm vs after_warm).`;
+        binlogFooter = `BEFORE-COLD: ${beforeColdPath}\nBEFORE-WARM: ${beforeWarmPath}\nAFTER-COLD: ${afterColdPath}\nAFTER-WARM: ${afterWarmPath}`;
+        optimizedBinlogs = [beforeColdPath, beforeWarmPath, afterColdPath, afterWarmPath];
     }
 
     const applyStep = buildMode === 'full-ab' ? 'STEP 2' : 'STEP 1';
-    const reportStepNum = buildMode === 'quick' ? 'STEP 3' : buildMode === 'cold-warm' ? 'STEP 4' : 'STEP 5';
+    const reportStepNum = buildMode === 'quick' ? 'STEP 3' : buildMode === 'cold-warm' ? 'STEP 4' : 'STEP 4';
 
     const prompt =
         `Apply the following build performance optimizations to this project.\n\n` +
