@@ -2,7 +2,7 @@
   "name": "binlog-analyzer",
   "displayName": "MSBuild Binlog Analyzer",
   "description": "Analyze MSBuild binary logs with Copilot Chat and MCP tools",
-  "version": "0.7.3",
+  "version": "0.8.0",
   "preview": true,
   "publisher": "dotutils",
   "license": "MIT",
@@ -107,6 +107,7 @@
       {
         "command": "binlog.refreshTree",
         "title": "Binlog: Reload",
+        "shortTitle": "Reload",
         "icon": "$(refresh)"
       },
       {

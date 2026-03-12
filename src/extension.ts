@@ -937,6 +937,7 @@ async function startMcpClientForTree(binlogPaths: string[]) {
         mcpClient = client;
         treeDataProvider?.setMcpClient(client);
         binlogDocProvider?.setMcpClient(client);
+        chatParticipant?.setMcpClient(client);
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.warn('Failed to start MCP client for tree view:', msg);

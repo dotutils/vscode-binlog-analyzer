@@ -509,9 +509,9 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         add.iconPath = new vscode.ThemeIcon('add');
         actions.push(add);
 
-        const refresh = new BinlogTreeItem('Refresh tree', vscode.TreeItemCollapsibleState.None);
+        const refresh = new BinlogTreeItem('Reload', vscode.TreeItemCollapsibleState.None);
         refresh.nodeKind = 'action';
-        refresh.command = { command: 'binlog.refreshTree', title: 'Refresh' };
+        refresh.command = { command: 'binlog.refreshTree', title: 'Reload' };
         refresh.iconPath = new vscode.ThemeIcon('refresh');
         actions.push(refresh);
 

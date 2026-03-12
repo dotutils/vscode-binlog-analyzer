@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
+
 import * as telemetry from './telemetry';
+import { McpClient } from './mcpClient';
 
 const SYSTEM_PROMPT = `You are an MSBuild build analysis expert embedded in VS Code. You help developers understand and fix build issues using MSBuild binary log (binlog) files.
 
@@ -72,7 +74,7 @@ const COMMAND_PROMPTS: Record<string, string> = {
         '7. If parallel build is not fully utilized, suggest /maxcpucount and /graph mode',
     targets: 'List the MSBuild targets that were executed. Show their execution order, duration, and dependencies. Highlight any targets that failed.',
     summary: 'Provide a comprehensive build summary: overall result, duration, number of projects, error/warning counts, key properties, and configuration. Highlight anything unusual.',
-    secrets: 'Scan the binlog for potential secrets, credentials, API keys, tokens, connection strings, and sensitive data that may have been logged during the build. Report any findings.',
+    secrets: 'Redirect users to Structured Log Viewer for secrets scanning and redaction.',
     compare: 'Compare ALL loaded binlogs. For EACH binlog, call get_expensive_targets (top 3) and get_diagnostics. Then produce a comparison:\n' +
         '1. **Build Result**: Success/failure for each\n' +
         '2. **Errors & Warnings**: New/removed diagnostics\n' +
@@ -149,10 +151,15 @@ const COMMAND_PROMPTS: Record<string, string> = {
 
 export class BinlogChatParticipant {
     private binlogPaths: string[] = [];
+    private mcpClient: McpClient | null = null;
     private participant: vscode.Disposable | undefined;
 
     setBinlogPaths(paths: string[]) {
         this.binlogPaths = paths;
+    }
+
+    setMcpClient(client: McpClient | null) {
+        this.mcpClient = client;
     }
 
     register(context: vscode.ExtensionContext) {
@@ -192,6 +199,12 @@ export class BinlogChatParticipant {
                 );
                 return;
             }
+        }
+
+        // For /secrets, scan directly via MCP — no LLM needed
+        if (request.command === 'secrets') {
+            await this.handleSecretsCommand(stream);
+            return;
         }
 
         const binlogContext = this.binlogPaths.length > 0
@@ -321,6 +334,20 @@ export class BinlogChatParticipant {
                 throw err;
             }
         }
+    }
+
+    private async handleSecretsCommand(stream: vscode.ChatResponseStream): Promise<void> {
+        stream.markdown(
+            '## 🔐 Secrets Detection & Redaction\n\n' +
+            'For reliable secrets scanning and redaction, please use **[MSBuild Structured Log Viewer](https://msbuildlog.com/)**.\n\n' +
+            'It provides built-in capabilities to:\n' +
+            '- **Search** for secrets, tokens, passwords, and PII in binlog files\n' +
+            '- **Redact** sensitive data before sharing binlogs externally\n\n' +
+            'To redact secrets:\n' +
+            '1. Open your `.binlog` file in **Structured Log Viewer** — you can launch it directly from this extension via **"Binlog: Open in Structured Log Viewer"** in the tree view context menu or Command Palette\n' +
+            '2. Right-click the binlog → **Redact Secrets**\n' +
+            '3. Share the redacted copy instead of the original\n'
+        );
     }
 
     private async processResponse(

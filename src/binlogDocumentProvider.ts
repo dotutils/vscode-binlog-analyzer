@@ -184,7 +184,7 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
             lines.push('🔧 SLOWEST TASKS');
             lines.push('─────────────────────────────────────────────────────');
             for (const [name, info] of Object.entries(tasksData as Record<string, any>)) {
-                const dur = info.inclusiveDurationMs || info.durationMs || 0;
+                const dur = info.inclusiveDurationMs || info.totalDurationMs || info.durationMs || info.exclusiveDurationMs || 0;
                 const count = info.executionCount || 1;
                 const durStr = dur >= 1000 ? `${(dur / 1000).toFixed(1)}s` : `${dur}ms`;
                 lines.push(`  ${name.padEnd(40)} ${durStr.padStart(8)}  (×${count})`);
