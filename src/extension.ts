@@ -1335,7 +1335,17 @@ async function optimizeBuildFlow(context: vscode.ExtensionContext) {
     const buildTarget = slnFiles.length > 0
         ? slnFiles[0] : (projectFiles.length === 1 ? projectFiles[0] : '');
     const binlogDir = path.dirname(baselineBinlog);
-    const optimizedBinlogPath = path.join(binlogDir, 'optimized.binlog');
+
+    // Generate unique name: optimized_1.binlog, optimized_2.binlog, etc.
+    let optimizeIndex = 1;
+    while (fs.existsSync(path.join(binlogDir, `optimized_${optimizeIndex}.binlog`))) {
+        optimizeIndex++;
+    }
+    const optimizedBinlogName = `optimized_${optimizeIndex}.binlog`;
+    const optimizedBinlogPath = path.join(binlogDir, optimizedBinlogName);
+    // Record creation time so polling only accepts files written after this point
+    const optimizeStartTime = Date.now();
+
     const buildCmd = buildTarget
         ? `dotnet build "${buildTarget}" -m -bl:"${optimizedBinlogPath}"`
         : `dotnet build -m -bl:"${optimizedBinlogPath}"`;
@@ -1377,9 +1387,7 @@ async function optimizeBuildFlow(context: vscode.ExtensionContext) {
     // Step 6: Auto-detect when optimized binlog is ready using polling with stabilization.
     // MSBuild creates the file at build start and writes progressively, so we need to wait
     // for the file size to stop changing for a sustained period before loading.
-
-    // Delete any stale optimized.binlog from a previous run so we only detect a fresh one
-    try { if (fs.existsSync(optimizedBinlogPath)) { fs.unlinkSync(optimizedBinlogPath); } } catch { /* ignore */ }
+    // Uses optimizeStartTime to only accept files created after the flow started.
 
     const POLL_INTERVAL = 10_000;   // check every 10 seconds
     const STABLE_READINGS = 3;      // need 3 consecutive same-size readings (30s stable)
@@ -1396,6 +1404,11 @@ async function optimizeBuildFlow(context: vscode.ExtensionContext) {
                 return;
             }
             const stat = fs.statSync(optimizedBinlogPath);
+            // Only consider files created after the optimize flow started
+            if (stat.mtimeMs < optimizeStartTime) {
+                pollTimer = setTimeout(pollForCompletion, POLL_INTERVAL);
+                return;
+            }
             if (stat.size > 0 && stat.size === lastSize) {
                 stableCount++;
                 if (stableCount >= STABLE_READINGS) {
