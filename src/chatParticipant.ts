@@ -27,22 +27,32 @@ When answering questions:
 5. Suggest actionable fixes for build errors
 6. For performance questions, provide SPECIFIC ACTIONABLE suggestions based on the actual targets/tasks found:
 
-PERFORMANCE OPTIMIZATION PLAYBOOK (based on MSBuild team practices from dotnet/msbuild issues/PRs):
+PERFORMANCE OPTIMIZATION PLAYBOOK (based on MSBuild team practices from dotnet/msbuild issues/PRs and dotnet/skills):
+
+SEVERITY THRESHOLDS (use these to classify findings):
+- RAR (ResolveAssemblyReferences): >5s is concerning, >15s is pathological
+- Analyzers: should be <30% of Csc task time. If higher, disable non-essential ones
+- Node utilization: ideal is >80% active time. Low = serialization bottleneck
+- Single target domination: if one target is >50% of total build time, investigate
+- Build duration benchmarks: small project <10s, medium <60s, large <5min
+
+BOTTLENECK FIXES:
 - ResolveAssemblyReferences is slow → Reduce transitive references, set ReferenceOutputAssembly="false" on non-API deps, consider <DisableTransitiveProjectReferences>true</DisableTransitiveProjectReferences>. RAR runs unconditionally even on incremental builds (MSBuild #2015). Trim unused PackageReferences.
-- Csc/CoreCompile is slow → Check analyzer load with get_expensive_analyzers, consider <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild> in CI, split large projects, enable <ProduceReferenceAssembly>true</ProduceReferenceAssembly>
-- CopyFilesToOutputDirectory is slow → Set <UseCommonOutputDirectory>true</UseCommonOutputDirectory> or <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>. Use <SkipCopyUnchangedFiles>true</SkipCopyUnchangedFiles>. Consider --artifacts-path on .NET 8+.
-- ResolvePackageAssets is slow → Use <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile> and check NuGet cache. Use --no-restore in CI after explicit restore step.
+- Csc/CoreCompile is slow → Check analyzer load with get_expensive_analyzers. IMPORTANT: disable analyzers conditionally, not globally: <RunAnalyzers Condition="'$(ContinuousIntegrationBuild)' != 'true'">false</RunAnalyzers>. Enable <ProduceReferenceAssembly>true</ProduceReferenceAssembly>. For code-style: <EnforceCodeStyleInBuild Condition="'$(ContinuousIntegrationBuild)' == 'true'">true</EnforceCodeStyleInBuild>.
+- CopyFilesToOutputDirectory is slow → Enable hardlinks: <CreateHardLinksForCopyFilesToOutputDirectoryIfPossible>true</CreateHardLinksForCopyFilesToOutputDirectoryIfPossible>. Also set <UseCommonOutputDirectory>true</UseCommonOutputDirectory> or <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>. Use <SkipCopyUnchangedFiles>true</SkipCopyUnchangedFiles>. Consider --artifacts-path on .NET 8+.
+- ResolvePackageAssets is slow → Use <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>. Separate restore from build: \`dotnet restore\` then \`dotnet build --no-restore\`.
 - NuGetSdkResolver overhead → Adds 180-400ms per project evaluation even when restored (MSBuild #4025). Avoid NuGet-based SDK resolvers if possible.
 - GenerateNuspec/Pack targets → Disable with <IsPackable>false</IsPackable> if project doesn't produce a package
-- Analyzers are slow → Move expensive analyzers to <EnforceCodeStyleInBuild> or suppress in CI with /p:RunAnalyzers=false, or set <AnalysisLevel>none</AnalysisLevel>
-- Many projects rebuilding → Check if incremental build is broken (look for missing inputs/outputs on targets), verify <Deterministic>true</Deterministic>
+- Analyzers via GlobalPackageReference → Analyzers in Directory.Packages.props apply to ALL projects. Consider if test projects need the same analyzer set as production code.
+- Many projects rebuilding → Check if incremental build is broken. Verify custom targets have Inputs/Outputs. Register generated files in <FileWrites> for clean support. Verify <Deterministic>true</Deterministic>.
 - High evaluation time → Reduce Directory.Build.props complexity, check for wildcard globs scanning large directories. Use <EnableDefaultItems>false</EnableDefaultItems> for legacy projects.
 - Overall build is slow → Suggest /maxcpucount, /graph mode, BuildInParallel=true, check if projects can be built concurrently
 - Duplicate/redundant work → Look for targets running multiple times (×N count), suggest build deduplication
 - ResolveProjectReferences shows huge time → MISLEADING — includes time waiting for dependent projects (MSBuild #3135). Focus on self-time of actual tasks.
-- Incrementality anti-pattern → Targets with Inputs/Outputs that generate Items via Tasks: when skipped, Items disappear (MSBuild #13206). Separate computation targets from execution targets.
+- Incrementality anti-pattern → Targets with Inputs/Outputs that generate Items via Tasks: when skipped, Items disappear (MSBuild #13206). Separate computation targets (always-run, no Inputs/Outputs) from execution targets. Use Returns instead of Outputs when you only need to pass items without incremental checking.
 - Copy task batching → Avoid accidentally batching Copy tasks — runs once per item instead of batch (MSBuild #12884). Use batch-friendly patterns.
 - Build output layout → Use --artifacts-path (.NET 8+) for centralized output, reducing redundant file copies across projects
+- bin/obj clashes → Multiple projects or multi-targeting writing to same OutputPath/IntermediateOutputPath causes intermittent failures. Ensure AppendTargetFrameworkToOutputPath=true and unique BaseIntermediateOutputPath per project.
 
 Always provide the EXACT MSBuild property or command-line flag to use, and WHERE to add it (Directory.Build.props, .csproj, or CLI)
 
@@ -69,21 +79,26 @@ const COMMAND_PROMPTS: Record<string, string> = {
     perf: 'Perform a DEEP performance analysis of this build. Follow these steps:\n' +
         '1. Call get_expensive_targets (top 15), get_expensive_tasks (top 15), get_project_build_times, and get_expensive_analyzers\n' +
         '2. Calculate what percentage of total build time each item represents\n' +
-        '3. For EACH bottleneck, provide a SPECIFIC fix:\n' +
+        '3. Apply these SEVERITY THRESHOLDS:\n' +
+        '   - RAR >5s is concerning, >15s is pathological\n' +
+        '   - Analyzers should be <30% of Csc task time\n' +
+        '   - Any single target >50% of total build time is a red flag\n' +
+        '4. For EACH bottleneck, provide a SPECIFIC fix:\n' +
         '   - The exact MSBuild property or CLI flag to set\n' +
         '   - WHERE to add it (Directory.Build.props for repo-wide, specific .csproj, or CLI arg)\n' +
         '   - Expected impact (e.g., "typically saves 20-40% on this target")\n' +
         '   - Any trade-offs or caveats\n' +
-        '4. Check for these common issues:\n' +
+        '5. Check for these common issues:\n' +
         '   - Targets running multiple times (×N) — may indicate redundant work\n' +
-        '   - Expensive analyzers that could be disabled in CI (/p:RunAnalyzers=false)\n' +
+        '   - Expensive analyzers — disable conditionally: <RunAnalyzers Condition="\'$(ContinuousIntegrationBuild)\' != \'true\'">false</RunAnalyzers>\n' +
         '   - Projects that could build in parallel but are serialized\n' +
-        '   - Copy-heavy builds that waste I/O\n' +
-        '5. Output a prioritized action plan as a numbered list:\n' +
+        '   - Copy-heavy builds — suggest hardlinks: <CreateHardLinksForCopyFilesToOutputDirectoryIfPossible>true</CreateHardLinksForCopyFilesToOutputDirectoryIfPossible>\n' +
+        '   - ResolveProjectReferences time is misleading (includes wait time) — focus on actual task self-time\n' +
+        '6. Output a prioritized action plan as a numbered list:\n' +
         '   🔴 HIGH IMPACT (do first): Items consuming >10% of build time\n' +
         '   🟡 MEDIUM IMPACT: Items consuming 2-10% of build time\n' +
         '   🟢 QUICK WINS: Easy changes with modest impact\n' +
-        '6. End with concrete next steps the developer can copy-paste into their build files',
+        '7. End with concrete next steps the developer can copy-paste into their build files',
     incremental: 'Analyze build INCREMENTALITY — determine if this build is doing unnecessary work that could be skipped on rebuild. Follow these steps:\n' +
         '\n' +
         'STEP 1: Get target execution data\n' +
@@ -111,8 +126,9 @@ const COMMAND_PROMPTS: Record<string, string> = {
         '🔴 **Never Skips** (targets with skippedCount=0 and high duration):\n' +
         'For each, explain likely reasons and provide the EXACT fix:\n' +
         '  - SDK targets (CoreCompile, ResolveAssemblyReferences) → These are expected to run on clean builds. On no-op rebuilds they should skip. Suggest user build twice and check.\n' +
-        '  - Custom targets missing Inputs/Outputs → Show the Target element with correct Inputs="@(Compile)" Outputs="$(IntermediateOutputPath)..." attributes\n' +
+        '  - Custom targets missing Inputs/Outputs → Show the Target element with correct Inputs="@(Compile)" Outputs="$(IntermediateOutputPath)..." attributes. Register generated files in <FileWrites> for clean support.\n' +
         '  - Glob picking up generated files → Add <DefaultItemExcludes> or move output to $(IntermediateOutputPath)\n' +
+        '  - Targets that pass items without needing incrementality → Use Returns instead of Outputs\n' +
         '\n' +
         '🟡 **Sometimes Skips** (targets with 0 < skippedCount < executionCount):\n' +
         'These run in some projects but skip in others — investigate why\n' +

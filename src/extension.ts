@@ -1308,14 +1308,14 @@ async function optimizeBuildFlow(context: vscode.ExtensionContext) {
         return;
     }
 
-    // Step 2: Build optimization suggestions (based on MSBuild team best practices from dotnet/msbuild)
+    // Step 2: Build optimization suggestions (based on MSBuild team best practices + dotnet/skills)
     const suggestions: vscode.QuickPickItem[] = [
         { label: '$(zap) Enable Parallel Builds', description: 'Use /maxcpucount and /graph mode for project-level parallelism', picked: true },
-        { label: '$(beaker) Optimize CoreCompile', description: 'ProduceReferenceAssembly + disable analyzers in CI (/p:RunAnalyzers=false)', picked: true },
-        { label: '$(file-symlink-directory) Reduce File Copy Overhead', description: 'UseCommonOutputDirectory, CopyLocalLockFileAssemblies=false, SkipCopyUnchangedFiles', picked: true },
-        { label: '$(history) Improve Incrementality', description: 'Add Inputs/Outputs to custom targets, separate computation from execution targets', picked: true },
+        { label: '$(beaker) Optimize CoreCompile', description: 'ProduceReferenceAssembly + conditionally disable analyzers (preserve CI enforcement)', picked: true },
+        { label: '$(file-symlink-directory) Reduce File Copy Overhead', description: 'Enable hardlinks, UseCommonOutputDirectory, CopyLocalLockFileAssemblies=false', picked: true },
+        { label: '$(history) Improve Incrementality', description: 'Add Inputs/Outputs to custom targets, register FileWrites, separate computation from execution', picked: true },
         { label: '$(search) Optimize RAR (ResolveAssemblyReferences)', description: 'Reduce transitive refs, DisableTransitiveProjectReferences, trim unused PackageReferences', picked: false },
-        { label: '$(package) Optimize NuGet Restore', description: 'RestoreUseStaticGraphEvaluation + RestorePackagesWithLockFile + --no-restore in CI', picked: false },
+        { label: '$(package) Optimize NuGet Restore', description: 'RestorePackagesWithLockFile + separate restore from build (--no-restore)', picked: false },
         { label: '$(folder) Use Artifacts Output Layout', description: '--artifacts-path for centralized output (.NET 8+), reduces redundant copies', picked: false },
         { label: '$(symbol-property) Enable Build Caching', description: 'Use /graph isolation for safe caching, Deterministic=true', picked: false },
     ];
@@ -1337,8 +1337,8 @@ async function optimizeBuildFlow(context: vscode.ExtensionContext) {
     const binlogDir = path.dirname(baselineBinlog);
     const optimizedBinlogPath = path.join(binlogDir, 'optimized.binlog');
     const buildCmd = buildTarget
-        ? `dotnet build "${buildTarget}" -bl:"${optimizedBinlogPath}"`
-        : `dotnet build -bl:"${optimizedBinlogPath}"`;
+        ? `dotnet build "${buildTarget}" -m -bl:"${optimizedBinlogPath}"`
+        : `dotnet build -m -bl:"${optimizedBinlogPath}"`;
 
     // Step 5: Build the Copilot prompt with selected optimizations + rebuild + compare
     const selectedLabels = selected.map(s => s.label.replace(/\$\([^)]+\)\s*/g, '') + ': ' + s.description).join('\n  - ');
@@ -1351,16 +1351,18 @@ async function optimizeBuildFlow(context: vscode.ExtensionContext) {
         `Expensive tasks:\n${tasksText.substring(0, 2000)}\n\n` +
         `**INSTRUCTIONS:**\n\n` +
         `**STEP 1 — ANALYZE:** Look at the performance data above and the selected optimizations.\n` +
-        `For each optimization, determine which files to modify (Directory.Build.props, specific .csproj, or CLI args).\n` +
+        `Apply these severity thresholds: RAR >5s is concerning (>15s pathological), Analyzers should be <30% of Csc time, any single target >50% of build time is a red flag.\n` +
         `For incrementality: targets with skippedCount=0 and high executionCount are never skipping — they need Inputs/Outputs attributes.\n` +
         `IMPORTANT (from MSBuild team #13206): Targets with Inputs/Outputs that generate Items via Tasks have a subtle bug — when the target is skipped, the Items disappear. Separate computation targets (always-run, no Inputs/Outputs) from execution targets.\n\n` +
         `**STEP 2 — APPLY:** Make the changes:\n` +
         `  - Create or modify \`Directory.Build.props\` in the repo root for repo-wide properties\n` +
         `  - Add the MSBuild properties/flags needed for each selected optimization\n` +
-        `  - For custom targets without Inputs/Outputs, add appropriate file globs\n` +
-        `  - Add XML comments explaining what each property does\n` +
+        `  - For analyzers: disable CONDITIONALLY, not globally. Use: <RunAnalyzers Condition="'$(ContinuousIntegrationBuild)' != 'true'">false</RunAnalyzers> to preserve CI enforcement\n` +
+        `  - For file copies: enable hardlinks with <CreateHardLinksForCopyFilesToOutputDirectoryIfPossible>true</CreateHardLinksForCopyFilesToOutputDirectoryIfPossible>\n` +
+        `  - For custom targets: add Inputs/Outputs AND register generated files in <FileWrites> for clean support. Use Returns (not Outputs) when only passing items without incrementality.\n` +
         `  - For RAR optimization: check if DisableTransitiveProjectReferences or ReferenceOutputAssembly="false" can reduce reference graph\n` +
-        `  - For artifacts output: use --artifacts-path on .NET 8+ to centralize build output and eliminate redundant copies\n` +
+        `  - For NuGet: separate restore from build — \`dotnet restore\` then \`dotnet build --no-restore\`\n` +
+        `  - Add XML comments explaining what each property does\n` +
         `  - NOTE: ResolveProjectReferences total time is misleading — it includes time waiting on dependent projects (per MSBuild #3135). Focus on self-time of actual tasks.\n\n` +
         `**STEP 3 — REBUILD:** Run this command in the terminal:\n` +
         `  \`${buildCmd}\`\n` +
