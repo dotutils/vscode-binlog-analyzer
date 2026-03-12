@@ -1308,14 +1308,14 @@ async function optimizeBuildFlow(context: vscode.ExtensionContext) {
         return;
     }
 
-    // Step 2: Build optimization suggestions (based on MSBuild team best practices + dotnet/skills)
+    // Step 2: Build optimization suggestions (based on MSBuild team best practices + dotnet/skills + Mayorova/Provaznik talk)
     const suggestions: vscode.QuickPickItem[] = [
-        { label: '$(zap) Enable Parallel Builds', description: 'Use /maxcpucount and /graph mode for project-level parallelism', picked: true },
+        { label: '$(zap) Enable Parallel Builds', description: 'Use /maxcpucount, /graph mode, and MSBUILDUSESERVER=1', picked: true },
         { label: '$(beaker) Optimize CoreCompile', description: 'ProduceReferenceAssembly + conditionally disable analyzers (preserve CI enforcement)', picked: true },
-        { label: '$(file-symlink-directory) Reduce File Copy Overhead', description: 'Enable hardlinks, UseCommonOutputDirectory, CopyLocalLockFileAssemblies=false', picked: true },
+        { label: '$(file-symlink-directory) Reduce File Copy Overhead', description: 'Enable hardlinks, UseCommonOutputDirectory, Dev Drive (ReFS) recommendation', picked: true },
         { label: '$(history) Improve Incrementality', description: 'Add Inputs/Outputs to custom targets, register FileWrites, separate computation from execution', picked: true },
         { label: '$(search) Optimize RAR (ResolveAssemblyReferences)', description: 'Reduce transitive refs, DisableTransitiveProjectReferences, trim unused PackageReferences', picked: false },
-        { label: '$(package) Optimize NuGet Restore', description: 'RestorePackagesWithLockFile + separate restore from build (--no-restore)', picked: false },
+        { label: '$(package) Optimize NuGet Restore', description: 'RestoreUseStaticGraphEvaluation + RestorePackagesWithLockFile + --no-restore', picked: false },
         { label: '$(folder) Use Artifacts Output Layout', description: '--artifacts-path for centralized output (.NET 8+), reduces redundant copies', picked: false },
         { label: '$(symbol-property) Enable Build Caching', description: 'Use /graph isolation for safe caching, Deterministic=true', picked: false },
     ];
