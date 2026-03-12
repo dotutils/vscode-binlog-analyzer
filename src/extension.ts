@@ -1336,25 +1336,30 @@ async function optimizeBuildFlow(context: vscode.ExtensionContext) {
         ? slnFiles[0] : (projectFiles.length === 1 ? projectFiles[0] : '');
     const binlogDir = path.dirname(baselineBinlog);
 
-    // Generate unique name: optimized_1.binlog, optimized_2.binlog, etc.
+    // Generate unique names for cold and warm builds
     let optimizeIndex = 1;
-    while (fs.existsSync(path.join(binlogDir, `optimized_${optimizeIndex}.binlog`))) {
+    while (fs.existsSync(path.join(binlogDir, `optimized_${optimizeIndex}_cold.binlog`))
+        || fs.existsSync(path.join(binlogDir, `optimized_${optimizeIndex}_warm.binlog`))) {
         optimizeIndex++;
     }
-    const optimizedBinlogName = `optimized_${optimizeIndex}.binlog`;
-    const optimizedBinlogPath = path.join(binlogDir, optimizedBinlogName);
+    const coldBinlogName = `optimized_${optimizeIndex}_cold.binlog`;
+    const warmBinlogName = `optimized_${optimizeIndex}_warm.binlog`;
+    const coldBinlogPath = path.join(binlogDir, coldBinlogName);
+    const warmBinlogPath = path.join(binlogDir, warmBinlogName);
+    // The warm binlog is the final artifact we poll for
+    const optimizedBinlogPath = warmBinlogPath;
     // Record creation time so polling only accepts files written after this point
     const optimizeStartTime = Date.now();
 
-    const buildCmd = buildTarget
-        ? `dotnet build "${buildTarget}" -m -bl:"${optimizedBinlogPath}"`
-        : `dotnet build -m -bl:"${optimizedBinlogPath}"`;
+    const buildTarget_ = buildTarget ? `"${buildTarget}"` : '';
+    const coldBuildCmd = `dotnet build ${buildTarget_} -m -bl:"${coldBinlogPath}"`.trim();
+    const warmBuildCmd = `dotnet build ${buildTarget_} -m -bl:"${warmBinlogPath}"`.trim();
 
     // Step 5: Build the Copilot prompt with selected optimizations + rebuild + compare
     const selectedLabels = selected.map(s => s.label.replace(/\$\([^)]+\)\s*/g, '') + ': ' + s.description).join('\n  - ');
 
     const prompt =
-        `Apply the following build performance optimizations to this project, then rebuild and verify the improvement.\n\n` +
+        `Apply the following build performance optimizations to this project, then rebuild TWICE to measure both cold and warm (incremental) build performance.\n\n` +
         `**SELECTED OPTIMIZATIONS:**\n  - ${selectedLabels}\n\n` +
         `**PERFORMANCE DATA (baseline):**\n` +
         `Expensive targets (includes skippedCount for incrementality):\n${targetsText.substring(0, 2000)}\n\n` +
@@ -1374,15 +1379,22 @@ async function optimizeBuildFlow(context: vscode.ExtensionContext) {
         `  - For NuGet: separate restore from build — \`dotnet restore\` then \`dotnet build --no-restore\`\n` +
         `  - Add XML comments explaining what each property does\n` +
         `  - NOTE: ResolveProjectReferences total time is misleading — it includes time waiting on dependent projects (per MSBuild #3135). Focus on self-time of actual tasks.\n\n` +
-        `**STEP 3 — REBUILD:** Run this command in the terminal:\n` +
-        `  \`${buildCmd}\`\n` +
-        `  This generates a new binlog at: ${optimizedBinlogPath}\n\n` +
-        `**STEP 4 — REPORT:** After the build completes, summarize:\n` +
+        `**STEP 3 — REBUILD TWICE (cold + warm):** Run these commands in the terminal:\n` +
+        `  First build (cold — measures full compilation after changes):\n` +
+        `  \`${coldBuildCmd}\`\n\n` +
+        `  Second build (warm — measures incremental/no-op performance):\n` +
+        `  \`${warmBuildCmd}\`\n\n` +
+        `  This produces two binlogs: ${coldBinlogName} (cold) and ${warmBinlogName} (warm).\n` +
+        `  The warm build should be dramatically faster if incrementality is working correctly.\n\n` +
+        `**STEP 4 — REPORT:** After both builds complete, summarize:\n` +
         `  - What files were changed and what properties were added\n` +
-        `  - Whether the build succeeded\n` +
-        `  - Tell the user to check the Binlog Explorer — the optimized binlog will auto-load for comparison\n\n` +
+        `  - Cold build time vs baseline (was it faster?)\n` +
+        `  - Warm build time (should be <5s for a well-optimized incremental build)\n` +
+        `  - Number of targets skipped in warm build vs cold build\n` +
+        `  - Tell the user to check the Binlog Explorer — the warm binlog will auto-load for comparison\n\n` +
         `BASELINE BINLOG: ${baselineBinlog}\n` +
-        `OPTIMIZED BINLOG (will be created): ${optimizedBinlogPath}`;
+        `COLD BUILD BINLOG (will be created): ${coldBinlogPath}\n` +
+        `WARM BUILD BINLOG (will be created): ${warmBinlogPath}`;
 
     // Step 6: Auto-detect when optimized binlog is ready using polling with stabilization.
     // MSBuild creates the file at build start and writes progressively, so we need to wait
@@ -1414,7 +1426,7 @@ async function optimizeBuildFlow(context: vscode.ExtensionContext) {
                 if (stableCount >= STABLE_READINGS) {
                     // File has been stable for 30+ seconds — build is done
                     optimizeInProgress = false;
-                    await loadOptimizedAndCompare(context, baselineBinlog, optimizedBinlogPath);
+                    await loadOptimizedAndCompare(context, baselineBinlog, coldBinlogPath, warmBinlogPath);
                     return;
                 }
             } else {
@@ -1446,21 +1458,29 @@ async function optimizeBuildFlow(context: vscode.ExtensionContext) {
 async function loadOptimizedAndCompare(
     context: vscode.ExtensionContext,
     baselineBinlog: string,
-    optimizedBinlog: string
+    coldBinlog: string,
+    warmBinlog: string
 ) {
-    if (!fs.existsSync(optimizedBinlog)) { return; }
+    // Load all available binlogs: baseline + cold + warm
+    const binlogsToLoad = [baselineBinlog];
+    if (fs.existsSync(coldBinlog)) { binlogsToLoad.push(coldBinlog); }
+    if (fs.existsSync(warmBinlog)) { binlogsToLoad.push(warmBinlog); }
 
-    // Load both binlogs for comparison
-    allBinlogPaths = [baselineBinlog, optimizedBinlog];
+    if (binlogsToLoad.length < 2) { return; }
+
+    allBinlogPaths = binlogsToLoad;
     currentBinlogPath = baselineBinlog;
 
     await handleBinlogOpen(allBinlogPaths, context, false);
 
-    // Replace watchers: only watch baseline, not optimized (it was just written and may still settle)
+    // Only watch baseline — optimized binlogs are one-time artifacts
     setupBinlogWatchers([baselineBinlog], context);
 
+    const hasWarm = fs.existsSync(warmBinlog);
     vscode.window.showInformationMessage(
-        `✅ Optimized build complete! Both binlogs loaded for comparison.`,
+        hasWarm
+            ? `✅ Optimized builds complete! ${binlogsToLoad.length} binlogs loaded (baseline → cold → warm).`
+            : `✅ Optimized build complete! ${binlogsToLoad.length} binlogs loaded for comparison.`,
         'Show Comparison Timeline',
         'Dismiss'
     ).then(action => {
