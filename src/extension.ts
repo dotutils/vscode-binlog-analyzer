@@ -972,18 +972,19 @@ async function configureMcpServer(binlogPaths: string[], config: vscode.Workspac
             insightsExe = await installBinlogInsightsTool();
         }
 
+        const binlogArgs = binlogPaths.flatMap(p => ['--binlog', p]);
         if (insightsExe) {
             insightsConfig = {
                 type: 'stdio',
                 command: insightsExe,
-                args: [],
+                args: binlogArgs,
                 env: { Logging__Console__LogToStandardErrorThreshold: 'Trace' },
             };
         } else {
             insightsConfig = {
                 type: 'stdio',
                 command: 'dotnet',
-                args: ['tool', 'run', 'binlog-insights-mcp'],
+                args: ['tool', 'run', 'binlog-insights-mcp', '--', ...binlogArgs],
                 env: { Logging__Console__LogToStandardErrorThreshold: 'Trace' },
             };
             vscode.window.showWarningMessage(
