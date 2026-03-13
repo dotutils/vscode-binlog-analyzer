@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.1 (Preview)
+
+### Bug Fixes
+- **Fixed Copilot Chat hanging** — BinlogInsights.Mcp console logging was corrupting stdout JSON-RPC; added env var workaround to redirect logs to stderr
+- **Fixed chat not auto-opening** — `configureMcpServer` was blocking on cold start; now fire-and-forget for settings write
+- **Fixed chat not opening from Structured Log Viewer** — `activeBinlogs` path now treated as interactive
+
 ## 0.8.0 (Preview)
 
 ### New

@@ -860,9 +860,12 @@ function showGettingStarted() {
     panel.appendLine('   • @binlog what are the slowest targets?');
     panel.appendLine('   • @binlog /errors    — show all build errors');
     panel.appendLine('   • @binlog /timeline  — analyze build performance');
+    panel.appendLine('   • @binlog /perf      — deep performance analysis');
     panel.appendLine('   • @binlog /targets   — inspect MSBuild targets');
     panel.appendLine('   • @binlog /summary   — comprehensive build summary');
-    panel.appendLine('   • @binlog /secrets   — scan for leaked credentials');
+    panel.appendLine('   • @binlog /incremental — analyze build incrementality');
+    panel.appendLine('   • @binlog /secrets   — secrets redaction guidance');
+    panel.appendLine('   • @binlog /compare   — compare loaded binlogs');
     panel.appendLine('');
     panel.appendLine('2. BUILD ANALYSIS MODE');
     panel.appendLine('   Switch to "Build Analysis" mode in the Copilot Chat mode picker');
@@ -874,8 +877,8 @@ function showGettingStarted() {
     panel.appendLine('');
     panel.appendLine('4. COMMANDS (Ctrl+Shift+P)');
     panel.appendLine('   • Binlog: Load File       — open a different binlog');
-    panel.appendLine('   • Binlog: Scan for Secrets — detect leaked credentials');
-    panel.appendLine('   • Binlog: Redact Secrets   — create a redacted copy');
+    panel.appendLine('   • Binlog: Scan for Secrets — secrets redaction guidance');
+    panel.appendLine('   • Binlog: Redact Secrets   — open in Structured Log Viewer to redact');
     panel.appendLine('   • Binlog: Show Errors      — focus the Problems panel');
     panel.appendLine('');
     panel.appendLine('5. MULTIPLE BINLOGS');
