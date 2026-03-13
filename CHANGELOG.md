@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.8.0 (Preview)
+
+### New
+- **BinlogInsights.Mcp integration** — Copilot Chat now uses [BinlogInsights.Mcp](https://www.nuget.org/packages/BinlogInsights.Mcp) (28 tools) for AI-assisted build investigation, replacing baronfel.binlog.mcp for Copilot Chat
+- **New slash commands** — `/perf` (deep performance analysis with severity thresholds) and `/incremental` (build incrementality report)
+- **New MCP tools available** — `binlog_overview`, `binlog_imports`, `binlog_items`, `binlog_nuget`, `binlog_compiler`, `binlog_preprocess`, `binlog_compare` and more
+- **No `load_binlog` step** — BinlogInsights handles loading per-tool call, eliminating a common failure mode
+
+### Changed
+- **`/secrets` command** — now directs users to use [MSBuild Structured Log Viewer](https://msbuildlog.com/) for reliable secrets scanning and redaction, with a note that you can launch it directly from the extension
+- **Updated system prompts** — all chat prompts reference BinlogInsights tool names for better Copilot accuracy
+- **Auto-install** — extension auto-installs `BinlogInsights.Mcp` dotnet tool on first use
+
 ## 0.7.3 (Preview)
 
 ### Improvements

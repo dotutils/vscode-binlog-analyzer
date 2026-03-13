@@ -2,7 +2,7 @@
   "name": "binlog-analyzer",
   "displayName": "MSBuild Binlog Analyzer",
   "description": "Analyze MSBuild binary logs with Copilot Chat and MCP tools",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "preview": true,
   "publisher": "dotutils",
   "license": "MIT",
@@ -188,7 +188,7 @@
         "binlogAnalyzer.mcpServerPath": {
           "type": "string",
           "default": "",
-          "description": "Custom path to the baronfel.binlog.mcp dotnet tool. Leave empty to use the globally installed tool."
+          "description": "Custom path to the MCP server dotnet tool (BinlogInsights.Mcp or baronfel.binlog.mcp). Leave empty to use the globally installed tool."
         },
         "binlogAnalyzer.autoLoad": {
           "type": "boolean",
@@ -286,14 +286,14 @@
       {
         "slug": "build-analysis",
         "name": "Build Analysis",
-        "description": "Pre-configured for MSBuild binlog investigation with binlog MCP tools.",
+        "description": "Pre-configured for MSBuild binlog investigation with BinlogInsights MCP tools.",
         "toolsReferences": [
           {
             "type": "tool",
-            "id": "baronfel_binlog_mcp"
+            "id": "binlog_insights_mcp"
           }
         ],
-        "systemPrompt": "You are an MSBuild build analysis expert. You have access to binlog MCP tools.\n\nIMPORTANT: Call load_binlog ONLY ONCE per conversation. If you already called it, skip straight to analysis tools. Check copilot-instructions.md for the full absolute binlog path.\n\nSTEP 1 (first message only): Call load_binlog with the FULL ABSOLUTE PATH. NEVER use a relative filename.\nSTEP 2: Call analysis tools (get_diagnostics, list_projects, etc.) with binlog_file set to the same full absolute path.\n\nAll tools require 'binlog_file' parameter with the FULL ABSOLUTE PATH. Ask the user for the path if you don't know it.\n\nAlways reference specific file paths and line numbers when discussing errors."
+        "systemPrompt": "You are an MSBuild build analysis expert. You have access to BinlogInsights MCP tools.\n\nInvestigation workflow:\n1. Start with binlog_overview to understand the build status\n2. If the build failed, use binlog_errors to see what went wrong\n3. Drill deeper based on errors:\n   - Missing types/namespaces → binlog_items to check PackageReference\n   - Property issues → binlog_properties to inspect values\n   - Import problems → binlog_imports to see the import chain\n   - NuGet failures → binlog_nuget for restore diagnostics\n   - General investigation → binlog_search for free-text search\n4. Use binlog_compare to diff two builds when comparing configurations\n\nPerformance investigation:\n1. Use binlog_expensive_projects to find the slowest projects\n2. Drill into a project with binlog_project_target_times to see target-level timing\n3. Use binlog_expensive_targets or binlog_expensive_tasks for build-wide hotspots\n4. Use binlog_tasks_in_target to see what a specific target does\n5. Use binlog_expensive_analyzers to check if Roslyn analyzers are slow\n\nAll tools require 'binlog_file' parameter with the FULL ABSOLUTE PATH. Ask the user for the path if you don't know it.\nAlways reference specific file paths and line numbers when discussing errors."
       }
     ],
     "menus": {

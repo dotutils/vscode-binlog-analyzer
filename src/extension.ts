@@ -22,6 +22,7 @@ let extensionContext: vscode.ExtensionContext | undefined;
 let openedViaUri = false;
 let optimizeInProgress = false;
 let cachedToolExePath: string | null | undefined; // undefined = not searched yet
+let cachedInsightsExePath: string | null | undefined; // undefined = not searched yet
 let codeLensRegistered = false;
 
 /** Returns a globalState key scoped to the current workspace folder, or a fallback for no-workspace. */
@@ -587,9 +588,10 @@ export function activate(context: vscode.ExtensionContext) {
         });
         if (validBinlogs.length > 0) {
             // Short delay to let URI handler claim priority if both fire
+            const fromStructuredLogViewer = savedBinlogs.length > 0;
             setTimeout(() => {
                 if (!openedViaUri) {
-                    handleBinlogOpen(validBinlogs, context, false);
+                    handleBinlogOpen(validBinlogs, context, fromStructuredLogViewer);
                 }
             }, 500);
         } else {
@@ -662,15 +664,18 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
         telemetry.trackMcpError('startMcpClient', String(err));
     });
 
-    // Wait for MCP config (needed before Copilot Chat works) but tree loads in background
-    await mcpConfigPromise;
+    // Wait for MCP config (needed before Copilot Chat works) but don't block forever
+    await Promise.race([
+        mcpConfigPromise,
+        new Promise(resolve => setTimeout(resolve, 10000)),
+    ]);
 
     // Only open chat and steal focus when user explicitly loaded a binlog
     if (interactive) {
-        vscode.commands.executeCommand(
-            'workbench.action.chat.open',
-            `@binlog Binlog "${fileName}"${multi} is loaded. What would you like to analyze?`
-        );
+        const chatMessage = `@binlog Binlog "${fileName}"${multi} is loaded. What would you like to analyze?`;
+        setTimeout(() => {
+            vscode.commands.executeCommand('workbench.action.chat.open', chatMessage);
+        }, 1500);
     }
 
     // If workspace doesn't match binlog location, suggest updating it
@@ -948,75 +953,71 @@ async function startMcpClientForTree(binlogPaths: string[]) {
 async function configureMcpServer(binlogPaths: string[], config: vscode.WorkspaceConfiguration) {
     const customPath = config.get<string>('mcpServerPath', '');
 
-    // Build args with all binlog paths
-    const binlogArgs = binlogPaths.flatMap(p => ['--binlog', p]);
-
-    let serverConfig: Record<string, unknown>;
-    let toolExePath: string | null = null;
+    // Configure BinlogInsights.Mcp for Copilot Chat (primary)
+    let insightsConfig: Record<string, unknown>;
 
     if (customPath) {
-        serverConfig = {
+        insightsConfig = {
             type: 'stdio',
             command: customPath,
-            args: binlogArgs
+            args: binlogPaths.flatMap(p => ['--binlog', p]),
+            env: { Logging__Console__LogToStandardErrorThreshold: 'Trace' },
         };
     } else {
-        // Auto-detect the global dotnet tool executable
-        toolExePath = findBinlogMcpTool();
-
-        if (!toolExePath) {
-            // Auto-install the dotnet tool
-            toolExePath = await installBinlogMcpTool();
+        let insightsExe = findBinlogInsightsTool();
+        if (!insightsExe) {
+            insightsExe = await installBinlogInsightsTool();
         }
 
-        if (toolExePath) {
-            serverConfig = {
+        if (insightsExe) {
+            insightsConfig = {
                 type: 'stdio',
-                command: toolExePath,
-                args: binlogArgs
+                command: insightsExe,
+                args: [],
+                env: { Logging__Console__LogToStandardErrorThreshold: 'Trace' },
             };
         } else {
-            // Last resort
-            serverConfig = {
+            insightsConfig = {
                 type: 'stdio',
                 command: 'dotnet',
-                args: ['tool', 'run', 'binlog.mcp', '--', ...binlogArgs]
+                args: ['tool', 'run', 'binlog-insights-mcp'],
+                env: { Logging__Console__LogToStandardErrorThreshold: 'Trace' },
             };
             vscode.window.showWarningMessage(
-                'Could not find or install binlog.mcp. Install it manually: `dotnet tool install -g baronfel.binlog.mcp`',
+                'Could not find or install BinlogInsights.Mcp. Install it manually: `dotnet tool install -g BinlogInsights.Mcp`',
                 'Copy Command'
             ).then(sel => {
                 if (sel === 'Copy Command') {
-                    vscode.env.clipboard.writeText('dotnet tool install -g baronfel.binlog.mcp');
+                    vscode.env.clipboard.writeText('dotnet tool install -g BinlogInsights.Mcp');
                 }
             });
         }
     }
 
-    // Write to workspace settings
-    const mcpConfig = vscode.workspace.getConfiguration('mcp');
-    const servers = mcpConfig.get<Record<string, unknown>>('servers', {});
-    // Remove any broken bare-command entries that cause ENOENT
-    for (const [key, val] of Object.entries(servers)) {
-        const srv = val as Record<string, unknown>;
-        if (srv.command === 'binlog.mcp' || srv.command === 'binlog-mcp') {
-            delete servers[key];
-        }
-    }
-    servers['baronfel_binlog_mcp'] = serverConfig;
+    // Write to user-level mcp.json first (sync file write, never hangs)
+    writeUserMcpJson(insightsConfig).catch(() => {});
 
+    // Write to VS Code settings (can hang on cold start — don't block on it)
     try {
-        await mcpConfig.update('servers', servers, vscode.ConfigurationTarget.Global);
+        const mcpConfig = vscode.workspace.getConfiguration('mcp');
+        const servers = mcpConfig.get<Record<string, unknown>>('servers', {});
+        for (const [key, val] of Object.entries(servers)) {
+            const srv = val as Record<string, unknown>;
+            if (srv.command === 'binlog.mcp' || srv.command === 'binlog-mcp') {
+                delete servers[key];
+            }
+        }
+        delete servers['baronfel_binlog_mcp'];
+        servers['binlog_insights_mcp'] = insightsConfig;
+        // Don't await — fire and forget to avoid hanging on cold start
+        mcpConfig.update('servers', servers, vscode.ConfigurationTarget.Global).then(() => {}, () => {});
     } catch {
-        // Fallback — should not happen
+        // non-fatal
     }
-
-    // Also write to user-level mcp.json (VS Code reads MCP servers from this file)
-    writeUserMcpJson(serverConfig).catch(() => {});
 }
 
 /**
- * Writes our baronfel_binlog_mcp entry to user-level mcp.json.
+ * Writes our binlog_insights_mcp entry to user-level mcp.json.
  * VS Code reads MCP servers from both settings.json and mcp.json.
  */
 async function writeUserMcpJson(serverConfig: Record<string, unknown>) {
@@ -1035,15 +1036,12 @@ async function writeUserMcpJson(serverConfig: Record<string, unknown>) {
 
         if (!mcpData.servers) { mcpData.servers = {}; }
 
-        // Remove any broken bare-command entries
-        for (const key of ['binlog-mcp']) {
-            const existing = mcpData.servers[key] as Record<string, unknown> | undefined;
-            if (existing?.command === 'binlog.mcp') {
-                delete mcpData.servers[key];
-            }
+        // Remove old/broken entries
+        for (const key of ['binlog-mcp', 'baronfel_binlog_mcp']) {
+            delete mcpData.servers[key];
         }
 
-        mcpData.servers['baronfel_binlog_mcp'] = serverConfig;
+        mcpData.servers['binlog_insights_mcp'] = serverConfig;
         fs.writeFileSync(mcpJsonPath, JSON.stringify(mcpData, null, 2), 'utf8');
     } catch { /* non-fatal */ }
 }
@@ -1106,6 +1104,65 @@ function findBinlogMcpTool(): string | null {
 
     cachedToolExePath = null;
     return null;
+}
+
+function findBinlogInsightsTool(): string | null {
+    if (cachedInsightsExePath !== undefined) { return cachedInsightsExePath; }
+
+    const homeDir = os.homedir();
+    const isWindows = process.platform === 'win32';
+    const exeName = isWindows ? 'binlog-insights-mcp.exe' : 'binlog-insights-mcp';
+
+    // Global dotnet tools are installed in ~/.dotnet/tools/
+    const globalToolPath = path.join(homeDir, '.dotnet', 'tools', exeName);
+    if (fs.existsSync(globalToolPath)) {
+        cachedInsightsExePath = globalToolPath;
+        return globalToolPath;
+    }
+
+    // Also check PATH
+    const pathDirs = (process.env.PATH || '').split(path.delimiter);
+    for (const dir of pathDirs) {
+        const candidate = path.join(dir, exeName);
+        try {
+            if (fs.existsSync(candidate)) {
+                cachedInsightsExePath = candidate;
+                return candidate;
+            }
+        } catch {
+            // ignore permission errors
+        }
+    }
+
+    cachedInsightsExePath = null;
+    return null;
+}
+
+async function installBinlogInsightsTool(): Promise<string | null> {
+    const cp = require('child_process');
+    const result = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: 'Installing BinlogInsights MCP server (dotnet tool)...' },
+        () => new Promise<string | null>((resolve) => {
+            cp.exec('dotnet tool install -g BinlogInsights.Mcp', { timeout: 60000 }, (err: Error | null) => {
+                if (err) {
+                    cp.exec('dotnet tool update -g BinlogInsights.Mcp', { timeout: 60000 }, () => {
+                        const exe = findBinlogInsightsTool();
+                        telemetry.trackToolInstall(!!exe);
+                        resolve(exe);
+                    });
+                } else {
+                    const exe = findBinlogInsightsTool();
+                    telemetry.trackToolInstall(!!exe);
+                    if (exe) {
+                        vscode.window.showInformationMessage('✅ BinlogInsights MCP server installed successfully.');
+                    }
+                    resolve(exe);
+                }
+            });
+        })
+    );
+
+    return result;
 }
 
 function getFileName(filePath: string): string {

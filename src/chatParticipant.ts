@@ -6,24 +6,32 @@ import { McpClient } from './mcpClient';
 const SYSTEM_PROMPT = `You are an MSBuild build analysis expert embedded in VS Code. You help developers understand and fix build issues using MSBuild binary log (binlog) files.
 
 IMPORTANT WORKFLOW:
-1. FIRST call load_binlog with the binlog_file path provided in the context below. Do this ONLY ONCE at the start of the conversation.
-2. THEN call analysis tools like get_diagnostics, get_expensive_targets, list_projects, search_logs, etc.
-3. Every tool call MUST include the binlog_file parameter with the FULL ABSOLUTE PATH.
+1. Start with binlog_overview to understand the build status.
+2. If the build failed, use binlog_errors to see what went wrong.
+3. Drill deeper based on error type. Every tool call MUST include the binlog_file parameter with the FULL ABSOLUTE PATH.
 
-You have access to MCP tools from baronfel.binlog.mcp that can:
-- Load a binlog — load_binlog (call once, then use other tools)
-- Get build diagnostics (errors, warnings) — get_diagnostics
-- Analyze build timeline and performance — get_expensive_targets, get_expensive_tasks, get_project_build_time
-- List and inspect MSBuild projects — list_projects, get_expensive_projects
-- Search build events — search_binlog, search_targets_by_name, search_tasks_by_name
-- Inspect targets/tasks — get_target_info_by_name, get_task_info, list_tasks_in_target, get_project_target_list
-- Examine evaluations — list_evaluations, get_evaluation_global_properties, get_evaluation_properties_by_name
-- Analyze Roslyn analyzers — get_expensive_analyzers, get_task_analyzers
-- List source files — list_files_from_binlog
+You have access to MCP tools from BinlogInsights that can:
+- Build overview — binlog_overview (start here)
+- Get errors and warnings — binlog_errors, binlog_warnings
+- Inspect MSBuild properties — binlog_properties
+- Trace import chains — binlog_imports
+- Check items (PackageReference, Compile, etc.) — binlog_items, binlog_item_types
+- NuGet restore diagnostics — binlog_nuget
+- Compiler command line — binlog_compiler
+- Free-text search — binlog_search
+- List projects — binlog_projects
+- Effective project XML — binlog_preprocess
+- Compare two builds — binlog_compare
+- Performance: expensive projects — binlog_expensive_projects, binlog_project_target_times
+- Performance: expensive targets — binlog_expensive_targets, binlog_search_targets, binlog_project_targets
+- Performance: expensive tasks — binlog_expensive_tasks, binlog_search_tasks, binlog_tasks_in_target, binlog_task_details
+- Roslyn analyzer performance — binlog_expensive_analyzers
+- Evaluations — binlog_evaluations, binlog_evaluation_global_properties, binlog_evaluation_properties
+- Embedded source files — binlog_list_files, binlog_get_file
 
 When answering questions:
-1. Call load_binlog ONCE at the start with the full binlog path
-2. Use the available binlog MCP tools to get concrete data
+1. Use binlog_overview first to understand the build status
+2. Use the available BinlogInsights MCP tools to get concrete data
 3. Reference specific file paths, line numbers, and error codes
 4. Explain MSBuild concepts when relevant (targets, properties, items, imports)
 5. Suggest actionable fixes for build errors
@@ -63,26 +71,26 @@ Always provide the EXACT MSBuild property or command-line flag to use, and WHERE
 Common MSBuild node types: Build, Project, Target, Task, Message, Warning, Error, Property, Item, Import, ProjectEvaluation.`;
 
 const COMMAND_PROMPTS: Record<string, string> = {
-    errors: 'Get all build errors and warnings from the binlog. Show error codes, file paths, line numbers, and messages. Group by project. Suggest fixes for each error.',
+    errors: 'Get all build errors and warnings from the binlog. Use binlog_errors and binlog_warnings. Show error codes, file paths, line numbers, and messages. Group by project. Suggest fixes for each error.',
     timeline: 'Analyze the build timeline and performance. Follow these steps:\n' +
-        '1. Call get_expensive_targets (top 10) and get_expensive_tasks (top 10) to find bottlenecks\n' +
-        '2. Call get_project_build_times to see per-project breakdown\n' +
-        '3. Call get_expensive_analyzers to check if Roslyn analyzers are a bottleneck\n' +
+        '1. Call binlog_expensive_targets and binlog_expensive_tasks to find bottlenecks\n' +
+        '2. Call binlog_expensive_projects to see per-project breakdown\n' +
+        '3. Call binlog_expensive_analyzers to check if Roslyn analyzers are a bottleneck\n' +
         '4. For EACH slow item, provide a SPECIFIC actionable fix with the exact MSBuild property/flag to use and where to add it\n' +
         '5. Categorize suggestions by impact: 🔴 High Impact (>10% of build time), 🟡 Medium Impact (2-10%), 🟢 Low Impact (<2%)\n' +
         '6. End with a prioritized action plan: "Do X first for biggest improvement, then Y, then Z"\n' +
         '7. If parallel build is not fully utilized, suggest /maxcpucount and /graph mode',
-    targets: 'List the MSBuild targets that were executed. Show their execution order, duration, and dependencies. Highlight any targets that failed.',
-    summary: 'Provide a comprehensive build summary: overall result, duration, number of projects, error/warning counts, key properties, and configuration. Highlight anything unusual.',
+    targets: 'List the MSBuild targets that were executed using binlog_expensive_targets. Show their execution order, duration, and dependencies. Highlight any targets that failed.',
+    summary: 'Provide a comprehensive build summary using binlog_overview: overall result, duration, number of projects, error/warning counts, key properties, and configuration. Highlight anything unusual.',
     secrets: 'Redirect users to Structured Log Viewer for secrets scanning and redaction.',
-    compare: 'Compare ALL loaded binlogs. For EACH binlog, call get_expensive_targets (top 3) and get_diagnostics. Then produce a comparison:\n' +
+    compare: 'Compare ALL loaded binlogs using binlog_compare. For EACH binlog, also call binlog_expensive_targets and binlog_errors. Then produce a comparison:\n' +
         '1. **Build Result**: Success/failure for each\n' +
         '2. **Errors & Warnings**: New/removed diagnostics\n' +
         '3. **Performance**: Duration changes in top targets across all binlogs\n' +
         'If there are cold/warm pairs (e.g. optimized_1_cold + optimized_1_warm), highlight the incremental improvement.\n' +
         'Present as a structured table. Keep response concise.',
     perf: 'Perform a DEEP performance analysis of this build. Follow these steps:\n' +
-        '1. Call get_expensive_targets (top 15), get_expensive_tasks (top 15), get_project_build_times, and get_expensive_analyzers\n' +
+        '1. Call binlog_expensive_targets, binlog_expensive_tasks, binlog_expensive_projects, and binlog_expensive_analyzers\n' +
         '2. Calculate what percentage of total build time each item represents\n' +
         '3. Apply these SEVERITY THRESHOLDS:\n' +
         '   - RAR >5s is concerning, >15s is pathological\n' +
@@ -107,26 +115,26 @@ const COMMAND_PROMPTS: Record<string, string> = {
     incremental: 'Analyze build INCREMENTALITY — determine if this build is doing unnecessary work that could be skipped on rebuild. Follow these steps:\n' +
         '\n' +
         'STEP 1: Get target execution data\n' +
-        'Call get_expensive_targets with top_number=20. Look at the skippedCount vs executionCount for each target:\n' +
+        'Call binlog_expensive_targets with limit=20. Look at the skippedCount vs executionCount for each target:\n' +
         '  - skippedCount=0 with high executionCount → target NEVER skips, likely not incremental\n' +
         '  - skippedCount > 0 → target has some incrementality\n' +
         '  - skippedCount = executionCount → target is fully incremental (always skips when up-to-date)\n' +
         '\n' +
         'STEP 2: Search for skip/rebuild messages\n' +
-        'Call search_binlog with these queries (one at a time):\n' +
+        'Call binlog_search with these queries (one at a time):\n' +
         '  - "skipping" — finds "Skipping target X because all output files are up-to-date"\n' +
         '  - "up-to-date" — finds up-to-date check messages\n' +
         '  - "out of date" — finds targets that rebuilt because outputs were stale\n' +
         '  - "Building target" — finds explicit rebuild-reason messages\n' +
         '\n' +
         'STEP 3: Drill into specific targets\n' +
-        'For each expensive target with skippedCount=0, call search_targets_by_name to see which projects ran it and which skipped it.\n' +
-        'Call get_target_info_by_name for specific project+target to see its Inputs/Outputs configuration.\n' +
+        'For each expensive target with skippedCount=0, call binlog_search_targets to see which projects ran it and which skipped it.\n' +
+        'Call binlog_project_targets for specific project+target to see its Inputs/Outputs configuration.\n' +
         '\n' +
         'STEP 4: Produce an INCREMENTALITY REPORT with these sections:\n' +
         '\n' +
         '📊 **Incrementality Score**: Calculate = (total skipped target executions / total target executions) × 100%\n' +
-        'Use actual skippedCount and executionCount from get_expensive_targets data.\n' +
+        'Use actual skippedCount and executionCount from binlog_expensive_targets data.\n' +
         '\n' +
         '🔴 **Never Skips** (targets with skippedCount=0 and high duration):\n' +
         'For each, explain likely reasons and provide the EXACT fix:\n' +
@@ -216,11 +224,10 @@ export class BinlogChatParticipant {
                                   i === 0 ? '(baseline)' : `(build ${i + 1})`;
                     return `Binlog ${String.fromCharCode(65 + i)} ${label}: binlog_file="${p}"`;
                   }).join('\n') + '\n' +
-                  `Call load_binlog ONCE for each binlog_file, then call get_expensive_targets and get_diagnostics for EACH binlog_file path.`
+                  `Use binlog_compare, binlog_expensive_targets, and binlog_errors for EACH binlog_file path.`
                 : `The binlog file path is: ${this.binlogPaths[0]}\n` +
-                  `FIRST call load_binlog with binlog_file="${this.binlogPaths[0]}". ` +
-                  `Then call analysis tools with binlog_file="${this.binlogPaths[0]}" (the full absolute path). ` +
-                  `Do NOT use a relative filename.` +
+                  `Use BinlogInsights tools with binlog_file="${this.binlogPaths[0]}" (the full absolute path). ` +
+                  `Start with binlog_overview.` +
                   (this.binlogPaths.length > 1
                       ? `\nAdditional binlogs: ${this.binlogPaths.slice(1).join(', ')}`
                       : ''))
@@ -235,15 +242,15 @@ export class BinlogChatParticipant {
         // Find available MCP tools from the binlog MCP server
         const tools = vscode.lm.tools.filter(tool =>
             tool.name.includes('binlog') ||
-            tool.name.includes('baronfel') ||
-            tool.name.startsWith('baronfel_binlog_mcp')
+            tool.name.includes('binlog_insights') ||
+            tool.name.startsWith('binlog_insights_mcp')
         );
 
         if (tools.length === 0) {
             stream.markdown(
                 '⚠️ No binlog MCP tools found. The MCP server may not be running.\n\n' +
                 '**To fix:**\n' +
-                '1. Check that `baronfel.binlog.mcp` is installed: `dotnet tool list -g`\n' +
+                '1. Check that `BinlogInsights.Mcp` is installed: `dotnet tool list -g`\n' +
                 '2. Restart VS Code to reload MCP servers\n' +
                 '3. Or try the **Build Analysis** chat mode instead\n'
             );
@@ -264,9 +271,9 @@ export class BinlogChatParticipant {
         const heavyCommands = new Set(['compare', 'incremental', 'perf']);
         const useMinimalPrompt = heavyCommands.has(request.command || '');
         const systemPrompt = request.command === 'compare'
-            ? `You are an MSBuild build analysis expert. Compare binlog files using MCP tools. Call load_binlog ONCE per binlog, then use get_expensive_targets and get_diagnostics for each. Keep response concise.`
+            ? `You are an MSBuild build analysis expert. Compare binlog files using BinlogInsights MCP tools. Use binlog_compare, binlog_expensive_targets, and binlog_errors for each binlog. Keep response concise.`
             : useMinimalPrompt
-            ? `You are an MSBuild build analysis expert. Use MCP tools to analyze binlog files. Call load_binlog ONCE with the full binlog path, then use analysis tools. Every tool call MUST include the binlog_file parameter with the FULL ABSOLUTE PATH. Provide specific actionable fixes with exact MSBuild properties.`
+            ? `You are an MSBuild build analysis expert. Use BinlogInsights MCP tools to analyze binlog files. Start with binlog_overview, then use analysis tools. Every tool call MUST include the binlog_file parameter with the FULL ABSOLUTE PATH. Provide specific actionable fixes with exact MSBuild properties.`
             : SYSTEM_PROMPT;
         const includeHistory = !useMinimalPrompt;
         const messages = [
