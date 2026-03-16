@@ -80,38 +80,92 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
         lines.push('═══════════════════════════════════════════════════════');
         lines.push('');
 
-        // Projects
+        // Projects — filter out restore-phase entries and show compact summary
         try {
             const projResult = await this.mcpClient!.callTool('list_projects');
             const projData = JSON.parse(projResult.text);
             const projects = Object.entries(projData as Record<string, any>);
-            const seen = new Set<string>();
-            const unique = projects.filter(([, p]) => {
-                const f = (p as any).projectFile || '';
-                if (seen.has(f)) { return false; }
-                seen.add(f);
-                return true;
-            });
-            lines.push(`📁 PROJECTS (${unique.length})`);
-            lines.push('─────────────────────────────────────────────────────');
-            for (const [id, proj] of unique) {
+
+            // Deduplicate by project file, merging targets
+            const byFile = new Map<string, { ids: string[]; targets: Map<string, number>; totalMs: number }>();
+            for (const [id, proj] of projects) {
                 const p = proj as any;
                 const file = p.projectFile || '';
+                if (!byFile.has(file)) {
+                    byFile.set(file, { ids: [], targets: new Map(), totalMs: 0 });
+                }
+                const entry = byFile.get(file)!;
+                entry.ids.push(id);
                 const targets = p.entryTargets || {};
-                const totalMs = Object.values(targets).reduce(
-                    (sum: number, t: any) => sum + (t.durationMs || 0), 0
-                );
-                const targetNames = Object.values(targets)
-                    .map((t: any) => t.targetName)
-                    .join(', ');
-                lines.push(`  [${id}] ${file}`);
-                if (targetNames) {
-                    lines.push(`       Targets: ${targetNames}`);
+                for (const t of Object.values(targets) as any[]) {
+                    const name = t.targetName || '';
+                    const dur = t.durationMs || 0;
+                    entry.targets.set(name, (entry.targets.get(name) || 0) + dur);
+                    entry.totalMs += dur;
                 }
-                if (totalMs > 0) {
-                    lines.push(`       Duration: ${(totalMs / 1000).toFixed(1)}s`);
+            }
+
+            // Filter out restore-only entries (all targets are restore-related)
+            const isRestoreTarget = (name: string) =>
+                /restore/i.test(name) || name === '_IsProjectRestoreSupported';
+            const buildProjects = [...byFile.entries()].filter(([, info]) => {
+                if (info.targets.size === 0) { return false; }
+                const allRestore = [...info.targets.keys()].every(isRestoreTarget);
+                return !allRestore;
+            });
+
+            // Sort by duration descending
+            buildProjects.sort((a, b) => b[1].totalMs - a[1].totalMs);
+
+            lines.push(`📁 PROJECTS (${buildProjects.length})`);
+            lines.push('─────────────────────────────────────────────────────');
+
+            // Collect diagnostics for per-project error/warning counts
+            let diagsByProject: Map<string, { errors: number; warnings: number }> | undefined;
+            try {
+                const diagResult = await this.mcpClient!.callTool('get_diagnostics');
+                const diagData = JSON.parse(diagResult.text);
+                const diags = diagData.diagnostics || [];
+                diagsByProject = new Map();
+                for (const d of diags) {
+                    const f = (d.projectFile || d.file || '').replace(/\\/g, '/');
+                    const projName = f.split('/').pop()?.toLowerCase() || '';
+                    if (!diagsByProject.has(projName)) {
+                        diagsByProject.set(projName, { errors: 0, warnings: 0 });
+                    }
+                    const counts = diagsByProject.get(projName)!;
+                    if (/error/i.test(d.severity || '')) { counts.errors++; }
+                    else if (/warn/i.test(d.severity || '')) { counts.warnings++; }
                 }
-                lines.push('');
+            } catch { /* non-fatal */ }
+
+            for (const [file, info] of buildProjects) {
+                const name = file.split(/[/\\]/).pop() || file;
+                const durStr = info.totalMs >= 1000
+                    ? `${(info.totalMs / 1000).toFixed(1)}s`
+                    : info.totalMs >= 100 ? `${info.totalMs}ms` : '';
+
+                // Build target list, excluding restore targets
+                const buildTargets = [...info.targets.entries()]
+                    .filter(([t]) => !isRestoreTarget(t))
+                    .map(([t]) => t);
+
+                // Per-project diagnostics
+                const projKey = name.toLowerCase();
+                const diag = diagsByProject?.get(projKey);
+                const diagParts: string[] = [];
+                if (diag && diag.errors > 0) { diagParts.push(`${diag.errors}E`); }
+                if (diag && diag.warnings > 0) { diagParts.push(`${diag.warnings}W`); }
+                const diagStr = diagParts.length > 0 ? `  [${diagParts.join(' ')}]` : '';
+
+                const statusIcon = diag && diag.errors > 0 ? '❌' : '✅';
+                lines.push(`  ${statusIcon} ${name}${durStr ? '  ' + durStr : ''}${diagStr}`);
+                if (buildTargets.length > 0 && buildTargets[0] !== 'Build') {
+                    lines.push(`     → ${buildTargets.join(', ')}`);
+                }
+            }
+            if (buildProjects.length === 0) {
+                lines.push('  (no build projects found)');
             }
         } catch {
             lines.push('  (could not load projects)');

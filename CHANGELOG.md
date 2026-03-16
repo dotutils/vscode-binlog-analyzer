@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.2 (Preview)
+
+### New
+- **Skip Restore option in Build & Collect** — quick pick to run `--no-restore`, producing a cleaner binlog focused on compilation (skips noisy NuGet restore entries)
+- **Improved summary view** — filters out restore-phase project entries (`_IsProjectRestoreSupported`), shows project filenames instead of full paths, per-project ✅/❌ status with error/warning counts, sorted by duration
+
 ## 0.8.1 (Preview)
 
 ### Bug Fixes

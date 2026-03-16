@@ -529,9 +529,19 @@ export function activate(context: vscode.ExtensionContext) {
             if (!binlogName) { return; }
             const safeName = binlogName.endsWith('.binlog') ? binlogName : `${binlogName}.binlog`;
 
+            const skipRestore = await vscode.window.showQuickPick(
+                [
+                    { label: 'Build with Restore (default)', value: false, description: 'Runs NuGet restore before building' },
+                    { label: 'Build without Restore', value: true, description: 'Skips restore — produces a cleaner binlog focused on compilation' },
+                ],
+                { placeHolder: 'Skip NuGet restore? (Restore adds noise to the binlog; skip it if packages are already restored)' },
+            );
+            if (!skipRestore) { return; }
+
             const binlogPath = path.join(wsFolder, safeName);
             const buildArg = buildTarget ? `"${buildTarget}"` : '';
-            const cmd = `dotnet build ${buildArg} /bl:"${binlogPath}"`;
+            const noRestoreFlag = skipRestore.value ? ' --no-restore' : '';
+            const cmd = `dotnet build ${buildArg}${noRestoreFlag} /bl:"${binlogPath}"`;
 
             const terminal = vscode.window.createTerminal({ name: 'Build & Collect Binlog', cwd: wsFolder });
             terminal.show();
