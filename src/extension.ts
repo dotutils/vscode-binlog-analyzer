@@ -1045,7 +1045,6 @@ async function configureMcpServer(binlogPaths: string[], config: vscode.Workspac
             type: 'stdio',
             command: customPath,
             args: binlogPaths.flatMap(p => ['--binlog', p]),
-            env: { Logging__Console__LogToStandardErrorThreshold: 'Trace' },
         };
     } else {
         let insightsExe = findBinlogInsightsTool();
@@ -1059,14 +1058,12 @@ async function configureMcpServer(binlogPaths: string[], config: vscode.Workspac
                 type: 'stdio',
                 command: insightsExe,
                 args: binlogArgs,
-                env: { Logging__Console__LogToStandardErrorThreshold: 'Trace' },
             };
         } else {
             insightsConfig = {
                 type: 'stdio',
                 command: 'dotnet',
                 args: ['tool', 'run', 'binlog-insights-mcp', '--', ...binlogArgs],
-                env: { Logging__Console__LogToStandardErrorThreshold: 'Trace' },
             };
             vscode.window.showWarningMessage(
                 'Could not find or install BinlogInsights.Mcp. Install it manually: `dotnet tool install -g BinlogInsights.Mcp`',
