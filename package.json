@@ -65,7 +65,7 @@
     "viewsWelcome": [
       {
         "view": "binlogExplorer",
-        "contents": "No binlog loaded.\n\nLoad a binlog file to get started with build analysis.\n\n[Load Binlog File](command:binlog.loadFile)\n\nOr open a .binlog from Structured Log Viewer using ✨ Open in VS Code."
+        "contents": "No binlog loaded.\n\nLoad a binlog file to get started with build analysis.\n\n[Load Binlog File](command:binlog.loadFile)\n\n[$(tools) Build & Collect Binlog](command:binlog.buildAndCollect)\n\nOr open a .binlog from Structured Log Viewer using ✨ Open in VS Code."
       }
     ],
     "keybindings": [
@@ -131,6 +131,11 @@
       {
         "command": "binlog.showErrors",
         "title": "Binlog: Show Errors"
+      },
+      {
+        "command": "binlog.buildAndCollect",
+        "title": "Binlog: Build & Collect Binlog",
+        "icon": "$(tools)"
       },
       {
         "command": "binlog.scanSecrets",

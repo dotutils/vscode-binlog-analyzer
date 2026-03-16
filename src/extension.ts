@@ -486,6 +486,88 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
+    // Command: Build & Collect Binlog
+    context.subscriptions.push(
+        vscode.commands.registerCommand('binlog.buildAndCollect', async () => {
+            telemetry.trackCommand('buildAndCollect');
+            const wsFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+            if (!wsFolder) {
+                vscode.window.showWarningMessage('No workspace folder open. Open a project folder first.');
+                return;
+            }
+
+            // Look for .sln or .csproj to build
+            const slnFiles = await vscode.workspace.findFiles('*.sln', null, 5);
+            const csprojFiles = await vscode.workspace.findFiles('**/*.csproj', '**/node_modules/**', 20);
+
+            let buildTarget: string | undefined;
+            if (slnFiles.length === 1) {
+                buildTarget = slnFiles[0].fsPath;
+            } else if (slnFiles.length > 1) {
+                const picked = await vscode.window.showQuickPick(
+                    slnFiles.map(f => ({ label: getFileName(f.fsPath), detail: f.fsPath, uri: f })),
+                    { placeHolder: 'Select a solution to build' }
+                );
+                if (!picked) { return; }
+                buildTarget = picked.uri.fsPath;
+            } else if (csprojFiles.length === 1) {
+                buildTarget = csprojFiles[0].fsPath;
+            } else if (csprojFiles.length > 1) {
+                const picked = await vscode.window.showQuickPick(
+                    csprojFiles.map(f => ({ label: getFileName(f.fsPath), detail: f.fsPath, uri: f })),
+                    { placeHolder: 'Select a project to build' }
+                );
+                if (!picked) { return; }
+                buildTarget = picked.uri.fsPath;
+            }
+
+            const binlogName = await vscode.window.showInputBox({
+                prompt: 'Binlog file name',
+                value: 'msbuild.binlog',
+                valueSelection: [0, 7], // select "msbuild" part for easy renaming
+            });
+            if (!binlogName) { return; }
+            const safeName = binlogName.endsWith('.binlog') ? binlogName : `${binlogName}.binlog`;
+
+            const binlogPath = path.join(wsFolder, safeName);
+            const buildArg = buildTarget ? `"${buildTarget}"` : '';
+            const cmd = `dotnet build ${buildArg} /bl:"${binlogPath}"`;
+
+            const terminal = vscode.window.createTerminal({ name: 'Build & Collect Binlog', cwd: wsFolder });
+            terminal.show();
+            terminal.sendText(cmd);
+
+            // Wait for the terminal/build to finish, then auto-load the binlog
+            const disposable = vscode.window.onDidCloseTerminal((closedTerminal) => {
+                if (closedTerminal === terminal) {
+                    disposable.dispose();
+                    setTimeout(() => {
+                        if (fs.existsSync(binlogPath)) {
+                            handleBinlogOpen([binlogPath], context);
+                        } else {
+                            vscode.window.showWarningMessage(`Binlog not found at ${binlogPath}. The build may have failed.`);
+                        }
+                    }, 500);
+                }
+            });
+
+            // Also auto-load if user doesn't close terminal — poll for build completion
+            const startTime = Date.now();
+            const pollInterval = setInterval(() => {
+                if (Date.now() - startTime > 600000) { clearInterval(pollInterval); return; }
+                try {
+                    const stat = fs.statSync(binlogPath);
+                    // File exists and hasn't been modified in the last 3 seconds — build likely done
+                    if (Date.now() - stat.mtimeMs > 3000 && stat.size > 0) {
+                        clearInterval(pollInterval);
+                        disposable.dispose();
+                        handleBinlogOpen([binlogPath], context);
+                    }
+                } catch { /* file doesn't exist yet */ }
+            }, 5000);
+        })
+    );
+
     // Command: Scan for Secrets
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.scanSecrets', async () => {
@@ -560,43 +642,32 @@ export function activate(context: vscode.ExtensionContext) {
     registerCodeLensProvider(context);
 
     // Auto-load binlogs from activeBinlogs setting (written by Structured Log Viewer)
-    // or from globalState keyed by workspace URI (survives workspace folder changes)
     const config = vscode.workspace.getConfiguration('binlogAnalyzer');
     const savedBinlogs = config.get<string[]>('activeBinlogs', []);
-    const persistedBinlogs = context.globalState.get<string[]>(binlogStateKey(), []);
 
     // Migration: clear old un-keyed globalState to prevent cross-workspace bleed
     if (context.globalState.get<string[]>('binlog.loadedPaths')) {
         context.globalState.update('binlog.loadedPaths', undefined);
     }
 
-    // Prefer activeBinlogs (explicit trigger from Structured Log Viewer)
-    const binlogsToLoad = savedBinlogs.length > 0 ? savedBinlogs : persistedBinlogs;
-
-    if (binlogsToLoad.length > 0) {
-        if (savedBinlogs.length > 0) {
-            // Clear activeBinlogs setting after reading to prevent stale data
-            setTimeout(() => {
-                config.update('activeBinlogs', undefined, vscode.ConfigurationTarget.Workspace).then(() => {}, () => {});
-                config.update('activeBinlogs', undefined, vscode.ConfigurationTarget.Global).then(() => {}, () => {});
-            }, 3000);
-        }
+    if (savedBinlogs.length > 0) {
+        // Clear activeBinlogs setting after reading to prevent stale data
+        setTimeout(() => {
+            config.update('activeBinlogs', undefined, vscode.ConfigurationTarget.Workspace).then(() => {}, () => {});
+            config.update('activeBinlogs', undefined, vscode.ConfigurationTarget.Global).then(() => {}, () => {});
+        }, 3000);
 
         // Verify files still exist
-        const validBinlogs = binlogsToLoad.filter((p: string) => {
+        const validBinlogs = savedBinlogs.filter((p: string) => {
             try { return fs.existsSync(p); } catch { return false; }
         });
         if (validBinlogs.length > 0) {
             // Short delay to let URI handler claim priority if both fire
-            const fromStructuredLogViewer = savedBinlogs.length > 0;
             setTimeout(() => {
                 if (!openedViaUri) {
-                    handleBinlogOpen(validBinlogs, context, fromStructuredLogViewer);
+                    handleBinlogOpen(validBinlogs, context, true);
                 }
             }, 500);
-        } else {
-            // All paths are gone — clear globalState
-            context.globalState.update(binlogStateKey(), undefined);
         }
     }
 
