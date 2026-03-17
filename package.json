@@ -2,7 +2,7 @@
   "name": "binlog-analyzer",
   "displayName": "MSBuild Binlog Analyzer",
   "description": "Analyze MSBuild binary logs with Copilot Chat and MCP tools",
-  "version": "0.8.2",
+  "version": "0.9.0",
   "preview": true,
   "publisher": "dotutils",
   "license": "MIT",
@@ -138,14 +138,6 @@
         "icon": "$(tools)"
       },
       {
-        "command": "binlog.scanSecrets",
-        "title": "Binlog: Scan for Secrets"
-      },
-      {
-        "command": "binlog.redactSecrets",
-        "title": "Binlog: Redact Secrets"
-      },
-      {
         "command": "binlog.copyItem",
         "title": "Copy",
         "icon": "$(clippy)"
@@ -214,21 +206,6 @@
           "type": "boolean",
           "default": true,
           "description": "Show build errors as inline decorations in source files."
-        },
-        "binlogAnalyzer.redaction.autodetectCommonPatterns": {
-          "type": "boolean",
-          "default": true,
-          "description": "Automatically detect common secret patterns (API keys, connection strings, tokens) during redaction."
-        },
-        "binlogAnalyzer.redaction.autodetectUsername": {
-          "type": "boolean",
-          "default": true,
-          "description": "Detect and redact username occurrences during redaction."
-        },
-        "binlogAnalyzer.redaction.processEmbeddedFiles": {
-          "type": "boolean",
-          "default": true,
-          "description": "Also redact secrets inside embedded source files in the binlog."
         }
       }
     },

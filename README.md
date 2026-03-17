@@ -10,7 +10,7 @@ Analyze MSBuild binary logs (`.binlog`) with **GitHub Copilot Chat** and **MCP t
 ## Quick Start
 
 1. Install this extension (requires **VS Code 1.99+** with **GitHub Copilot** and **.NET SDK**)
-2. Open a `.binlog` — via **Binlog: Load File** (`Ctrl+Shift+P`) or from [Structured Log Viewer](https://github.com/KirillOsenkov/MSBuildStructuredLog) → **Open in VS Code**
+2. Open a `.binlog` — via **Binlog: Load File** (`Ctrl+Shift+P`), **Build & Collect Binlog**, or from [Structured Log Viewer](https://github.com/KirillOsenkov/MSBuildStructuredLog) → **Open in VS Code**
 3. Use `@binlog` in Copilot Chat:
 
 ```
@@ -27,11 +27,14 @@ The [BinlogInsights.Mcp](https://www.nuget.org/packages/BinlogInsights.Mcp) serv
 |---------|-------------|
 | **@binlog Chat** | Ask Copilot about errors, performance, targets, imports, NuGet issues |
 | **Slash Commands** | `/errors` `/summary` `/perf` `/timeline` `/targets` `/incremental` `/compare` `/secrets` |
+| **Build & Collect** | Build a project and capture a `.binlog` in one step (with optional `--no-restore`) |
 | **Binlog Explorer** | Sidebar tree: projects, errors, warnings, performance, actions |
-| **Problems Panel** | Build diagnostics as native VS Code errors/warnings |
+| **Build Timeline** | Visual bar charts of target/task durations and project build times |
+| **Optimize Build** | Multi-step wizard: pick optimizations, Copilot applies changes, verify with A/B comparison |
+| **Problems Panel** | Build diagnostics as native VS Code errors/warnings with per-project CodeLens |
 | **Fix All Issues** | One-click Copilot agent to fix all build warnings/errors |
 | **Multi-Binlog** | Load and compare multiple binlogs |
-| **Secrets** | `/secrets` guides you to redact credentials via [Structured Log Viewer](https://msbuildlog.com/) |
+| **Secrets** | `/secrets` guides you to scan and redact credentials via [Structured Log Viewer](https://msbuildlog.com/) |
 
 ## Configuration
 

@@ -100,10 +100,11 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             { location: { viewId: 'binlogExplorer' }, },
             async () => {
                 const calls = [
-                    { tool: 'list_projects', args: {}, cache: 'projects' as const },
-                    { tool: 'get_diagnostics', args: {}, cache: 'diagnostics' as const },
-                    { tool: 'get_expensive_targets', args: { top_number: 10 }, cache: 'targets' as const },
-                    { tool: 'get_expensive_tasks', args: { top_number: 10 }, cache: 'tasks' as const },
+                    { tool: 'binlog_projects', args: {}, cache: 'projects' as const },
+                    { tool: 'binlog_errors', args: {}, cache: 'errors' as const },
+                    { tool: 'binlog_warnings', args: {}, cache: 'warnings' as const },
+                    { tool: 'binlog_expensive_targets', args: { top_number: 10 }, cache: 'targets' as const },
+                    { tool: 'binlog_expensive_tasks', args: { top_number: 10 }, cache: 'tasks' as const },
                 ];
 
                 await Promise.allSettled(calls.map(async (c) => {
@@ -112,20 +113,27 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                         const data = this.tryParseJson(result.text);
                         if (c.cache === 'projects') {
                             this.projectsCache = this.parseProjectData(data, result.text);
-                        } else if (c.cache === 'diagnostics') {
-                            this.parseDiagnosticsData(data);
-                            this._onDiagnosticsRaw.fire(data);
+                        } else if (c.cache === 'errors') {
+                            this.parseDiagnosticsItems(data, 'error');
+                        } else if (c.cache === 'warnings') {
+                            this.parseDiagnosticsItems(data, 'warning');
                         } else if (c.cache === 'targets') {
                             this.targetsCache = this.parsePerfItems(result.text, 'flame');
                         } else if (c.cache === 'tasks') {
                             this.tasksCache = this.parsePerfItems(result.text, 'tools');
                         }
                     } catch (err) {
-                        // Log error to output channel for debugging
-                        const outputChannel = vscode.window.createOutputChannel('Binlog MCP Client');
-                        outputChannel.appendLine(`prefetch ${c.tool} FAILED: ${err}`);
+                        console.warn(`prefetch ${c.tool} FAILED: ${err}`);
                     }
                 }));
+
+                // Fire diagnostics event after both errors and warnings are loaded
+                this._onDiagnosticsRaw.fire({
+                    diagnostics: [
+                        ...(this.errorsCache || []).map(d => ({ ...d, severity: 'Error' })),
+                        ...(this.warningsCache || []).map(d => ({ ...d, severity: 'Warning' })),
+                    ]
+                });
 
                 this._onDidChangeTreeData.fire(undefined);
             }
@@ -172,6 +180,39 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             seen.add(i.label);
             return true;
         });
+    }
+
+    /** Parse diagnostics from BinlogInsights binlog_errors / binlog_warnings */
+    private parseDiagnosticsItems(data: unknown, severity: 'error' | 'warning') {
+        const items: TreeNodeData[] = [];
+        const diagnostics = Array.isArray(data) ? data
+            : (data && typeof data === 'object') ? (data as any).diagnostics || (data as any).errors || (data as any).warnings || []
+            : [];
+
+        if (Array.isArray(diagnostics)) {
+            for (const d of diagnostics) {
+                const code = d.code || d.Code || '';
+                const msg = d.message || d.Message || d.text || '';
+                const file = d.file || d.File || d.projectFile || '';
+                const line = d.lineNumber || d.LineNumber || d.line || '';
+                const label = code ? `${code}: ${msg}` : String(msg);
+                const loc = file ? `${this.extractFileName(String(file))}${line ? ':' + line : ''}` : '';
+                items.push({
+                    kind: 'diagnostic',
+                    label: label.length > 120 ? label.substring(0, 117) + '...' : label,
+                    description: loc,
+                    tooltip: `${label}\n${file}${line ? ':' + line : ''}`,
+                    icon: severity === 'error' ? 'error' : 'warning',
+                    projectFile: file,
+                });
+            }
+        }
+
+        if (severity === 'error') {
+            this.errorsCache = items;
+        } else {
+            this.warningsCache = items;
+        }
     }
 
     private parseDiagnosticsData(data: unknown) {
@@ -396,7 +437,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             return this.projectsCache.map(d => this.dataToItem(d));
         }
         // Fallback if not prefetched
-        return this.callMcpTool('list_projects', {}, 'root-projects', (text) => {
+        return this.callMcpTool('binlog_projects', {}, 'root-projects', (text) => {
             const data = this.tryParseJson(text);
             this.projectsCache = this.parseProjectData(data, text);
             return this.projectsCache;
@@ -412,9 +453,10 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             return cache.map(d => this.dataToItem(d));
         }
         // Fallback if not prefetched
-        return this.callMcpTool('get_diagnostics', {}, severity === 'Error' ? 'root-errors' : 'root-warnings', (text) => {
+        const tool = severity === 'Error' ? 'binlog_errors' : 'binlog_warnings';
+        return this.callMcpTool(tool, {}, severity === 'Error' ? 'root-errors' : 'root-warnings', (text) => {
             const data = this.tryParseJson(text);
-            this.parseDiagnosticsData(data);
+            this.parseDiagnosticsItems(data, severity === 'Error' ? 'error' : 'warning');
             const items = severity === 'Error' ? this.errorsCache! : this.warningsCache!;
             return items;
         });
@@ -442,7 +484,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         if (this.targetsCache) {
             return this.targetsCache.map(d => this.dataToItem(d));
         }
-        return this.callMcpTool('get_expensive_targets', { top_number: 10 }, 'perf-targets', (text) => {
+        return this.callMcpTool('binlog_expensive_targets', { top_number: 10 }, 'perf-targets', (text) => {
             const items = this.parsePerfItems(text, 'flame');
             this.targetsCache = items;
             return items;
@@ -453,7 +495,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         if (this.tasksCache) {
             return this.tasksCache.map(d => this.dataToItem(d));
         }
-        return this.callMcpTool('get_expensive_tasks', { top_number: 10 }, 'perf-tasks', (text) => {
+        return this.callMcpTool('binlog_expensive_tasks', { top_number: 10 }, 'perf-tasks', (text) => {
             const items = this.parsePerfItems(text, 'tools');
             this.tasksCache = items;
             return items;
@@ -688,6 +730,19 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             warnings: (this.warningsCache || []).map(formatDiag),
             errorCount: this.errorsCache?.length || 0,
             warningCount: this.warningsCache?.length || 0,
+        };
+    }
+
+    /** Get diagnostic counts for a specific project file */
+    getProjectDiagnosticCounts(projectFileName: string): { errorCount: number; warningCount: number } {
+        const lowerName = projectFileName.toLowerCase();
+        const matchesProject = (d: TreeNodeData) => {
+            const file = (d.projectFile || d.description || '').toLowerCase();
+            return file.includes(lowerName);
+        };
+        return {
+            errorCount: (this.errorsCache || []).filter(matchesProject).length,
+            warningCount: (this.warningsCache || []).filter(matchesProject).length,
         };
     }
 

@@ -52,10 +52,10 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
                     content = await this.renderDiagnostics('warnings');
                     break;
                 case '/targets':
-                    content = await this.renderExpensive('get_expensive_targets', 'Slowest Targets');
+                    content = await this.renderExpensive('binlog_expensive_targets', 'Slowest Targets');
                     break;
                 case '/tasks':
-                    content = await this.renderExpensive('get_expensive_tasks', 'Slowest Tasks');
+                    content = await this.renderExpensive('binlog_expensive_tasks', 'Slowest Tasks');
                     break;
                 default:
                     if (section.startsWith('/project/')) {
@@ -82,7 +82,7 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
 
         // Projects — filter out restore-phase entries and show compact summary
         try {
-            const projResult = await this.mcpClient!.callTool('list_projects');
+            const projResult = await this.mcpClient!.callTool('binlog_projects');
             const projData = JSON.parse(projResult.text);
             const projects = Object.entries(projData as Record<string, any>);
 
@@ -123,19 +123,26 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
             // Collect diagnostics for per-project error/warning counts
             let diagsByProject: Map<string, { errors: number; warnings: number }> | undefined;
             try {
-                const diagResult = await this.mcpClient!.callTool('get_diagnostics');
-                const diagData = JSON.parse(diagResult.text);
-                const diags = diagData.diagnostics || [];
+                const [errResult, warnResult] = await Promise.allSettled([
+                    this.mcpClient!.callTool('binlog_errors'),
+                    this.mcpClient!.callTool('binlog_warnings'),
+                ]);
                 diagsByProject = new Map();
-                for (const d of diags) {
-                    const f = (d.projectFile || d.file || '').replace(/\\/g, '/');
-                    const projName = f.split('/').pop()?.toLowerCase() || '';
-                    if (!diagsByProject.has(projName)) {
-                        diagsByProject.set(projName, { errors: 0, warnings: 0 });
+                for (const result of [errResult, warnResult]) {
+                    if (result.status !== 'fulfilled') { continue; }
+                    const diagData = JSON.parse(result.value.text);
+                    const diags = Array.isArray(diagData) ? diagData : diagData.diagnostics || diagData.errors || diagData.warnings || [];
+                    const isError = result === errResult;
+                    for (const d of diags) {
+                        const f = (d.projectFile || d.file || '').replace(/\\/g, '/');
+                        const projName = f.split('/').pop()?.toLowerCase() || '';
+                        if (!diagsByProject.has(projName)) {
+                            diagsByProject.set(projName, { errors: 0, warnings: 0 });
+                        }
+                        const counts = diagsByProject.get(projName)!;
+                        if (isError) { counts.errors++; }
+                        else { counts.warnings++; }
                     }
-                    const counts = diagsByProject.get(projName)!;
-                    if (/error/i.test(d.severity || '')) { counts.errors++; }
-                    else if (/warn/i.test(d.severity || '')) { counts.warnings++; }
                 }
             } catch { /* non-fatal */ }
 
@@ -174,15 +181,22 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
 
         // Diagnostics
         try {
-            const diagResult = await this.mcpClient!.callTool('get_diagnostics');
-            const diagData = JSON.parse(diagResult.text);
-            const diags = diagData.diagnostics || [];
-            const errors = diags.filter((d: any) => /error/i.test(d.severity || ''));
-            const warnings = diags.filter((d: any) => /warn/i.test(d.severity || ''));
+            const [errResult, warnResult] = await Promise.allSettled([
+                this.mcpClient!.callTool('binlog_errors'),
+                this.mcpClient!.callTool('binlog_warnings'),
+            ]);
 
-            lines.push(`❌ ERRORS (${diagData.errorCount || errors.length})`);
+            const parseItems = (r: PromiseSettledResult<any>) => {
+                if (r.status !== 'fulfilled') { return []; }
+                const d = JSON.parse(r.value.text);
+                return Array.isArray(d) ? d : d.diagnostics || d.errors || d.warnings || [];
+            };
+            const errors = parseItems(errResult);
+            const warnings = parseItems(warnResult);
+
+            lines.push(`❌ ERRORS (${errors.length})`);
             lines.push('─────────────────────────────────────────────────────');
-            if (errors.length === 0 && (diagData.errorCount || 0) === 0) {
+            if (errors.length === 0) {
                 lines.push('  ✅ No errors');
             }
             for (const e of errors) {
@@ -196,9 +210,9 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
             }
             lines.push('');
 
-            lines.push(`⚠️  WARNINGS (${diagData.warningCount || warnings.length})`);
+            lines.push(`⚠️  WARNINGS (${warnings.length})`);
             lines.push('─────────────────────────────────────────────────────');
-            if (warnings.length === 0 && (diagData.warningCount || 0) === 0) {
+            if (warnings.length === 0) {
                 lines.push('  ✅ No warnings');
             }
             for (const w of warnings) {
@@ -217,7 +231,7 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
 
         // Performance
         try {
-            const targetsResult = await this.mcpClient!.callTool('get_expensive_targets', { top_number: 10 });
+            const targetsResult = await this.mcpClient!.callTool('binlog_expensive_targets', { top_number: 10 });
             const targetsData = JSON.parse(targetsResult.text);
             lines.push('🔥 SLOWEST TARGETS');
             lines.push('─────────────────────────────────────────────────────');
@@ -233,7 +247,7 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
         lines.push('');
 
         try {
-            const tasksResult = await this.mcpClient!.callTool('get_expensive_tasks', { top_number: 10 });
+            const tasksResult = await this.mcpClient!.callTool('binlog_expensive_tasks', { top_number: 10 });
             const tasksData = JSON.parse(tasksResult.text);
             lines.push('🔧 SLOWEST TASKS');
             lines.push('─────────────────────────────────────────────────────');
@@ -264,8 +278,7 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
 
         // Get project info from list_projects
         try {
-            const projResult = await this.mcpClient!.callTool('list_projects');
-            const projData = JSON.parse(projResult.text);
+            const projResult = await this.mcpClient!.callTool('binlog_projects');            const projData = JSON.parse(projResult.text);
             const project = projData[projectId];
             if (project) {
                 const file = project.projectFile || '';
@@ -295,7 +308,7 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
 
         // Get project build time
         try {
-            const buildTimeResult = await this.mcpClient!.callTool('get_project_build_time', {
+            const buildTimeResult = await this.mcpClient!.callTool('binlog_expensive_projects', {
                 project_path: projectFile,
             });
             const buildTimeData = JSON.parse(buildTimeResult.text);
@@ -309,17 +322,27 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
 
         // Get diagnostics and filter for this project
         try {
-            const diagResult = await this.mcpClient!.callTool('get_diagnostics');
-            const diagData = JSON.parse(diagResult.text);
-            const diags = diagData.diagnostics || [];
-            const projectDiags = diags.filter((d: any) => {
+            const [errResult, warnResult] = await Promise.allSettled([
+                this.mcpClient!.callTool('binlog_errors'),
+                this.mcpClient!.callTool('binlog_warnings'),
+            ]);
+
+            const parseItems = (r: PromiseSettledResult<any>) => {
+                if (r.status !== 'fulfilled') { return []; }
+                const d = JSON.parse(r.value.text);
+                return Array.isArray(d) ? d : d.diagnostics || d.errors || d.warnings || [];
+            };
+
+            const allErrors = parseItems(errResult);
+            const allWarnings = parseItems(warnResult);
+
+            const matchesProject = (d: any) => {
                 const f = (d.file || d.File || d.projectFile || '').toLowerCase();
                 return f.includes(projectFile.toLowerCase()) ||
                     f.includes(projectFile.split(/[/\\]/).pop()?.toLowerCase() || '');
-            });
-
-            const errors = projectDiags.filter((d: any) => /error/i.test(d.severity || ''));
-            const warnings = projectDiags.filter((d: any) => /warn/i.test(d.severity || ''));
+            };
+            const errors = allErrors.filter(matchesProject);
+            const warnings = allWarnings.filter(matchesProject);
 
             if (errors.length > 0) {
                 lines.push(`❌ ERRORS (${errors.length})`);
@@ -366,12 +389,13 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
     }
 
     private async renderProjects(): Promise<string> {
-        const result = await this.mcpClient!.callTool('list_projects');
+        const result = await this.mcpClient!.callTool('binlog_projects');
         return this.formatSection('PROJECTS', result.text);
     }
 
     private async renderDiagnostics(type: 'errors' | 'warnings'): Promise<string> {
-        const result = await this.mcpClient!.callTool('get_diagnostics');
+        const tool = type === 'errors' ? 'binlog_errors' : 'binlog_warnings';
+        const result = await this.mcpClient!.callTool(tool);
         return this.formatSection(type.toUpperCase(), result.text);
     }
 

@@ -21,7 +21,6 @@ let statusBarItem: vscode.StatusBarItem | undefined;
 let extensionContext: vscode.ExtensionContext | undefined;
 let openedViaUri = false;
 let optimizeInProgress = false;
-let cachedToolExePath: string | null | undefined; // undefined = not searched yet
 let cachedInsightsExePath: string | null | undefined; // undefined = not searched yet
 let codeLensRegistered = false;
 
@@ -578,36 +577,7 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    // Command: Scan for Secrets
     context.subscriptions.push(
-        vscode.commands.registerCommand('binlog.scanSecrets', async () => {
-            telemetry.trackCommand('scanSecrets');
-            const targetPath = currentBinlogPath;
-            if (!targetPath) {
-                vscode.window.showWarningMessage('No binlog loaded. Use "Binlog: Load File" first.');
-                return;
-            }
-            await scanForSecrets(targetPath);
-        })
-    );
-
-    // Command: Redact Secrets
-    context.subscriptions.push(
-        vscode.commands.registerCommand('binlog.redactSecrets', async () => {
-            telemetry.trackCommand('redactSecrets');
-            let targetPath = currentBinlogPath;
-            if (!targetPath) {
-                const uris = await vscode.window.showOpenDialog({
-                    canSelectFiles: true,
-                    canSelectMany: false,
-                    filters: { 'Binary Logs': ['binlog'] },
-                    title: 'Select binlog to redact'
-                });
-                if (!uris || uris.length === 0) return;
-                targetPath = uris[0].fsPath;
-            }
-            await redactSecrets(targetPath);
-        }),
         vscode.commands.registerCommand('binlog.copyItem', async (treeItem?: BinlogTreeItem) => {
             // Context menu passes treeItem; keybinding doesn't — fall back to selection
             const item = treeItem || binlogTreeView?.selection?.[0];
@@ -945,7 +915,7 @@ function showGettingStarted() {
     panel.appendLine('   • @binlog /targets   — inspect MSBuild targets');
     panel.appendLine('   • @binlog /summary   — comprehensive build summary');
     panel.appendLine('   • @binlog /incremental — analyze build incrementality');
-    panel.appendLine('   • @binlog /secrets   — secrets redaction guidance');
+    panel.appendLine('   • @binlog /secrets   — secrets guidance (use Structured Log Viewer)');
     panel.appendLine('   • @binlog /compare   — compare loaded binlogs');
     panel.appendLine('');
     panel.appendLine('2. BUILD ANALYSIS MODE');
@@ -957,10 +927,9 @@ function showGettingStarted() {
     panel.appendLine('   Click any error to navigate to the source file and line.');
     panel.appendLine('');
     panel.appendLine('4. COMMANDS (Ctrl+Shift+P)');
-    panel.appendLine('   • Binlog: Load File       — open a different binlog');
-    panel.appendLine('   • Binlog: Scan for Secrets — secrets redaction guidance');
-    panel.appendLine('   • Binlog: Redact Secrets   — open in Structured Log Viewer to redact');
-    panel.appendLine('   • Binlog: Show Errors      — focus the Problems panel');
+    panel.appendLine('   • Binlog: Load File            — open a different binlog');
+    panel.appendLine('   • Binlog: Build & Collect      — build a project and capture binlog');
+    panel.appendLine('   • Binlog: Show Errors          — focus the Problems panel');
     panel.appendLine('');
     panel.appendLine('5. MULTIPLE BINLOGS');
     panel.appendLine('   • Use 📎 in the Structured Log Viewer to attach extra binlogs');
@@ -1014,7 +983,10 @@ async function startMcpClientForTree(binlogPaths: string[]) {
         binlogDocProvider?.setMcpClient(null);
     }
 
-    const toolExe = findBinlogMcpTool();
+    let toolExe = findBinlogInsightsTool();
+    if (!toolExe) {
+        toolExe = await installBinlogInsightsTool();
+    }
     if (!toolExe) {
         // Tree will show without content sections
         return;
@@ -1128,66 +1100,6 @@ async function writeUserMcpJson(serverConfig: Record<string, unknown>) {
     } catch { /* non-fatal */ }
 }
 
-async function installBinlogMcpTool(): Promise<string | null> {
-    const cp = require('child_process');
-    const result = await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: 'Installing binlog MCP server (dotnet tool)...' },
-        () => new Promise<string | null>((resolve) => {
-            cp.exec('dotnet tool install -g baronfel.binlog.mcp', { timeout: 60000 }, (err: Error | null, stdout: string, stderr: string) => {
-                if (err) {
-                    cp.exec('dotnet tool update -g baronfel.binlog.mcp', { timeout: 60000 }, (err2: Error | null) => {
-                        const exe = findBinlogMcpTool();
-                        telemetry.trackToolInstall(!!exe);
-                        resolve(exe);
-                    });
-                } else {
-                    const exe = findBinlogMcpTool();
-                    telemetry.trackToolInstall(!!exe);
-                    if (exe) {
-                        vscode.window.showInformationMessage('✅ binlog.mcp MCP server installed successfully.');
-                    }
-                    resolve(exe);
-                }
-            });
-        })
-    );
-
-    return result;
-}
-
-function findBinlogMcpTool(): string | null {
-    // Return cached result if available (avoid repeated PATH scans)
-    if (cachedToolExePath !== undefined) { return cachedToolExePath; }
-
-    const homeDir = os.homedir();
-    const isWindows = process.platform === 'win32';
-    const exeName = isWindows ? 'binlog.mcp.exe' : 'binlog.mcp';
-
-    // Global dotnet tools are installed in ~/.dotnet/tools/
-    const globalToolPath = path.join(homeDir, '.dotnet', 'tools', exeName);
-    if (fs.existsSync(globalToolPath)) {
-        cachedToolExePath = globalToolPath;
-        return globalToolPath;
-    }
-
-    // Also check PATH
-    const pathDirs = (process.env.PATH || '').split(path.delimiter);
-    for (const dir of pathDirs) {
-        const candidate = path.join(dir, exeName);
-        try {
-            if (fs.existsSync(candidate)) {
-                cachedToolExePath = candidate;
-                return candidate;
-            }
-        } catch {
-            // ignore permission errors
-        }
-    }
-
-    cachedToolExePath = null;
-    return null;
-}
-
 function findBinlogInsightsTool(): string | null {
     if (cachedInsightsExePath !== undefined) { return cachedInsightsExePath; }
 
@@ -1251,115 +1163,6 @@ function getFileName(filePath: string): string {
     return filePath.split(/[/\\]/).pop() || filePath;
 }
 
-async function scanForSecrets(binlogPath: string) {
-    // Use the BinlogTool CLI to scan for secrets.
-    // The StructuredLogger.Utils SecretsSearch scans the binlog's StringTable
-    // for common secrets, explicit secrets, and usernames.
-    const { exec } = require('child_process');
-    await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: 'Scanning binlog for secrets...' },
-        () => new Promise<void>((resolve) => {
-            // Use the MCP server's search capability via $secret keyword
-            // For now, show guidance to use Copilot Chat with the MCP tools
-            vscode.window.showInformationMessage(
-                'To scan for secrets, ask Copilot Chat: "@binlog /secrets" or search "$secret" in the Structured Log Viewer.',
-                'Open Chat'
-            ).then(selection => {
-                if (selection === 'Open Chat') {
-                    vscode.commands.executeCommand('workbench.action.chat.open');
-                }
-            });
-            resolve();
-        })
-    );
-}
-
-async function redactSecrets(binlogPath: string) {
-    const config = vscode.workspace.getConfiguration('binlogAnalyzer');
-    const autodetectCommon = config.get<boolean>('redaction.autodetectCommonPatterns', true);
-    const autodetectUsername = config.get<boolean>('redaction.autodetectUsername', true);
-    const processEmbedded = config.get<boolean>('redaction.processEmbeddedFiles', true);
-
-    // Ask for additional tokens to redact
-    const extraTokens = await vscode.window.showInputBox({
-        prompt: 'Enter additional secrets to redact (comma-separated), or leave empty for auto-detection only',
-        placeHolder: 'my-api-key, secret-token, ...',
-    });
-
-    if (extraTokens === undefined) return; // Cancelled
-
-    // Ask for output path
-    const inputFileName = getFileName(binlogPath);
-    const defaultOutput = binlogPath.replace(/\.binlog$/i, '.redacted.binlog');
-
-    const outputUri = await vscode.window.showSaveDialog({
-        defaultUri: vscode.Uri.file(defaultOutput),
-        filters: { 'Binary Logs': ['binlog'] },
-        title: 'Save redacted binlog as'
-    });
-
-    if (!outputUri) return;
-
-    // Build the BinlogTool redact command
-    const args = ['tool', 'run', 'binlogtool', '--', 'redact'];
-    args.push('--input', binlogPath);
-    args.push('--output', outputUri.fsPath);
-
-    if (!processEmbedded) {
-        args.push('--skip-embedded-files');
-    }
-
-    if (extraTokens.trim()) {
-        for (const token of extraTokens.split(',').map(t => t.trim()).filter(Boolean)) {
-            args.push('--token', token);
-        }
-    }
-
-    if (!autodetectCommon) {
-        args.push('--no-autodetect-common');
-    }
-    if (!autodetectUsername) {
-        args.push('--no-autodetect-username');
-    }
-
-    await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: 'Redacting secrets from binlog...', cancellable: false },
-        () => new Promise<void>((resolve, reject) => {
-            const cp = require('child_process');
-            const proc = cp.spawn('dotnet', args, { shell: true });
-
-            let stderr = '';
-            proc.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
-
-            proc.on('close', (code: number) => {
-                if (code === 0) {
-                    vscode.window.showInformationMessage(
-                        `Secrets redacted successfully: ${getFileName(outputUri.fsPath)}`,
-                        'Open Redacted'
-                    ).then(selection => {
-                        if (selection === 'Open Redacted') {
-                            handleBinlogOpen([outputUri.fsPath], {} as vscode.ExtensionContext);
-                        }
-                    });
-                    resolve();
-                } else {
-                    vscode.window.showErrorMessage(
-                        `Redaction failed (exit code ${code}). Make sure 'binlogtool' is installed: dotnet tool install -g BinlogTool\n\n${stderr}`
-                    );
-                    reject(new Error(stderr));
-                }
-            });
-
-            proc.on('error', (err: Error) => {
-                vscode.window.showErrorMessage(
-                    `Failed to run redaction. Make sure 'dotnet' is in PATH.\n\n${err.message}`
-                );
-                reject(err);
-            });
-        })
-    );
-}
-
 export function deactivate() {
     diagnosticsProvider?.dispose();
     mcpClient?.dispose();
@@ -1379,8 +1182,8 @@ async function optimizeBuildFlow(context: vscode.ExtensionContext) {
 
     // Step 1: Get perf data from MCP
     const [targetsResult, tasksResult] = await Promise.allSettled([
-        mcpClient.callTool('get_expensive_targets', { top_number: 10 }),
-        mcpClient.callTool('get_expensive_tasks', { top_number: 10 }),
+        mcpClient.callTool('binlog_expensive_targets', { top_number: 10 }),
+        mcpClient.callTool('binlog_expensive_tasks', { top_number: 10 }),
     ]);
 
     const targetsText = targetsResult.status === 'fulfilled' ? targetsResult.value.text : '';
@@ -1647,9 +1450,9 @@ async function showTimelineWebview(context: vscode.ExtensionContext) {
 
     try {
         const [targetsResult, tasksResult, projectsResult] = await Promise.all([
-            mcpClient.callTool('get_expensive_targets', { top_number: 15 }),
-            mcpClient.callTool('get_expensive_tasks', { top_number: 15 }),
-            mcpClient.callTool('list_projects'),
+            mcpClient.callTool('binlog_expensive_targets', { top_number: 15 }),
+            mcpClient.callTool('binlog_expensive_tasks', { top_number: 15 }),
+            mcpClient.callTool('binlog_projects'),
         ]);
         targetsData = JSON.parse(targetsResult.text);
         tasksData = JSON.parse(tasksResult.text);
@@ -1824,8 +1627,8 @@ async function showComparisonTimelineWebview(context: vscode.ExtensionContext) {
 
     async function fetchPerfData(binlogPath: string): Promise<PerfData> {
         const [targetsResult, tasksResult] = await Promise.all([
-            mcpClient!.callTool('get_expensive_targets', { top_number: 15, binlog_file: binlogPath }),
-            mcpClient!.callTool('get_expensive_tasks', { top_number: 15, binlog_file: binlogPath }),
+            mcpClient!.callTool('binlog_expensive_targets', { top_number: 15, binlog_file: binlogPath }),
+            mcpClient!.callTool('binlog_expensive_tasks', { top_number: 15, binlog_file: binlogPath }),
         ]);
         return {
             targets: JSON.parse(targetsResult.text),
@@ -2042,7 +1845,6 @@ class BinlogCodeLensProvider implements vscode.CodeLensProvider {
         if (!treeDataProvider || !mcpClient) { return []; }
 
         const fileName = document.uri.fsPath.split(/[/\\]/).pop() || '';
-        const summary = treeDataProvider.getDiagnosticsSummary();
         const projectFiles = treeDataProvider.getProjectFiles();
 
         // Check if this file is a project in the loaded binlog
@@ -2065,10 +1867,10 @@ class BinlogCodeLensProvider implements vscode.CodeLensProvider {
         const range = new vscode.Range(projectLine, 0, projectLine, 0);
         const lenses: vscode.CodeLens[] = [];
 
-        // Build time from tree data
-        const diagSummary = summary;
-        const errorCount = diagSummary.errorCount;
-        const warnCount = diagSummary.warningCount;
+        // Per-project diagnostic counts
+        const projCounts = treeDataProvider.getProjectDiagnosticCounts(fileName);
+        const errorCount = projCounts.errorCount;
+        const warnCount = projCounts.warningCount;
 
         const parts: string[] = [];
         if (errorCount > 0) { parts.push(`$(error) ${errorCount} errors`); }

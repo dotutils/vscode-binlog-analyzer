@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.0 (Preview)
+
+### Breaking
+- **Unified on BinlogInsights.Mcp** — both the tree view and Copilot Chat now use [BinlogInsights.Mcp](https://www.nuget.org/packages/BinlogInsights.Mcp). The `baronfel.binlog.mcp` dependency is no longer required.
+- **Removed secrets commands** — `Binlog: Scan for Secrets` and `Binlog: Redact Secrets` commands removed (were non-functional stubs). Use `@binlog /secrets` for guidance on using Structured Log Viewer for secrets scanning and redaction.
+- **Removed redaction settings** — `binlogAnalyzer.redaction.*` settings removed (depended on uninstalled BinlogTool).
+
+### New
+- **Per-project CodeLens diagnostics** — error/warning counts on `.csproj` files now show counts for that specific project, not global totals.
+
+### Fixed
+- **Removed stdout logging workaround** — BinlogInsights.Mcp 0.2.0 fixes the console logging bug; `Logging__Console__LogToStandardErrorThreshold` env var no longer needed.
+
 ## 0.8.2 (Preview)
 
 ### New

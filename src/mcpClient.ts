@@ -13,7 +13,7 @@ function log(msg: string) {
 
 /**
  * Minimal MCP (Model Context Protocol) client that communicates with
- * binlog.mcp.exe over stdio using JSON-RPC 2.0 with newline-delimited JSON.
+ * BinlogInsights.Mcp over stdio using JSON-RPC 2.0 with newline-delimited JSON.
  */
 export class McpClient extends EventEmitter {
     private proc: ChildProcess | null = null;
@@ -21,7 +21,6 @@ export class McpClient extends EventEmitter {
     private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
     private buffer = '';
     private initialized = false;
-    private loadedBinlogs = new Set<string>();
 
     constructor(
         private readonly exePath: string,
@@ -69,69 +68,16 @@ export class McpClient extends EventEmitter {
         // Send initialized notification
         this.sendNotification('notifications/initialized', {});
         this.initialized = true;
-
-        // Pre-load all binlogs
-        // First, discover the correct parameter name for load_binlog
-        let loadParamName = 'binlog_file'; // default
-        try {
-            const tools = await this.listTools();
-            log(`Available tools: ${tools.map(t => t.name).join(', ')}`);
-            const loadTool = tools.find(t => t.name === 'load_binlog');
-            if (loadTool?.inputSchema?.properties) {
-                const props = Object.keys(loadTool.inputSchema.properties);
-                log(`load_binlog params: ${props.join(', ')}`);
-                if (props.length > 0) {
-                    loadParamName = props[0]; // use whatever the first (likely only) param is
-                }
-            }
-        } catch (err) {
-            log(`listTools failed: ${err}`);
-        }
-
-        for (const binlogPath of this.binlogPaths) {
-            log(`Loading binlog with param '${loadParamName}': ${binlogPath}`);
-            const loadResult = await this.sendRequest('tools/call', {
-                name: 'load_binlog',
-                arguments: { [loadParamName]: binlogPath },
-            }) as { content?: Array<{ type: string; text?: string }>; isError?: boolean };
-            log(`load_binlog result: ${JSON.stringify(loadResult).substring(0, 300)}`);
-
-            if (loadResult.isError) {
-                // Try alternative param names
-                const altNames = ['binlog_file', 'path', 'file', 'binlogPath', 'filePath']
-                    .filter(n => n !== loadParamName);
-                let loaded = false;
-                for (const alt of altNames) {
-                    log(`Retrying load_binlog with param '${alt}'`);
-                    const retryResult = await this.sendRequest('tools/call', {
-                        name: 'load_binlog',
-                        arguments: { [alt]: binlogPath },
-                    }) as { content?: Array<{ type: string; text?: string }>; isError?: boolean };
-                    log(`load_binlog (${alt}) result: ${JSON.stringify(retryResult).substring(0, 300)}`);
-                    if (!retryResult.isError) {
-                        this.loadedBinlogs.add(binlogPath);
-                        loadParamName = alt; // remember working param for next binlog
-                        loaded = true;
-                        break;
-                    }
-                }
-                if (!loaded) {
-                    log(`FAILED to load binlog with any parameter name: ${binlogPath}`);
-                }
-            } else {
-                this.loadedBinlogs.add(binlogPath);
-            }
-        }
-        log(`Loaded binlogs: ${[...this.loadedBinlogs].join(', ') || 'NONE'}`);
+        log(`MCP server initialized. Binlogs passed via --binlog args: ${this.binlogPaths.join(', ')}`);
     }
 
     async callTool(name: string, args: Record<string, unknown> = {}): Promise<ToolResult> {
         if (!this.initialized) {
             throw new Error('MCP client not initialized');
         }
-        // Auto-inject binlog_file if not provided and we have loaded binlogs
-        if (!args.binlog_file && this.loadedBinlogs.size > 0) {
-            args.binlog_file = [...this.loadedBinlogs][0];
+        // Auto-inject binlog_file if not provided
+        if (!args.binlog_file && this.binlogPaths.length > 0) {
+            args.binlog_file = this.binlogPaths[0];
         }
         log(`callTool: ${name} args=${JSON.stringify(args).substring(0, 200)}`);
         const result = await this.sendRequest('tools/call', { name, arguments: args }) as {
@@ -168,7 +114,6 @@ export class McpClient extends EventEmitter {
         }
         this.initialized = false;
         this.pending.clear();
-        this.loadedBinlogs.clear();
     }
 
     private sendRequest(method: string, params: unknown): Promise<unknown> {
