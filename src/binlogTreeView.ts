@@ -142,7 +142,31 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
 
     private parseProjectData(data: unknown, text: string): TreeNodeData[] {
         const items: TreeNodeData[] = [];
-        if (data && typeof data === 'object' && !Array.isArray(data)) {
+
+        if (Array.isArray(data)) {
+            // BinlogInsights format: [{ fullPath, isLegacy }, ...]
+            for (let i = 0; i < data.length; i++) {
+                const proj = data[i];
+                const file = proj.fullPath || proj.projectFile || '';
+                const filePath = String(file);
+                const dirPath = this.extractDirectory(filePath);
+                items.push({
+                    kind: 'project',
+                    label: this.extractFileName(filePath),
+                    description: dirPath || undefined,
+                    tooltip: `${file}\n\nClick to view project details`,
+                    icon: 'package',
+                    projectFile: filePath,
+                    projectId: String(i),
+                    command: {
+                        command: 'binlog.openProjectDetails',
+                        title: 'View Project Details',
+                        arguments: [String(i), filePath, {}],
+                    },
+                });
+            }
+        } else if (data && typeof data === 'object') {
+            // baronfel format: { "id": { projectFile, entryTargets }, ... }
             for (const [id, proj] of Object.entries(data as Record<string, any>)) {
                 const file = proj.projectFile || proj.ProjectFile || '';
                 const targets = proj.entryTargets || {};

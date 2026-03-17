@@ -84,40 +84,29 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
         try {
             const projResult = await this.mcpClient!.callTool('binlog_projects');
             const projData = JSON.parse(projResult.text);
-            const projects = Object.entries(projData as Record<string, any>);
 
-            // Deduplicate by project file, merging targets
-            const byFile = new Map<string, { ids: string[]; targets: Map<string, number>; totalMs: number }>();
-            for (const [id, proj] of projects) {
-                const p = proj as any;
-                const file = p.projectFile || '';
-                if (!byFile.has(file)) {
-                    byFile.set(file, { ids: [], targets: new Map(), totalMs: 0 });
-                }
-                const entry = byFile.get(file)!;
-                entry.ids.push(id);
-                const targets = p.entryTargets || {};
-                for (const t of Object.values(targets) as any[]) {
-                    const name = t.targetName || '';
-                    const dur = t.durationMs || 0;
-                    entry.targets.set(name, (entry.targets.get(name) || 0) + dur);
-                    entry.totalMs += dur;
-                }
+            // Handle both formats: array (BinlogInsights) and object (baronfel)
+            let projectFiles: string[] = [];
+            if (Array.isArray(projData)) {
+                // BinlogInsights: [{ fullPath, isLegacy }, ...]
+                projectFiles = projData.map((p: any) => p.fullPath || '').filter(Boolean);
+            } else {
+                // baronfel: { "id": { projectFile, entryTargets }, ... }
+                projectFiles = Object.values(projData as Record<string, any>)
+                    .map((p: any) => p.projectFile || '')
+                    .filter(Boolean);
             }
 
-            // Filter out restore-only entries (all targets are restore-related)
-            const isRestoreTarget = (name: string) =>
-                /restore/i.test(name) || name === '_IsProjectRestoreSupported';
-            const buildProjects = [...byFile.entries()].filter(([, info]) => {
-                if (info.targets.size === 0) { return false; }
-                const allRestore = [...info.targets.keys()].every(isRestoreTarget);
-                return !allRestore;
+            // Deduplicate by filename
+            const seen = new Set<string>();
+            const uniqueFiles = projectFiles.filter(f => {
+                const name = f.split(/[/\\]/).pop()?.toLowerCase() || '';
+                if (seen.has(name)) { return false; }
+                seen.add(name);
+                return true;
             });
 
-            // Sort by duration descending
-            buildProjects.sort((a, b) => b[1].totalMs - a[1].totalMs);
-
-            lines.push(`📁 PROJECTS (${buildProjects.length})`);
+            lines.push(`📁 PROJECTS (${uniqueFiles.length})`);
             lines.push('─────────────────────────────────────────────────────');
 
             // Collect diagnostics for per-project error/warning counts
@@ -146,16 +135,8 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
                 }
             } catch { /* non-fatal */ }
 
-            for (const [file, info] of buildProjects) {
+            for (const file of uniqueFiles) {
                 const name = file.split(/[/\\]/).pop() || file;
-                const durStr = info.totalMs >= 1000
-                    ? `${(info.totalMs / 1000).toFixed(1)}s`
-                    : info.totalMs >= 100 ? `${info.totalMs}ms` : '';
-
-                // Build target list, excluding restore targets
-                const buildTargets = [...info.targets.entries()]
-                    .filter(([t]) => !isRestoreTarget(t))
-                    .map(([t]) => t);
 
                 // Per-project diagnostics
                 const projKey = name.toLowerCase();
@@ -166,13 +147,10 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
                 const diagStr = diagParts.length > 0 ? `  [${diagParts.join(' ')}]` : '';
 
                 const statusIcon = diag && diag.errors > 0 ? '❌' : '✅';
-                lines.push(`  ${statusIcon} ${name}${durStr ? '  ' + durStr : ''}${diagStr}`);
-                if (buildTargets.length > 0 && buildTargets[0] !== 'Build') {
-                    lines.push(`     → ${buildTargets.join(', ')}`);
-                }
+                lines.push(`  ${statusIcon} ${name}${diagStr}`);
             }
-            if (buildProjects.length === 0) {
-                lines.push('  (no build projects found)');
+            if (uniqueFiles.length === 0) {
+                lines.push('  (no projects found)');
             }
         } catch {
             lines.push('  (could not load projects)');
