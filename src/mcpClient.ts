@@ -49,7 +49,7 @@ export class McpClient extends EventEmitter {
         // Wait for server to start, then try handshake with quick retry
         let initialized = false;
         for (let attempt = 0; attempt < 5 && !initialized; attempt++) {
-            await new Promise(resolve => setTimeout(resolve, attempt === 0 ? 300 : 400));
+            await new Promise(resolve => setTimeout(resolve, attempt === 0 ? 100 : 300));
             try {
                 await this.sendRequest('initialize', {
                     protocolVersion: '2024-11-05',

@@ -985,10 +985,7 @@ async function startMcpClientForTree(binlogPaths: string[]) {
 
     let toolExe = findBinlogInsightsTool();
     if (!toolExe) {
-        toolExe = await installBinlogInsightsTool();
-    }
-    if (!toolExe) {
-        // Tree will show without content sections
+        // Don't block tree loading with install — configureMcpServer handles install
         return;
     }
 
@@ -1022,6 +1019,17 @@ async function configureMcpServer(binlogPaths: string[], config: vscode.Workspac
         let insightsExe = findBinlogInsightsTool();
         if (!insightsExe) {
             insightsExe = await installBinlogInsightsTool();
+            // After install, start the tree client (it skipped earlier because tool wasn't found)
+            if (insightsExe) {
+                cachedInsightsExePath = insightsExe;
+                startMcpClientForTree(binlogPaths).then(() => {
+                    treeDataProvider?.setLoading(false);
+                    updateStatusBar();
+                }).catch(() => {
+                    treeDataProvider?.setLoading(false);
+                    updateStatusBar();
+                });
+            }
         }
 
         const binlogArgs = binlogPaths.flatMap(p => ['--binlog', p]);

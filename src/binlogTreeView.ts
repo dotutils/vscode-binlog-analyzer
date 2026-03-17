@@ -13,6 +13,7 @@ type NodeKind =
     | 'root-perf'     // "Performance" section
     | 'perf-targets'  // "Slowest Targets" sub-section
     | 'perf-tasks'    // "Slowest Tasks" sub-section
+    | 'perf-analyzers' // "Slowest Analyzers" sub-section
     | 'perf-item'     // individual target/task
     | 'root-actions'  // "Actions" section
     | 'action'        // individual action
@@ -48,6 +49,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
     private warningsCache: TreeNodeData[] | null = null;
     private targetsCache: TreeNodeData[] | null = null;
     private tasksCache: TreeNodeData[] | null = null;
+    private analyzersCache: TreeNodeData[] | null = null;
     private loadingSet = new Set<NodeKind>();
 
     setBinlogPaths(paths: string[]) {
@@ -105,6 +107,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                     { tool: 'binlog_warnings', args: {}, cache: 'warnings' as const },
                     { tool: 'binlog_expensive_targets', args: { top_number: 10 }, cache: 'targets' as const },
                     { tool: 'binlog_expensive_tasks', args: { top_number: 10 }, cache: 'tasks' as const },
+                    { tool: 'binlog_expensive_analyzers', args: { top_number: 10 }, cache: 'analyzers' as const },
                 ];
 
                 await Promise.allSettled(calls.map(async (c) => {
@@ -121,6 +124,8 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                             this.targetsCache = this.parsePerfItems(result.text, 'flame');
                         } else if (c.cache === 'tasks') {
                             this.tasksCache = this.parsePerfItems(result.text, 'tools');
+                        } else if (c.cache === 'analyzers') {
+                            this.analyzersCache = this.parsePerfItems(result.text, 'microscope');
                         }
                     } catch (err) {
                         console.warn(`prefetch ${c.tool} FAILED: ${err}`);
@@ -279,6 +284,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         this.warningsCache = null;
         this.targetsCache = null;
         this.tasksCache = null;
+        this.analyzersCache = null;
     }
 
     getTreeItem(element: BinlogTreeItem): vscode.TreeItem {
@@ -430,6 +436,8 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                 return this.fetchExpensiveTargets();
             case 'perf-tasks':
                 return this.fetchExpensiveTasks();
+            case 'perf-analyzers':
+                return this.fetchExpensiveAnalyzers();
             case 'root-actions':
                 return this.getActionChildren();
             default:
@@ -501,7 +509,14 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         tasks.nodeKind = 'perf-tasks';
         tasks.iconPath = new vscode.ThemeIcon('tools');
 
-        return [targets, tasks];
+        const analyzers = new BinlogTreeItem(
+            'Slowest Analyzers',
+            vscode.TreeItemCollapsibleState.Collapsed
+        );
+        analyzers.nodeKind = 'perf-analyzers' as NodeKind;
+        analyzers.iconPath = new vscode.ThemeIcon('microscope');
+
+        return [targets, tasks, analyzers];
     }
 
     private async fetchExpensiveTargets(): Promise<BinlogTreeItem[]> {
@@ -522,6 +537,20 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         return this.callMcpTool('binlog_expensive_tasks', { top_number: 10 }, 'perf-tasks', (text) => {
             const items = this.parsePerfItems(text, 'tools');
             this.tasksCache = items;
+            return items;
+        });
+    }
+
+    private async fetchExpensiveAnalyzers(): Promise<BinlogTreeItem[]> {
+        if (this.analyzersCache) {
+            if (this.analyzersCache.length === 0) {
+                return [this.makeInfoItem('No analyzer data', 'info')];
+            }
+            return this.analyzersCache.map(d => this.dataToItem(d));
+        }
+        return this.callMcpTool('binlog_expensive_analyzers', { top_number: 10 }, 'perf-analyzers' as NodeKind, (text) => {
+            const items = this.parsePerfItems(text, 'microscope');
+            this.analyzersCache = items;
             return items;
         });
     }

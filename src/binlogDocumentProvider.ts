@@ -80,7 +80,35 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
         lines.push('═══════════════════════════════════════════════════════');
         lines.push('');
 
-        // Projects — filter out restore-phase entries and show compact summary
+        // Build overview
+        try {
+            const overviewResult = await this.mcpClient!.callTool('binlog_overview');
+            const ov = JSON.parse(overviewResult.text);
+            const status = ov.succeeded ? '✅ BUILD SUCCEEDED' : '❌ BUILD FAILED';
+            const dur = ov.duration || '';
+            // Parse "HH:MM:SS.xxx" duration to a readable format
+            const durMatch = dur.match(/(\d+):(\d+):(\d+)/);
+            let durStr = dur;
+            if (durMatch) {
+                const h = parseInt(durMatch[1]);
+                const m = parseInt(durMatch[2]);
+                const s = parseInt(durMatch[3]);
+                durStr = h > 0 ? `${h}h ${m}m ${s}s` : m > 0 ? `${m}m ${s}s` : `${s}s`;
+            }
+
+            lines.push(`${status}  ·  ${durStr}  ·  MSBuild ${ov.msBuildVersion || ''}`.trimEnd());
+            if (ov.errorCount > 0 || ov.warningCount > 0) {
+                const parts: string[] = [];
+                if (ov.errorCount > 0) { parts.push(`${ov.errorCount} error${ov.errorCount > 1 ? 's' : ''}`); }
+                if (ov.warningCount > 0) { parts.push(`${ov.warningCount} warning${ov.warningCount > 1 ? 's' : ''}`); }
+                lines.push(`  ${parts.join('  ·  ')}`);
+            }
+            lines.push('');
+        } catch {
+            // overview not available — continue without it
+        }
+
+        // Projects
         try {
             const projResult = await this.mcpClient!.callTool('binlog_projects');
             const projData = JSON.parse(projResult.text);
@@ -239,6 +267,31 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
             lines.push('  (could not load tasks)');
         }
 
+        // Analyzers
+        try {
+            const analyzersResult = await this.mcpClient!.callTool('binlog_expensive_analyzers', { top_number: 10 });
+            const analyzersData = JSON.parse(analyzersResult.text);
+            const analyzers = Array.isArray(analyzersData) ? analyzersData
+                : (analyzersData && typeof analyzersData === 'object' && !Array.isArray(analyzersData))
+                    ? Object.entries(analyzersData).map(([name, info]: [string, any]) => ({ name, ...info }))
+                    : [];
+            if (analyzers.length > 0) {
+                lines.push('');
+                lines.push('🔬 SLOWEST ANALYZERS');
+                lines.push('─────────────────────────────────────────────────────');
+                for (const a of analyzers) {
+                    const name = a.name || a.analyzerName || '';
+                    const dur = a.inclusiveDurationMs || a.totalDurationMs || a.durationMs || 0;
+                    const count = a.executionCount || a.invocationCount || 1;
+                    const durStr = dur >= 1000 ? `${(dur / 1000).toFixed(1)}s` : `${dur}ms`;
+                    const shortName = name.length > 45 ? name.substring(0, 42) + '...' : name;
+                    lines.push(`  ${shortName.padEnd(45)} ${durStr.padStart(8)}  (×${count})`);
+                }
+            }
+        } catch {
+            // No analyzer data — non-fatal
+        }
+
         lines.push('');
         lines.push('═══════════════════════════════════════════════════════');
         lines.push('  Use @binlog in Copilot Chat for deeper analysis');
@@ -249,53 +302,60 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
 
     private async renderProjectDetails(projectId: string, projectFile: string): Promise<string> {
         const lines: string[] = [];
+        const projectName = projectFile.split(/[/\\]/).pop() || projectFile;
         lines.push('═══════════════════════════════════════════════════════');
-        lines.push(`  Project: ${projectFile}`);
+        lines.push(`  Project: ${projectName}`);
         lines.push('═══════════════════════════════════════════════════════');
         lines.push('');
 
-        // Get project info from list_projects
-        try {
-            const projResult = await this.mcpClient!.callTool('binlog_projects');            const projData = JSON.parse(projResult.text);
-            const project = projData[projectId];
-            if (project) {
-                const file = project.projectFile || '';
-                lines.push(`📁 Project File: ${file}`);
-                lines.push(`🆔 Project ID: ${projectId}`);
-                lines.push('');
+        lines.push(`📁 Project File: ${projectFile}`);
+        lines.push('');
 
-                const targets = project.entryTargets || {};
-                const targetEntries = Object.entries(targets);
-                if (targetEntries.length > 0) {
-                    lines.push('🎯 ENTRY TARGETS');
-                    lines.push('─────────────────────────────────────────────────────');
-                    for (const [, t] of targetEntries) {
-                        const target = t as any;
-                        const name = target.targetName || '';
-                        const dur = target.durationMs || 0;
-                        const durStr = dur >= 1000 ? `${(dur / 1000).toFixed(1)}s` : `${dur}ms`;
-                        lines.push(`  ${name.padEnd(40)} ${durStr.padStart(8)}`);
-                    }
-                    lines.push('');
-                }
-            }
-        } catch {
-            lines.push('  (could not load project info)');
-            lines.push('');
-        }
-
-        // Get project build time
+        // Get per-project target times
         try {
-            const buildTimeResult = await this.mcpClient!.callTool('binlog_expensive_projects', {
+            const targetTimesResult = await this.mcpClient!.callTool('binlog_project_target_times', {
                 project_path: projectFile,
             });
-            const buildTimeData = JSON.parse(buildTimeResult.text);
-            lines.push('⏱️  BUILD TIME');
-            lines.push('─────────────────────────────────────────────────────');
-            lines.push(JSON.stringify(buildTimeData, null, 2));
-            lines.push('');
+            const targetData = JSON.parse(targetTimesResult.text);
+            const targets = Array.isArray(targetData) ? targetData
+                : (targetData && typeof targetData === 'object') ? Object.entries(targetData).map(([k, v]: [string, any]) => ({ name: k, ...v }))
+                : [];
+
+            if (targets.length > 0) {
+                // Calculate total build time from targets
+                const totalMs = targets.reduce((sum: number, t: any) => sum + (t.inclusiveDurationMs || t.durationMs || 0), 0);
+                if (totalMs > 0) {
+                    const totalStr = totalMs >= 1000 ? `${(totalMs / 1000).toFixed(1)}s` : `${totalMs}ms`;
+                    lines.push(`⏱️  BUILD TIME: ${totalStr}`);
+                    lines.push('');
+                }
+
+                lines.push('🎯 TARGETS');
+                lines.push('─────────────────────────────────────────────────────');
+                for (const t of targets) {
+                    const name = t.name || t.targetName || '';
+                    const dur = t.inclusiveDurationMs || t.durationMs || 0;
+                    const durStr = dur >= 1000 ? `${(dur / 1000).toFixed(1)}s` : `${dur}ms`;
+                    lines.push(`  ${name.padEnd(40)} ${durStr.padStart(8)}`);
+                }
+                lines.push('');
+            }
         } catch {
-            // Tool may not exist or may fail — non-fatal
+            // Try fallback: binlog_expensive_projects for at least a total time
+            try {
+                const buildTimeResult = await this.mcpClient!.callTool('binlog_expensive_projects');
+                const data = JSON.parse(buildTimeResult.text);
+                const projects = Array.isArray(data) ? data : [];
+                const match = projects.find((p: any) =>
+                    (p.projectFile || p.fullPath || '').toLowerCase().includes(projectName.toLowerCase())
+                );
+                if (match) {
+                    const dur = match.inclusiveDurationMs || 0;
+                    const durStr = dur >= 1000 ? `${(dur / 1000).toFixed(1)}s` : `${dur}ms`;
+                    lines.push(`⏱️  BUILD TIME: ${durStr}`);
+                    lines.push('');
+                }
+            } catch { /* non-fatal */ }
         }
 
         // Get diagnostics and filter for this project
