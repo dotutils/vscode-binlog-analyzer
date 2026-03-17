@@ -575,13 +575,19 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                 });
             }
         } else if (Array.isArray(data)) {
+            // BinlogInsights format: [{ targetName/taskName, executionCount, totalInclusiveMs/totalDurationMs, ... }]
             for (const entry of data) {
-                const name = entry.name || entry.Name || entry.target || entry.task || '';
-                const dur = entry.duration || entry.Duration || entry.elapsed || '';
+                const name = entry.targetName || entry.taskName || entry.analyzerName || entry.name || '';
+                const durationMs = entry.totalInclusiveMs || entry.totalDurationMs || entry.inclusiveDurationMs || entry.durationMs || 0;
+                const count = entry.executionCount || 1;
+                const durStr = durationMs >= 1000
+                    ? `${(durationMs / 1000).toFixed(1)}s`
+                    : `${durationMs}ms`;
                 items.push({
                     kind: 'perf-item',
                     label: String(name),
-                    description: dur ? String(dur) : undefined,
+                    description: `${durStr}${count > 1 ? ` (×${count})` : ''}`,
+                    tooltip: `${name}\nDuration: ${durStr}\nExecutions: ${count}`,
                     icon,
                 });
             }

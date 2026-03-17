@@ -240,8 +240,7 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.openProjectDetails', async (projectId: string, projectFile: string, _targets: unknown) => {
             const section = `/project/${encodeURIComponent(projectId)}`;
-            const fileName = projectFile.split(/[/\\]/).pop() || projectFile;
-            await openBinlogDocument(section, fileName);
+            await openBinlogDocument(section, projectFile);
         })
     );
 

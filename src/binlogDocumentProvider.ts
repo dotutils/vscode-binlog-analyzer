@@ -241,11 +241,8 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
             const targetsData = JSON.parse(targetsResult.text);
             lines.push('🔥 SLOWEST TARGETS');
             lines.push('─────────────────────────────────────────────────────');
-            for (const [name, info] of Object.entries(targetsData as Record<string, any>)) {
-                const dur = info.inclusiveDurationMs || 0;
-                const count = info.executionCount || 1;
-                const durStr = dur >= 1000 ? `${(dur / 1000).toFixed(1)}s` : `${dur}ms`;
-                lines.push(`  ${name.padEnd(40)} ${durStr.padStart(8)}  (×${count})`);
+            for (const item of this.parsePerfEntries(targetsData)) {
+                lines.push(`  ${item.name.padEnd(40)} ${item.durStr.padStart(8)}  (×${item.count})`);
             }
         } catch {
             lines.push('  (could not load targets)');
@@ -257,11 +254,8 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
             const tasksData = JSON.parse(tasksResult.text);
             lines.push('🔧 SLOWEST TASKS');
             lines.push('─────────────────────────────────────────────────────');
-            for (const [name, info] of Object.entries(tasksData as Record<string, any>)) {
-                const dur = info.inclusiveDurationMs || info.totalDurationMs || info.durationMs || info.exclusiveDurationMs || 0;
-                const count = info.executionCount || 1;
-                const durStr = dur >= 1000 ? `${(dur / 1000).toFixed(1)}s` : `${dur}ms`;
-                lines.push(`  ${name.padEnd(40)} ${durStr.padStart(8)}  (×${count})`);
+            for (const item of this.parsePerfEntries(tasksData)) {
+                lines.push(`  ${item.name.padEnd(40)} ${item.durStr.padStart(8)}  (×${item.count})`);
             }
         } catch {
             lines.push('  (could not load tasks)');
@@ -271,21 +265,14 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
         try {
             const analyzersResult = await this.mcpClient!.callTool('binlog_expensive_analyzers', { top_number: 10 });
             const analyzersData = JSON.parse(analyzersResult.text);
-            const analyzers = Array.isArray(analyzersData) ? analyzersData
-                : (analyzersData && typeof analyzersData === 'object' && !Array.isArray(analyzersData))
-                    ? Object.entries(analyzersData).map(([name, info]: [string, any]) => ({ name, ...info }))
-                    : [];
-            if (analyzers.length > 0) {
+            const entries = this.parsePerfEntries(analyzersData);
+            if (entries.length > 0) {
                 lines.push('');
                 lines.push('🔬 SLOWEST ANALYZERS');
                 lines.push('─────────────────────────────────────────────────────');
-                for (const a of analyzers) {
-                    const name = a.name || a.analyzerName || '';
-                    const dur = a.inclusiveDurationMs || a.totalDurationMs || a.durationMs || 0;
-                    const count = a.executionCount || a.invocationCount || 1;
-                    const durStr = dur >= 1000 ? `${(dur / 1000).toFixed(1)}s` : `${dur}ms`;
-                    const shortName = name.length > 45 ? name.substring(0, 42) + '...' : name;
-                    lines.push(`  ${shortName.padEnd(45)} ${durStr.padStart(8)}  (×${count})`);
+                for (const a of entries) {
+                    const shortName = a.name.length > 45 ? a.name.substring(0, 42) + '...' : a.name;
+                    lines.push(`  ${shortName.padEnd(45)} ${a.durStr.padStart(8)}  (×${a.count})`);
                 }
             }
         } catch {
@@ -314,7 +301,7 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
         // Get per-project target times
         try {
             const targetTimesResult = await this.mcpClient!.callTool('binlog_project_target_times', {
-                project_path: projectFile,
+                project: projectName,
             });
             const targetData = JSON.parse(targetTimesResult.text);
             const targets = Array.isArray(targetData) ? targetData
@@ -452,6 +439,28 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
             lines.push(jsonText);
         }
         return lines.join('\n');
+    }
+
+    /** Parse perf entries from both array (BinlogInsights) and object (baronfel) formats */
+    private parsePerfEntries(data: unknown): Array<{ name: string; durStr: string; count: number }> {
+        const items: Array<{ name: string; durStr: string; count: number; durMs: number }> = [];
+        if (Array.isArray(data)) {
+            for (const entry of data) {
+                const name = entry.targetName || entry.taskName || entry.analyzerName || entry.name || '';
+                const dur = entry.totalInclusiveMs || entry.totalDurationMs || entry.inclusiveDurationMs || entry.durationMs || 0;
+                const count = entry.executionCount || 1;
+                const durStr = dur >= 1000 ? `${(dur / 1000).toFixed(1)}s` : `${dur}ms`;
+                items.push({ name, durStr, count, durMs: dur });
+            }
+        } else if (data && typeof data === 'object') {
+            for (const [name, info] of Object.entries(data as Record<string, any>)) {
+                const dur = info.inclusiveDurationMs || info.totalDurationMs || info.durationMs || 0;
+                const count = info.executionCount || 1;
+                const durStr = dur >= 1000 ? `${(dur / 1000).toFixed(1)}s` : `${dur}ms`;
+                items.push({ name, durStr, count, durMs: dur });
+            }
+        }
+        return items;
     }
 
     dispose() {
