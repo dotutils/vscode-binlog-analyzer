@@ -316,3 +316,46 @@ export function validateBinlogPath(filePath: string): string | null {
     }
     return null;
 }
+
+/**
+ * Checks if a target name is restore-related (NuGet restore phase).
+ * Used to filter out noisy restore entries from the summary view.
+ */
+export function isRestoreTarget(name: string): boolean {
+    return /restore/i.test(name) || name === '_IsProjectRestoreSupported';
+}
+
+/**
+ * Filter project entries to only those with actual build targets (not restore-only).
+ * Returns project entries where at least one target is NOT a restore target.
+ */
+export function filterBuildProjects(
+    projects: Array<{ file: string; targets: string[] }>
+): Array<{ file: string; targets: string[] }> {
+    return projects.filter(p => {
+        if (p.targets.length === 0) { return false; }
+        return !p.targets.every(isRestoreTarget);
+    });
+}
+
+/**
+ * Get diagnostic counts for a specific project file from a list of diagnostics.
+ * Matches by filename (case-insensitive).
+ */
+export function getProjectDiagnosticCounts(
+    diagnostics: McpDiagnostic[],
+    projectFileName: string
+): { errorCount: number; warningCount: number } {
+    const lowerName = projectFileName.toLowerCase();
+    let errorCount = 0;
+    let warningCount = 0;
+    for (const d of diagnostics) {
+        const file = (d.projectFile || d.file || '').toLowerCase();
+        const fileName = file.split(/[/\\]/).pop() || '';
+        if (fileName === lowerName || file.includes(lowerName)) {
+            if (d.severity === 'error') { errorCount++; }
+            else if (d.severity === 'warning') { warningCount++; }
+        }
+    }
+    return { errorCount, warningCount };
+}

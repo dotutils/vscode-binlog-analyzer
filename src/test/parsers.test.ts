@@ -11,6 +11,9 @@ import {
     filterDiagnosticsBySeverity,
     wasFileModified,
     computePerfComparison,
+    isRestoreTarget,
+    filterBuildProjects,
+    getProjectDiagnosticCounts,
     McpDiagnostic,
 } from '../parsers';
 
@@ -370,6 +373,137 @@ suite('Parsers', () => {
         test('handles empty maps', () => {
             const result = computePerfComparison(new Map(), new Map());
             assert.strictEqual(result.length, 0);
+        });
+    });
+
+    suite('isRestoreTarget', () => {
+        test('identifies _IsProjectRestoreSupported', () => {
+            assert.ok(isRestoreTarget('_IsProjectRestoreSupported'));
+        });
+
+        test('identifies targets with Restore in name', () => {
+            assert.ok(isRestoreTarget('_FilterRestoreGraphProjectInputItems'));
+            assert.ok(isRestoreTarget('_GetRestoreSettingsPerFramework'));
+            assert.ok(isRestoreTarget('Restore'));
+        });
+
+        test('does not match normal build targets', () => {
+            assert.ok(!isRestoreTarget('Build'));
+            assert.ok(!isRestoreTarget('CoreCompile'));
+            assert.ok(!isRestoreTarget('ResolveReferences'));
+            assert.ok(!isRestoreTarget('CopyFilesToOutputDirectory'));
+        });
+    });
+
+    suite('filterBuildProjects', () => {
+        test('filters out restore-only projects', () => {
+            const projects = [
+                { file: 'App.csproj', targets: ['Build', 'CoreCompile'] },
+                { file: 'Lib.csproj', targets: ['_IsProjectRestoreSupported'] },
+                { file: 'Test.csproj', targets: ['_FilterRestoreGraphProjectInputItems', 'Restore'] },
+            ];
+            const result = filterBuildProjects(projects);
+            assert.strictEqual(result.length, 1);
+            assert.strictEqual(result[0].file, 'App.csproj');
+        });
+
+        test('keeps projects with mixed restore and build targets', () => {
+            const projects = [
+                { file: 'App.csproj', targets: ['Restore', 'Build'] },
+            ];
+            const result = filterBuildProjects(projects);
+            assert.strictEqual(result.length, 1);
+        });
+
+        test('filters out projects with no targets', () => {
+            const projects = [
+                { file: 'Empty.csproj', targets: [] },
+            ];
+            const result = filterBuildProjects(projects);
+            assert.strictEqual(result.length, 0);
+        });
+
+        test('returns empty array when all are restore-only', () => {
+            const projects = [
+                { file: 'A.csproj', targets: ['_IsProjectRestoreSupported'] },
+                { file: 'B.csproj', targets: ['Restore'] },
+            ];
+            const result = filterBuildProjects(projects);
+            assert.strictEqual(result.length, 0);
+        });
+    });
+
+    suite('getProjectDiagnosticCounts', () => {
+        const diags: McpDiagnostic[] = [
+            { file: 'C:\\src\\App\\Program.cs', line: 10, column: 1, message: 'err1', code: 'CS0001', severity: 'error', projectFile: 'C:\\src\\App\\App.csproj' },
+            { file: 'C:\\src\\App\\Utils.cs', line: 5, column: 1, message: 'warn1', code: 'CS0168', severity: 'warning', projectFile: 'C:\\src\\App\\App.csproj' },
+            { file: 'C:\\src\\Lib\\Foo.cs', line: 1, column: 1, message: 'err2', code: 'CS0002', severity: 'error', projectFile: 'C:\\src\\Lib\\Lib.csproj' },
+            { file: 'C:\\src\\App\\Other.cs', line: 3, column: 1, message: 'warn2', code: 'CS0169', severity: 'warning', projectFile: 'C:\\src\\App\\App.csproj' },
+            { file: 'C:\\src\\Lib\\Bar.cs', line: 7, column: 1, message: 'info1', code: 'CS0219', severity: 'info', projectFile: 'C:\\src\\Lib\\Lib.csproj' },
+        ];
+
+        test('counts errors and warnings for App.csproj', () => {
+            const counts = getProjectDiagnosticCounts(diags, 'App.csproj');
+            assert.strictEqual(counts.errorCount, 1);
+            assert.strictEqual(counts.warningCount, 2);
+        });
+
+        test('counts errors and warnings for Lib.csproj', () => {
+            const counts = getProjectDiagnosticCounts(diags, 'Lib.csproj');
+            assert.strictEqual(counts.errorCount, 1);
+            assert.strictEqual(counts.warningCount, 0);
+        });
+
+        test('returns zero counts for unknown project', () => {
+            const counts = getProjectDiagnosticCounts(diags, 'Unknown.csproj');
+            assert.strictEqual(counts.errorCount, 0);
+            assert.strictEqual(counts.warningCount, 0);
+        });
+
+        test('case-insensitive matching', () => {
+            const counts = getProjectDiagnosticCounts(diags, 'app.csproj');
+            assert.strictEqual(counts.errorCount, 1);
+            assert.strictEqual(counts.warningCount, 2);
+        });
+
+        test('handles empty diagnostics array', () => {
+            const counts = getProjectDiagnosticCounts([], 'App.csproj');
+            assert.strictEqual(counts.errorCount, 0);
+            assert.strictEqual(counts.warningCount, 0);
+        });
+
+        test('matches by file path when projectFile is missing', () => {
+            const diagsNoProject: McpDiagnostic[] = [
+                { file: 'C:\\src\\MyApp\\MyApp.csproj', line: 1, column: 1, message: 'err', code: 'MSB001', severity: 'error' },
+            ];
+            const counts = getProjectDiagnosticCounts(diagsNoProject, 'MyApp.csproj');
+            assert.strictEqual(counts.errorCount, 1);
+        });
+    });
+
+    suite('parseMcpDiagnostics — BinlogInsights format', () => {
+        test('parses array of diagnostics (BinlogInsights binlog_errors format)', () => {
+            const data = {
+                diagnostics: [
+                    { code: 'CS0001', message: 'Test error', file: 'Test.cs', lineNumber: 10, severity: 'Error' },
+                    { code: 'CS0168', message: 'Test warning', file: 'Test.cs', lineNumber: 20, severity: 'Warning' },
+                ]
+            };
+            const result = parseMcpDiagnostics(data);
+            assert.strictEqual(result.length, 2);
+            assert.strictEqual(result[0].severity, 'error');
+            assert.strictEqual(result[0].code, 'CS0001');
+            assert.strictEqual(result[1].severity, 'warning');
+        });
+
+        test('handles projectFile field', () => {
+            const data = {
+                diagnostics: [
+                    { code: 'CS0001', message: 'err', file: 'Test.cs', lineNumber: 1, severity: 'Error', projectFile: 'C:\\src\\App.csproj' },
+                ]
+            };
+            const result = parseMcpDiagnostics(data);
+            assert.strictEqual(result[0].projectFile, 'C:\\src\\App.csproj');
         });
     });
 });
