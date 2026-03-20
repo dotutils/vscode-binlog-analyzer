@@ -1004,6 +1004,7 @@ async function startMcpClientForTree(binlogPaths: string[]) {
 
 async function configureMcpServer(binlogPaths: string[], config: vscode.WorkspaceConfiguration) {
     const customPath = config.get<string>('mcpServerPath', '');
+    const workspaceCwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
     // Configure BinlogInsights.Mcp for Copilot Chat (primary)
     let insightsConfig: Record<string, unknown>;
@@ -1013,6 +1014,7 @@ async function configureMcpServer(binlogPaths: string[], config: vscode.Workspac
             type: 'stdio',
             command: customPath,
             args: binlogPaths.flatMap(p => ['--binlog', p]),
+            ...(workspaceCwd && { cwd: workspaceCwd }),
         };
     } else {
         let insightsExe = findBinlogInsightsTool();
@@ -1037,12 +1039,14 @@ async function configureMcpServer(binlogPaths: string[], config: vscode.Workspac
                 type: 'stdio',
                 command: insightsExe,
                 args: binlogArgs,
+                ...(workspaceCwd && { cwd: workspaceCwd }),
             };
         } else {
             insightsConfig = {
                 type: 'stdio',
                 command: 'dotnet',
                 args: ['tool', 'run', 'binlog-insights-mcp', '--', ...binlogArgs],
+                ...(workspaceCwd && { cwd: workspaceCwd }),
             };
             vscode.window.showWarningMessage(
                 'Could not find or install BinlogInsights.Mcp. Install it manually: `dotnet tool install -g BinlogInsights.Mcp`',
