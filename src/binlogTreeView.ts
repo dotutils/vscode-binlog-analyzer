@@ -1043,16 +1043,18 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                         for (const item of items) {
                             const msg = item.message || item.Message || '';
                             const proj = this.extractFileName(item.projectFile || item.ProjectFile || '');
+                            const target = item.targetName || item.TargetName || '';
+                            const ctx = target ? `${proj} → ${target}` : proj;
                             // "Copying file from 'X' to 'Y'."
                             const copyMatch = msg.match(/Copying file from ["']?(.+?)["']?\s+to\s+["']?(.+?)["']?\.?\s*$/i);
                             if (copyMatch) {
-                                addDest(copyMatch[2], `Copy from ${this.extractFileName(copyMatch[1])} (${proj})`);
+                                addDest(copyMatch[2], `Copy from ${this.extractFileName(copyMatch[1])} (${ctx})`);
                                 continue;
                             }
                             // "Creating hard link to create 'Y' from 'X'."
                             const linkMatch = msg.match(/Creating (?:hard|symbolic) link.*?["'](.+?)["'].*?from\s+["']?(.+?)["']?/i);
                             if (linkMatch) {
-                                addDest(linkMatch[1], `HardLink from ${this.extractFileName(linkMatch[2])} (${proj})`);
+                                addDest(linkMatch[1], `HardLink from ${this.extractFileName(linkMatch[2])} (${ctx})`);
                             }
                         }
                         if (items.length < pageSize) { break; }

@@ -1824,8 +1824,13 @@ async function showTimelineWebview(context: vscode.ExtensionContext) {
         tasksData = JSON.parse(tasksResult.text);
         projectsData = JSON.parse(projectsResult.text);
         const allProjects = JSON.parse(allProjectsResult.text);
-        totalProjectCount = Array.isArray(allProjects) ? allProjects.length
-            : (allProjects && typeof allProjects === 'object') ? Object.keys(allProjects).length : 0;
+        const projectList = Array.isArray(allProjects) ? allProjects
+            : (allProjects && typeof allProjects === 'object') ? Object.values(allProjects) : [];
+        const uniqueNames = new Set(projectList.map((p: any) => {
+            const fp = p.fullPath || p.projectFile || p.FullPath || p.ProjectFile || '';
+            return String(fp).split(/[/\\]/).pop()?.toLowerCase() || '';
+        }).filter(Boolean));
+        totalProjectCount = uniqueNames.size || projectList.length;
     } catch {
         panel.webview.html = '<html><body><h2>Failed to load timeline data</h2></body></html>';
         return;
