@@ -627,7 +627,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             // First check if the binlog has analyzer data at all
             const checkResult = await this.mcpClient.callTool('binlog_search', {
                 query: 'Total analyzer execution',
-                max_results: 5,
+                limit: 5,
             });
             const checkData = this.tryParseJson(checkResult.text);
             const checkEntries = Array.isArray(checkData) ? checkData : [];
@@ -662,7 +662,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                 try {
                     const result = await this.mcpClient.callTool('binlog_search', {
                         query: term,
-                        max_results: 200,
+                        limit: 200,
                     });
                     const data = this.tryParseJson(result.text);
                     const entries = Array.isArray(data) ? data : [];
@@ -1007,43 +1007,85 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             return [this.makeInfoItem('MCP server not connected', 'info')];
         }
         try {
-            // Use binlog_search to find Copy task outputs and detect collisions
-            const result = await this.mcpClient.callTool('binlog_search', {
-                query: 'Copying file from',
-                max_results: 500,
-            });
-            const text = result.text;
-            // Parse copy operations: "Copying file from X to Y"
-            const copyRegex = /Copying file from ["']?(.+?)["']?\s+to\s+["']?(.+?)["']?\.?\s*$/gmi;
-            const outputFiles = new Map<string, Set<string>>(); // dest → set of source descriptions
-            let match;
-            while ((match = copyRegex.exec(text)) !== null) {
-                const dest = match[2].trim().toLowerCase();
-                const source = match[1].trim();
-                if (!outputFiles.has(dest)) {
-                    outputFiles.set(dest, new Set());
-                }
-                outputFiles.get(dest)!.add(source);
+            // dest path (lowercased) → Set of "source description" strings
+            const outputFiles = new Map<string, Set<string>>();
+
+            const addDest = (dest: string, source: string) => {
+                const key = dest.trim().toLowerCase().replace(/\//g, '\\');
+                if (!key) { return; }
+                if (!outputFiles.has(key)) { outputFiles.set(key, new Set()); }
+                outputFiles.get(key)!.add(source);
+            };
+
+            // --- Approach 1: Parse messages from binlog_search ---
+            // Search for common copy-related message patterns
+            const searchQueries = [
+                'Copying file from',        // MSBuild Copy task
+                'Creating hard link',       // Copy with UseHardlinksIfPossible
+                'Creating symbolic link',   // Copy with UseSymboliclinksIfPossible
+            ];
+
+            for (const query of searchQueries) {
+                try {
+                    const result = await this.mcpClient.callTool('binlog_search', {
+                        query,
+                        limit: 500,
+                    });
+                    // binlog_search returns JSON: [{message, projectFile, nodeType, ...}, ...]
+                    const items = this.parseSearchResults(result.text);
+                    for (const item of items) {
+                        const msg = item.message || '';
+                        const proj = this.extractFileName(item.projectFile || '');
+                        // "Copying file from 'X' to 'Y'."
+                        const copyMatch = msg.match(/Copying file from ["']?(.+?)["']?\s+to\s+["']?(.+?)["']?\.?\s*$/i);
+                        if (copyMatch) {
+                            addDest(copyMatch[2], `Copy from ${this.extractFileName(copyMatch[1])} (${proj})`);
+                            continue;
+                        }
+                        // "Creating hard link to create 'Y' from 'X'."
+                        const linkMatch = msg.match(/Creating (?:hard|symbolic) link.*?["'](.+?)["'].*?from\s+["']?(.+?)["']?/i);
+                        if (linkMatch) {
+                            addDest(linkMatch[1], `HardLink from ${this.extractFileName(linkMatch[2])} (${proj})`);
+                        }
+                    }
+                } catch { /* search may fail for some queries — non-fatal */ }
             }
 
-            // Also search for Csc output
+            // --- Approach 2: Use binlog_search_tasks + task_details for structured detection ---
             try {
-                const cscResult = await this.mcpClient.callTool('binlog_search', {
-                    query: 'Writing assembly to',
-                    max_results: 100,
+                const copyTasks = await this.mcpClient.callTool('binlog_search_tasks', {
+                    task_name: 'Copy',
+                    limit: 200,
                 });
-                const writeRegex = /Writing (?:assembly|resource) to ["']?(.+?)["']?\s*$/gmi;
-                let wMatch;
-                while ((wMatch = writeRegex.exec(cscResult.text)) !== null) {
-                    const dest = wMatch[1].trim().toLowerCase();
-                    if (!outputFiles.has(dest)) {
-                        outputFiles.set(dest, new Set());
-                    }
-                    outputFiles.get(dest)!.add('Csc (compiler)');
+                const tasks = this.parseSearchResults(copyTasks.text);
+                for (const task of tasks) {
+                    const taskId = task.id;
+                    const proj = this.extractFileName(task.projectFile || task.ProjectFile || '');
+                    const target = task.targetName || task.TargetName || '';
+                    try {
+                        const details = await this.mcpClient.callTool('binlog_task_details', {
+                            project: proj,
+                            target_name: target,
+                            task_name: 'Copy',
+                        });
+                        const detailData = this.parseSingleResult(details.text);
+                        const params = detailData?.parameters || detailData?.Parameters || {};
+                        // DestinationFiles can be a string or semicolon-delimited list
+                        const destFiles = params.DestinationFiles || params.destinationFiles || '';
+                        const sourceFiles = params.SourceFiles || params.sourceFiles || '';
+                        if (destFiles) {
+                            const dests = destFiles.split(';').map((d: string) => d.trim()).filter(Boolean);
+                            const srcs = sourceFiles.split(';').map((s: string) => s.trim()).filter(Boolean);
+                            for (let i = 0; i < dests.length; i++) {
+                                const src = i < srcs.length ? this.extractFileName(srcs[i]) : 'Copy task';
+                                addDest(dests[i], `${target} → Copy (${proj}): ${src}`);
+                            }
+                        }
+                    } catch { /* task_details may fail — non-fatal */ }
                 }
-            } catch { /* non-fatal */ }
+            } catch { /* binlog_search_tasks may not be available */ }
 
-            // Filter to files written by multiple sources
+            // Filter to files written by multiple distinct sources
             const conflicts: TreeNodeData[] = [];
             for (const [dest, sources] of outputFiles) {
                 if (sources.size > 1) {
@@ -1075,6 +1117,23 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         }
     }
 
+    /** Parse binlog_search / binlog_search_tasks JSON response into an array of objects */
+    private parseSearchResults(text: string): any[] {
+        try {
+            const data = JSON.parse(text);
+            if (Array.isArray(data)) { return data; }
+            if (data && typeof data === 'object') { return Object.values(data); }
+        } catch { /* not JSON — try line-by-line */ }
+        return [];
+    }
+
+    /** Parse a single JSON object from MCP response */
+    private parseSingleResult(text: string): any {
+        try {
+            return JSON.parse(text);
+        } catch { return null; }
+    }
+
     /** Get children of a double-write file node (the sources that wrote it) */
     private getDoubleWriteSources(element: BinlogTreeItem): BinlogTreeItem[] {
         if (!this.doubleWriteCache) { return []; }
@@ -1099,7 +1158,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         }
         return this.mcpClient.callTool('binlog_search', {
             query,
-            max_results: maxResults,
+            limit: maxResults,
         });
     }
 

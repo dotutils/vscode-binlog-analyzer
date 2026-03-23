@@ -692,12 +692,33 @@ export function activate(context: vscode.ExtensionContext) {
                     try {
                         const result = await mcpClient!.callTool('binlog_search', {
                             query: query.trim(),
-                            max_results: 200,
+                            limit: 200,
                         });
 
                         // Show results in a virtual document
                         const header = `🔍 Search Results for "${query}"\n${'═'.repeat(60)}\n\n`;
-                        const content = header + (result.text || 'No results found.');
+                        let body = 'No results found.';
+                        try {
+                            const data = JSON.parse(result.text);
+                            if (Array.isArray(data) && data.length > 0) {
+                                body = data.map((item: any, i: number) => {
+                                    const msg = item.message || item.Message || '';
+                                    const proj = item.projectFile || item.ProjectFile || '';
+                                    const projName = proj.split(/[/\\]/).pop() || proj;
+                                    const nodeType = item.nodeType || item.NodeType || '';
+                                    const target = item.targetName || item.TargetName || '';
+                                    const task = item.taskName || item.TaskName || '';
+                                    const ctx = [projName, target, task].filter(Boolean).join(' → ');
+                                    return `[${i + 1}] ${nodeType ? `(${nodeType}) ` : ''}${ctx ? `${ctx}\n    ` : ''}${msg}`;
+                                }).join('\n\n');
+                                body = `Found ${data.length} results:\n\n${body}`;
+                            } else if (Array.isArray(data)) {
+                                body = 'No results found.';
+                            }
+                        } catch {
+                            body = result.text || 'No results found.';
+                        }
+                        const content = header + body;
 
                         const doc = await vscode.workspace.openTextDocument({
                             content,
