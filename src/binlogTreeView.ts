@@ -67,8 +67,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
     private targetsCache: TreeNodeData[] | null = null;
     private tasksCache: TreeNodeData[] | null = null;
     private analyzersCache: TreeNodeData[] | null = null;
-    private propertiesCache: TreeNodeData[] | null = null;
-    private itemTypesCache: TreeNodeData[] | null = null;
+
     private doubleWriteCache: TreeNodeData[] | null = null;
     private loadingSet = new Set<NodeKind>();
 
@@ -127,13 +126,14 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                     { tool: 'binlog_warnings', args: {}, cache: 'warnings' as const },
                     { tool: 'binlog_expensive_targets', args: { top_number: 10 }, cache: 'targets' as const },
                     { tool: 'binlog_expensive_tasks', args: { top_number: 10 }, cache: 'tasks' as const },
-                    { tool: 'binlog_expensive_analyzers', args: { top_number: 10 }, cache: 'analyzers' as const },
+                    { tool: 'binlog_expensive_analyzers', args: { limit: 10 }, cache: 'analyzers' as const },
                 ];
 
                 await Promise.allSettled(calls.map(async (c) => {
                     try {
                         const result = await client.callTool(c.tool, c.args);
                         const data = this.tryParseJson(result.text);
+
                         if (c.cache === 'projects') {
                             this.projectsCache = this.parseProjectData(data, result.text);
                         } else if (c.cache === 'errors') {
@@ -145,7 +145,11 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                         } else if (c.cache === 'tasks') {
                             this.tasksCache = this.parsePerfItems(result.text, 'tools');
                         } else if (c.cache === 'analyzers') {
-                            this.analyzersCache = this.parsePerfItems(result.text, 'microscope');
+                            const parsed = this.parsePerfItems(result.text, 'microscope');
+                            // Only cache non-empty results; let fetchExpensiveAnalyzers try its fallback parser
+                            if (parsed.length > 0) {
+                                this.analyzersCache = parsed;
+                            }
                         }
                     } catch (err) {
                         console.warn(`prefetch ${c.tool} FAILED: ${err}`);
@@ -307,8 +311,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         this.targetsCache = null;
         this.tasksCache = null;
         this.analyzersCache = null;
-        this.propertiesCache = null;
-        this.itemTypesCache = null;
+
         this.doubleWriteCache = null;
     }
 
@@ -423,24 +426,6 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             perfNode.iconPath = new vscode.ThemeIcon('dashboard');
             items.push(perfNode);
 
-            // Properties section — browse MSBuild properties
-            const propsNode = new BinlogTreeItem(
-                'Properties',
-                vscode.TreeItemCollapsibleState.Collapsed
-            );
-            propsNode.nodeKind = 'root-properties';
-            propsNode.iconPath = new vscode.ThemeIcon('symbol-property');
-            items.push(propsNode);
-
-            // Items section — browse MSBuild items (PackageReference, Compile, etc.)
-            const itemsNode = new BinlogTreeItem(
-                'Items',
-                vscode.TreeItemCollapsibleState.Collapsed
-            );
-            itemsNode.nodeKind = 'root-items';
-            itemsNode.iconPath = new vscode.ThemeIcon('symbol-array');
-            items.push(itemsNode);
-
             // Double Writes section — detect files written by multiple tasks
             const doubleWriteNode = new BinlogTreeItem(
                 'Double Writes',
@@ -501,12 +486,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                 return this.fetchExpensiveTasks();
             case 'perf-analyzers':
                 return this.fetchExpensiveAnalyzers();
-            case 'root-properties':
-                return this.fetchProperties();
-            case 'root-items':
-                return this.fetchItemTypes();
-            case 'item-type':
-                return this.fetchItemsOfType(element);
+
             case 'root-doublewrite':
                 return this.fetchDoubleWrites();
             case 'doublewrite-file':
@@ -617,42 +597,180 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
     private async fetchExpensiveAnalyzers(): Promise<BinlogTreeItem[]> {
         if (this.analyzersCache) {
             if (this.analyzersCache.length === 0) {
-                return [this.makeInfoItem('No analyzer data', 'info')];
+                return [this.makeInfoItem('No analyzer data found', 'info')];
             }
             return this.analyzersCache.map(d => this.dataToItem(d));
         }
-        return this.callMcpTool('binlog_expensive_analyzers', { top_number: 10 }, 'perf-analyzers' as NodeKind, (text) => {
-            const items = this.parsePerfItems(text, 'microscope');
-            this.analyzersCache = items;
-            return items;
-        });
+
+        if (!this.mcpClient) {
+            return [this.makeInfoItem('MCP server not connected', 'info')];
+        }
+
+        // Try the dedicated MCP tool first
+        try {
+            const result = await this.mcpClient.callTool('binlog_expensive_analyzers', { limit: 20 });
+            const items = this.parsePerfItems(result.text, 'microscope');
+            if (items.length > 0) {
+                this.analyzersCache = items;
+                return items.map(d => this.dataToItem(d));
+            }
+        } catch { /* fall through */ }
+
+        // Fallback: extract analyzer timing from Csc task messages via binlog_search.
+        // BinlogInsights v0.2.0's binlog_expensive_analyzers returns [] because it
+        // requires BuildAnalyzer.AnalyzeBuild(). But the raw analyzer timing lines
+        // exist as Csc messages like:
+        //   "0.176   71      Microsoft.NetCore.CSharp.Analyzers.Performance.CSharpConstantExpectedAnalyzer (CA1856, CA1857)"
+        // And assembly-level items like:
+        //   "363 ms   Microsoft.CodeAnalysis.CSharp.NetAnalyzers ... = 341 ms"
+        try {
+            // First check if the binlog has analyzer data at all
+            const checkResult = await this.mcpClient.callTool('binlog_search', {
+                query: 'Total analyzer execution',
+                max_results: 5,
+            });
+            const checkData = this.tryParseJson(checkResult.text);
+            const checkEntries = Array.isArray(checkData) ? checkData : [];
+
+            if (checkEntries.length === 0) {
+                this.analyzersCache = [];
+                return [this.makeInfoItem('No analyzer data found', 'info')];
+            }
+
+            // Extract analyzer data from the "analyzer execution time" context.
+            // Strategy: search for assembly-level summaries that appear as items
+            // in format "363 ms   Microsoft.CodeAnalysis.CSharp.NetAnalyzers, Version=... = 341 ms"
+            // and individual analyzer lines "0.176   71      AnalyzerName (CA1234)"
+            const analyzerMap = new Map<string, { durationMs: number; count: number }>();
+
+            // Search for the assembly-level summary items (nodeType: "Item")
+            // These contain "ms " prefix which is distinctive
+            const searchTerms = [
+                'Total analyzer execution',  // gives us project context
+                'NetAnalyzers',              // Microsoft.CodeAnalysis.*.NetAnalyzers
+                'CodeStyle',                 // Microsoft.CodeAnalysis.*.CodeStyle
+                'ReferenceTrimmer',          // ReferenceTrimmer.Analyzer
+                'AspNetCore',               // Microsoft.AspNetCore.*.Analyzers
+                'Generator',                // source generators
+                'Interop',                  // Microsoft.Interop.* generators
+                'RegularExpressions',       // System.Text.RegularExpressions.Generator
+                'StyleCop',                 // StyleCop.Analyzers
+                'Roslynator',               // Roslynator analyzers
+                'CA1', 'CA2', 'IDE0', 'SA1', // diagnostic IDs for individual analyzers
+            ];
+            for (const term of searchTerms) {
+                try {
+                    const result = await this.mcpClient.callTool('binlog_search', {
+                        query: term,
+                        max_results: 200,
+                    });
+                    const data = this.tryParseJson(result.text);
+                    const entries = Array.isArray(data) ? data : [];
+                    for (const entry of entries) {
+                        const msg = entry.message || entry.Message || '';
+                        // Match individual analyzer timing: "0.176   71      FullAnalyzerName (CA1234)"
+                        const timingMatch = msg.match(/^(\d+\.\d+)\s+\d+\s{2,}(.+)/);
+                        if (timingMatch) {
+                            const seconds = parseFloat(timingMatch[1]);
+                            const name = timingMatch[2].trim();
+                            if (seconds > 0.001 && name.length > 5 && !name.startsWith('Total')) {
+                                const durationMs = Math.round(seconds * 1000);
+                                const existing = analyzerMap.get(name);
+                                if (existing) {
+                                    existing.durationMs += durationMs;
+                                    existing.count++;
+                                } else {
+                                    analyzerMap.set(name, { durationMs, count: 1 });
+                                }
+                            }
+                            continue;
+                        }
+                        // Match assembly-level summary: "363 ms   AssemblyFullName, Version=... : AnalyzerName = 341 ms"
+                        const asmMatch = msg.match(/^(\d+)\s*ms\s{2,}(.+)/);
+                        if (asmMatch && entry.nodeType === 'Item') {
+                            const durationMs = parseInt(asmMatch[1]);
+                            let name = asmMatch[2].trim();
+                            // Trim version info: "Name, Version=... : SubName = Nms" → just "Name"
+                            const colonIdx = name.indexOf(':');
+                            if (colonIdx > 0) { name = name.substring(0, colonIdx).trim(); }
+                            const commaIdx = name.indexOf(',');
+                            if (commaIdx > 0) { name = name.substring(0, commaIdx).trim(); }
+                            if (durationMs > 0 && name.length > 3) {
+                                const existing = analyzerMap.get(name);
+                                if (existing) {
+                                    existing.durationMs += durationMs;
+                                    existing.count++;
+                                } else {
+                                    analyzerMap.set(name, { durationMs, count: 1 });
+                                }
+                            }
+                        }
+                    }
+                } catch { /* non-fatal */ }
+            }
+
+            if (analyzerMap.size > 0) {
+                const items: TreeNodeData[] = [...analyzerMap.entries()]
+                    .sort((a, b) => b[1].durationMs - a[1].durationMs)
+                    .slice(0, 20)
+                    .map(([name, info]) => {
+                        const durStr = info.durationMs >= 1000
+                            ? `${(info.durationMs / 1000).toFixed(1)}s`
+                            : `${info.durationMs}ms`;
+                        return {
+                            kind: 'perf-item' as NodeKind,
+                            label: name,
+                            description: `${durStr}${info.count > 1 ? ` (×${info.count})` : ''}`,
+                            tooltip: `Analyzer: ${name}\nTotal: ${durStr}\nRuns: ${info.count}\n\nClick to analyze in Copilot Chat`,
+                            icon: 'microscope',
+                            command: {
+                                command: 'binlog.analyzeInChat',
+                                title: 'Analyze in Chat',
+                                arguments: [name, durStr, info.count, 'perf-item'],
+                            },
+                        };
+                    });
+                this.analyzersCache = items;
+                this._onDidChangeTreeData.fire(undefined);
+                return items.map(d => this.dataToItem(d));
+            }
+        } catch { /* non-fatal */ }
+
+        this.analyzersCache = [];
+        return [this.makeInfoItem('No analyzer data found', 'info')];
     }
 
     private parsePerfItems(text: string, icon: string): TreeNodeData[] {
         const data = this.tryParseJson(text);
         const items: TreeNodeData[] = [];
         if (data && typeof data === 'object' && !Array.isArray(data)) {
-            // Format: { "TargetName": { executionCount, inclusiveDurationMs, ... }, ... }
             for (const [name, info] of Object.entries(data as Record<string, any>)) {
-                const durationMs = info.inclusiveDurationMs || info.totalDurationMs || info.durationMs || info.exclusiveDurationMs || 0;
+                const durationMs = info.inclusiveDurationMs || info.totalDurationMs || info.durationMs || info.exclusiveDurationMs || info.duration
+                    || info.TotalDurationMs || info.InclusiveDurationMs || info.ExclusiveDurationMs || info.Duration || 0;
                 const durStr = durationMs >= 1000
                     ? `${(durationMs / 1000).toFixed(1)}s`
                     : `${durationMs}ms`;
-                const count = info.executionCount || 1;
+                const count = info.executionCount || info.ExecutionCount || 1;
                 items.push({
                     kind: 'perf-item',
                     label: name,
                     description: `${durStr}${count > 1 ? ` (×${count})` : ''}`,
-                    tooltip: `${name}\nDuration: ${durStr}\nExecutions: ${count}`,
+                    tooltip: `${name}\nDuration: ${durStr}\nExecutions: ${count}\n\nClick to analyze in Copilot Chat`,
                     icon,
+                    command: {
+                        command: 'binlog.analyzeInChat',
+                        title: 'Analyze in Chat',
+                        arguments: [name, durStr, count, 'perf-item'],
+                    },
                 });
             }
         } else if (Array.isArray(data)) {
-            // BinlogInsights format: [{ targetName/taskName, executionCount, totalInclusiveMs/totalDurationMs, ... }]
             for (const entry of data) {
-                const name = entry.targetName || entry.taskName || entry.analyzerName || entry.name || '';
-                const durationMs = entry.totalInclusiveMs || entry.totalDurationMs || entry.inclusiveDurationMs || entry.durationMs || 0;
-                const count = entry.executionCount || 1;
+                const name = entry.targetName || entry.taskName || entry.analyzerName || entry.name
+                    || entry.TargetName || entry.TaskName || entry.AnalyzerName || entry.Name || '';
+                const durationMs = entry.totalInclusiveMs || entry.totalExclusiveMs || entry.totalDurationMs || entry.inclusiveDurationMs || entry.durationMs || entry.duration
+                    || entry.TotalInclusiveMs || entry.TotalExclusiveMs || entry.TotalDurationMs || entry.InclusiveDurationMs || entry.DurationMs || entry.Duration || 0;
+                const count = entry.executionCount || entry.ExecutionCount || 1;
                 const durStr = durationMs >= 1000
                     ? `${(durationMs / 1000).toFixed(1)}s`
                     : `${durationMs}ms`;
@@ -660,8 +778,13 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                     kind: 'perf-item',
                     label: String(name),
                     description: `${durStr}${count > 1 ? ` (×${count})` : ''}`,
-                    tooltip: `${name}\nDuration: ${durStr}\nExecutions: ${count}`,
+                    tooltip: `${name}\nDuration: ${durStr}\nExecutions: ${count}\n\nClick to analyze in Copilot Chat`,
                     icon,
+                    command: {
+                        command: 'binlog.analyzeInChat',
+                        title: 'Analyze in Chat',
+                        arguments: [String(name), durStr, count, 'perf-item'],
+                    },
                 });
             }
         }
@@ -678,15 +801,16 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             return [this.makeInfoItem('No project file', 'info')];
         }
         try {
+            const projectName = this.extractFileName(projectFile).replace(/\.[^.]+$/, '');
             const result = await this.mcpClient.callTool('binlog_project_targets', {
-                project_path: projectFile,
+                project: projectName,
             });
             const data = this.tryParseJson(result.text);
             const items: BinlogTreeItem[] = [];
             if (Array.isArray(data)) {
                 for (const t of data) {
-                    const name = t.targetName || t.name || '';
-                    const durationMs = t.durationMs || t.totalDurationMs || t.inclusiveDurationMs || 0;
+                    const name = t.name || t.targetName || '';
+                    const durationMs = t.exclusiveDurationMs || t.inclusiveDurationMs || t.durationMs || t.duration || 0;
                     const durStr = durationMs >= 1000 ? `${(durationMs / 1000).toFixed(1)}s` : `${durationMs}ms`;
                     const skipped = t.skipped || false;
                     const icon = skipped ? 'debug-step-over' : 'symbol-event';
@@ -706,7 +830,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                 }
             } else if (data && typeof data === 'object') {
                 for (const [name, info] of Object.entries(data as Record<string, any>)) {
-                    const durationMs = info.durationMs || info.inclusiveDurationMs || info.totalDurationMs || 0;
+                    const durationMs = info.exclusiveDurationMs || info.inclusiveDurationMs || info.durationMs || info.duration || 0;
                     const durStr = durationMs >= 1000 ? `${(durationMs / 1000).toFixed(1)}s` : `${durationMs}ms`;
                     const skipped = info.skipped || false;
                     const item = new BinlogTreeItem(
@@ -741,17 +865,20 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             return [this.makeInfoItem('No target name', 'info')];
         }
         try {
-            const args: Record<string, unknown> = { target_name: targetName };
-            if (element.projectFile) {
-                args.project_path = element.projectFile;
-            }
+            const projectName = element.projectFile
+                ? this.extractFileName(element.projectFile).replace(/\.[^.]+$/, '')
+                : '';
+            const args: Record<string, unknown> = {
+                target_name: targetName,
+                project: projectName,
+            };
             const result = await this.mcpClient.callTool('binlog_tasks_in_target', args);
             const data = this.tryParseJson(result.text);
             const items: BinlogTreeItem[] = [];
             const entries = Array.isArray(data) ? data : (data && typeof data === 'object' ? Object.entries(data).map(([name, info]) => ({ name, ...(info as object) })) : []);
             for (const t of entries) {
-                const name = t.taskName || t.name || '';
-                const durationMs = t.durationMs || t.totalDurationMs || 0;
+                const name = t.name || t.taskName || '';
+                const durationMs = t.durationMs || t.totalDurationMs || t.duration || 0;
                 const durStr = durationMs >= 1000 ? `${(durationMs / 1000).toFixed(1)}s` : `${durationMs}ms`;
                 const item = new BinlogTreeItem(
                     String(name),
@@ -799,24 +926,65 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             return [this.makeInfoItem('No task name', 'info')];
         }
         try {
-            const args: Record<string, unknown> = { task_name: taskName };
-            if (element.projectFile) {
-                args.project_path = element.projectFile;
-            }
+            const projectName = element.projectFile
+                ? this.extractFileName(element.projectFile).replace(/\.[^.]+$/, '')
+                : '';
+            const args: Record<string, unknown> = {
+                task_name: taskName,
+                project: projectName,
+                target_name: element.targetName || '',
+            };
             const result = await this.mcpClient.callTool('binlog_task_details', args);
             const items: BinlogTreeItem[] = [];
-            // Parse the result as lines/messages
-            const lines = result.text.split('\n').filter((l: string) => l.trim());
-            for (const line of lines.slice(0, 50)) {
-                const msgItem = new BinlogTreeItem(
-                    line.trim().substring(0, 150),
-                    vscode.TreeItemCollapsibleState.None
-                );
-                msgItem.nodeKind = 'message';
-                msgItem.iconPath = new vscode.ThemeIcon('note');
-                msgItem.fullText = line.trim();
-                msgItem.contextValue = 'copyable-message';
-                items.push(msgItem);
+
+            // Try to parse as JSON first
+            const data = this.tryParseJson(result.text);
+            if (data && typeof data === 'object' && !Array.isArray(data)) {
+                const details = data as Record<string, any>;
+                // Show parameters, messages, etc.
+                if (details.parameters) {
+                    for (const [k, v] of Object.entries(details.parameters)) {
+                        const paramItem = new BinlogTreeItem(
+                            `${k} = ${String(v).substring(0, 100)}`,
+                            vscode.TreeItemCollapsibleState.None
+                        );
+                        paramItem.nodeKind = 'message';
+                        paramItem.iconPath = new vscode.ThemeIcon('symbol-parameter');
+                        paramItem.fullText = `${k} = ${v}`;
+                        paramItem.contextValue = 'copyable-message';
+                        items.push(paramItem);
+                    }
+                }
+                if (details.messages && Array.isArray(details.messages)) {
+                    for (const msg of details.messages.slice(0, 30)) {
+                        const msgText = typeof msg === 'string' ? msg : (msg.text || msg.message || JSON.stringify(msg));
+                        const msgItem = new BinlogTreeItem(
+                            String(msgText).substring(0, 150),
+                            vscode.TreeItemCollapsibleState.None
+                        );
+                        msgItem.nodeKind = 'message';
+                        msgItem.iconPath = new vscode.ThemeIcon('note');
+                        msgItem.fullText = String(msgText);
+                        msgItem.contextValue = 'copyable-message';
+                        items.push(msgItem);
+                    }
+                }
+            }
+
+            // Fallback: parse as lines
+            if (items.length === 0) {
+                const lines = result.text.split('\n').filter((l: string) => l.trim());
+                for (const line of lines.slice(0, 50)) {
+                    const msgItem = new BinlogTreeItem(
+                        line.trim().substring(0, 150),
+                        vscode.TreeItemCollapsibleState.None
+                    );
+                    msgItem.nodeKind = 'message';
+                    msgItem.iconPath = new vscode.ThemeIcon('note');
+                    msgItem.fullText = line.trim();
+                    msgItem.contextValue = 'copyable-message';
+                    items.push(msgItem);
+                }
             }
             return items.length > 0 ? items : [this.makeInfoItem('No details available', 'info')];
         } catch (err) {
@@ -825,110 +993,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         }
     }
 
-    /** Fetch MSBuild properties */
-    private async fetchProperties(): Promise<BinlogTreeItem[]> {
-        if (this.propertiesCache) {
-            return this.propertiesCache.map(d => this.dataToItem(d));
-        }
-        return this.callMcpTool('binlog_properties', {}, 'root-properties', (text) => {
-            const data = this.tryParseJson(text);
-            const items: TreeNodeData[] = [];
-            if (data && typeof data === 'object' && !Array.isArray(data)) {
-                for (const [name, value] of Object.entries(data as Record<string, any>)) {
-                    const valStr = String(value ?? '');
-                    items.push({
-                        kind: 'property-item',
-                        label: name,
-                        description: valStr.length > 80 ? valStr.substring(0, 77) + '...' : valStr,
-                        tooltip: `${name} = ${valStr}`,
-                        icon: 'symbol-property',
-                    });
-                }
-            } else if (Array.isArray(data)) {
-                for (const entry of data) {
-                    const name = entry.name || entry.propertyName || '';
-                    const value = entry.value || entry.propertyValue || '';
-                    items.push({
-                        kind: 'property-item',
-                        label: String(name),
-                        description: String(value).length > 80 ? String(value).substring(0, 77) + '...' : String(value),
-                        tooltip: `${name} = ${value}`,
-                        icon: 'symbol-property',
-                    });
-                }
-            }
-            this.propertiesCache = items;
-            return items;
-        });
-    }
 
-    /** Fetch MSBuild item types */
-    private async fetchItemTypes(): Promise<BinlogTreeItem[]> {
-        if (this.itemTypesCache) {
-            return this.itemTypesCache.map(d => this.dataToItem(d));
-        }
-        return this.callMcpTool('binlog_item_types', {}, 'root-items', (text) => {
-            const data = this.tryParseJson(text);
-            const items: TreeNodeData[] = [];
-            const typeNames: string[] = Array.isArray(data)
-                ? data.map((e: any) => String(e.name || e.itemType || e))
-                : (typeof data === 'string' ? data.split('\n').filter(Boolean) : []);
-
-            for (const name of typeNames) {
-                items.push({
-                    kind: 'item-type',
-                    label: name,
-                    icon: 'symbol-array',
-                    children: [], // expandable
-                    itemType: name,
-                });
-            }
-            this.itemTypesCache = items;
-            return items;
-        });
-    }
-
-    /** Fetch items of a specific type (lazy on expand) */
-    private async fetchItemsOfType(element: BinlogTreeItem): Promise<BinlogTreeItem[]> {
-        if (!this.mcpClient) {
-            return [this.makeInfoItem('MCP server not connected', 'info')];
-        }
-        const itemType = element.itemType;
-        if (!itemType) {
-            return [this.makeInfoItem('No item type', 'info')];
-        }
-        try {
-            const result = await this.mcpClient.callTool('binlog_items', { item_type: itemType });
-            const data = this.tryParseJson(result.text);
-            const items: BinlogTreeItem[] = [];
-            const entries = Array.isArray(data) ? data : [];
-            for (const entry of entries.slice(0, 100)) {
-                const identity = entry.identity || entry.itemSpec || entry.include || entry.name || String(entry);
-                const metadata = entry.metadata || {};
-                const metaStr = Object.entries(metadata)
-                    .map(([k, v]) => `${k}=${v}`)
-                    .join('; ');
-                const item = new BinlogTreeItem(
-                    String(identity).substring(0, 120),
-                    vscode.TreeItemCollapsibleState.None
-                );
-                item.nodeKind = 'item-entry';
-                item.description = metaStr.length > 80 ? metaStr.substring(0, 77) + '...' : metaStr;
-                item.tooltip = `${identity}\n${metaStr || '(no metadata)'}`;
-                item.iconPath = new vscode.ThemeIcon('symbol-field');
-                item.fullText = metaStr ? `${identity} — ${metaStr}` : String(identity);
-                item.contextValue = 'copyable-item';
-                items.push(item);
-            }
-            if (entries.length > 100) {
-                items.push(this.makeInfoItem(`... and ${entries.length - 100} more items`, 'info'));
-            }
-            return items.length > 0 ? items : [this.makeInfoItem('No items found', 'info')];
-        } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            return [this.makeInfoItem(`Error: ${msg.substring(0, 80)}`, 'error')];
-        }
-    }
 
     /** Detect files written by multiple tasks (double writes) */
     private async fetchDoubleWrites(): Promise<BinlogTreeItem[]> {

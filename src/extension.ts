@@ -611,6 +611,63 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
+    // Command: Analyze in Chat — opens @binlog chat with context-specific prompt
+    context.subscriptions.push(
+        vscode.commands.registerCommand('binlog.analyzeInChat', async (name?: string, detail?: string, count?: number, category?: string) => {
+            if (!name) {
+                const selected = binlogTreeView?.selection?.[0];
+                if (selected) {
+                    name = typeof selected.label === 'string' ? selected.label : '';
+                    detail = typeof selected.description === 'string' ? selected.description : '';
+                    category = selected.nodeKind;
+                }
+            }
+            if (!name) { return; }
+
+            // Build a context-specific prompt based on what was clicked
+            let prompt: string;
+            const itemCtx = `"${name}" (${detail || ''}${count && count > 1 ? `, ×${count}` : ''})`;
+
+            if (category === 'perf-item' && name.toLowerCase().includes('analyzer')) {
+                prompt = `@binlog The Roslyn analyzer ${itemCtx} is consuming build time. ` +
+                    `What diagnostics does it produce? Is it worth keeping? ` +
+                    `Show how to disable it conditionally (e.g. only in CI) or replace it with a lighter alternative.`;
+            } else if (category === 'perf-item' || category === 'target') {
+                // Target or perf target
+                const isKnown = /^(ResolveAssemblyReferences|CoreCompile|Csc|Copy|RAR|Restore|ResolvePackageAssets|GenerateNuspec)/i.test(name);
+                if (isKnown) {
+                    prompt = `@binlog The MSBuild target/task ${itemCtx} is a known bottleneck. ` +
+                        `What specific MSBuild properties can reduce its time? ` +
+                        `Show the exact XML to add to Directory.Build.props and any trade-offs.`;
+                } else {
+                    prompt = `@binlog Investigate the MSBuild target/task ${itemCtx}. ` +
+                        `Use binlog_search_targets or binlog_tasks_in_target to find what it does. ` +
+                        `Is it running too many times? Can it be skipped with proper Inputs/Outputs?`;
+                }
+            } else if (category === 'task') {
+                prompt = `@binlog Investigate the MSBuild task ${itemCtx}. ` +
+                    `What parameters does it receive? What output does it produce? ` +
+                    `Use binlog_task_details to show its inputs and messages.`;
+            } else if (category === 'property-item') {
+                prompt = `@binlog Explain the MSBuild property ${name} = "${detail}". ` +
+                    `What does it control? Is this value typical? ` +
+                    `What happens if I change it?`;
+            } else if (category === 'item-entry') {
+                prompt = `@binlog Explain the MSBuild item ${itemCtx}. ` +
+                    `Which project references it? Is it needed? ` +
+                    `Are there any version conflicts or redundancies?`;
+            } else if (category === 'project') {
+                prompt = `@binlog Analyze the project ${itemCtx}. ` +
+                    `What are its slowest targets? Does it have unnecessary dependencies? ` +
+                    `Use binlog_project_targets to show the target breakdown.`;
+            } else {
+                prompt = `@binlog Analyze ${itemCtx}. What is it and how does it affect the build?`;
+            }
+
+            vscode.commands.executeCommand('workbench.action.chat.open', prompt);
+        })
+    );
+
     // Command: Search Build Events — search across binlog using Quick Pick
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.searchBinlog', async () => {
@@ -1733,9 +1790,9 @@ async function showTimelineWebview(context: vscode.ExtensionContext) {
 
     try {
         const [targetsResult, tasksResult, projectsResult] = await Promise.all([
-            mcpClient.callTool('binlog_expensive_targets', { top_number: 15 }),
-            mcpClient.callTool('binlog_expensive_tasks', { top_number: 15 }),
-            mcpClient.callTool('binlog_projects'),
+            mcpClient.callTool('binlog_expensive_targets', { top_number: 20 }),
+            mcpClient.callTool('binlog_expensive_tasks', { top_number: 20 }),
+            mcpClient.callTool('binlog_expensive_projects', { limit: 20 }),
         ]);
         targetsData = JSON.parse(targetsResult.text);
         tasksData = JSON.parse(tasksResult.text);
@@ -1745,36 +1802,56 @@ async function showTimelineWebview(context: vscode.ExtensionContext) {
         return;
     }
 
-    // Build target bars
-    const targetBars = Object.entries(targetsData)
-        .map(([name, info]: [string, any]) => ({
+    // Build target bars — handle both array (BinlogInsights) and object (baronfel) formats
+    function parsePerfEntries(data: any): { name: string; durationMs: number; count: number; skipped?: number }[] {
+        if (Array.isArray(data)) {
+            return data.map((entry: any) => ({
+                name: entry.name || entry.Name || entry.targetName || entry.TargetName || entry.taskName || entry.TaskName || '',
+                durationMs: entry.ExclusiveDurationMs || entry.exclusiveDurationMs || entry.totalExclusiveMs || entry.InclusiveDurationMs || entry.inclusiveDurationMs || entry.totalInclusiveMs || entry.totalDurationMs || entry.durationMs || entry.duration || 0,
+                count: entry.ExecutionCount || entry.executionCount || 1,
+                skipped: entry.SkippedCount || entry.skippedCount || 0,
+            }));
+        }
+        return Object.entries(data).map(([name, info]: [string, any]) => ({
             name,
-            durationMs: info.inclusiveDurationMs || info.totalDurationMs || info.durationMs || 0,
-            count: info.executionCount || 1,
-            skipped: info.skippedCount || 0,
-        }))
+            durationMs: info.ExclusiveDurationMs || info.exclusiveDurationMs || info.totalExclusiveMs || info.InclusiveDurationMs || info.inclusiveDurationMs || info.totalInclusiveMs || info.totalDurationMs || info.durationMs || info.duration || 0,
+            count: info.ExecutionCount || info.executionCount || 1,
+            skipped: info.SkippedCount || info.skippedCount || 0,
+        }));
+    }
+
+    function parseProjectEntries(data: any): { name: string; durationMs: number }[] {
+        if (Array.isArray(data)) {
+            return data.map((proj: any) => {
+                const file = proj.projectName || proj.ProjectFile || proj.projectFile || proj.fullPath || proj.FullPath || proj.ProjectName || '';
+                const totalMs = proj.ExclusiveDurationMs || proj.exclusiveDurationMs || proj.totalExclusiveDurationMs
+                    || proj.InclusiveDurationMs || proj.inclusiveDurationMs
+                    || proj.totalDurationMs || proj.durationMs || proj.duration
+                    || proj.TotalDurationMs || proj.DurationMs || proj.Duration || 0;
+                return { name: extractFileName(String(file)), durationMs: totalMs };
+            });
+        }
+        return Object.entries(data).map(([id, proj]: [string, any]) => {
+            const file = proj.ProjectFile || proj.projectFile || proj.projectName || proj.ProjectName || '';
+            const targets = proj.entryTargets || {};
+            const totalMs = proj.ExclusiveDurationMs || proj.exclusiveDurationMs || proj.totalExclusiveDurationMs
+                || proj.InclusiveDurationMs || proj.inclusiveDurationMs
+                || proj.totalDurationMs || proj.durationMs
+                || Object.values(targets).reduce((sum: number, t: any) => sum + (t.durationMs || 0), 0);
+            return { name: extractFileName(file), durationMs: totalMs };
+        });
+    }
+
+    const targetBars = parsePerfEntries(targetsData)
         .filter(t => t.durationMs > 0)
         .sort((a, b) => b.durationMs - a.durationMs);
 
-    const taskBars = Object.entries(tasksData)
-        .map(([name, info]: [string, any]) => ({
-            name,
-            durationMs: info.inclusiveDurationMs || info.totalDurationMs || info.durationMs || 0,
-            count: info.executionCount || 1,
-        }))
+    const taskBars = parsePerfEntries(tasksData)
         .filter(t => t.durationMs > 0)
         .sort((a, b) => b.durationMs - a.durationMs);
 
     // Compute project build times
-    const projectBars = Object.entries(projectsData)
-        .map(([id, proj]: [string, any]) => {
-            const file = proj.projectFile || '';
-            const targets = proj.entryTargets || {};
-            const totalMs = Object.values(targets).reduce(
-                (sum: number, t: any) => sum + (t.durationMs || 0), 0
-            );
-            return { name: extractFileName(file), durationMs: totalMs };
-        })
+    const projectBars = parseProjectEntries(projectsData)
         .filter(p => p.durationMs > 0)
         .sort((a, b) => b.durationMs - a.durationMs)
         .slice(0, 15);
@@ -1801,12 +1878,14 @@ async function showTimelineWebview(context: vscode.ExtensionContext) {
             const meta = item.count && item.count > 1 ? ` <span class="count">×${item.count}</span>` : '';
             const skipBadge = item.skipped !== undefined && item.skipped > 0
                 ? ` <span class="skip-badge">⏭ ${item.skipped} skipped</span>` : '';
-            return `<div class="bar-row">
+            const escapedName = item.name.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+            const durStr = formatDuration(item.durationMs);
+            return `<div class="bar-row clickable" onclick="analyze('${escapedName}', '${durStr}', ${item.count || 1})" title="Click to analyze in Copilot Chat">
                 <div class="bar-label" title="${item.name}">${item.name}${meta}${skipBadge}</div>
                 <div class="bar-track">
                     <div class="bar-fill" style="width:${pct}%;background:${color}"></div>
                 </div>
-                <div class="bar-value">${formatDuration(item.durationMs)}</div>
+                <div class="bar-value">${durStr}</div>
             </div>`;
         }).join('');
     }
@@ -1826,6 +1905,8 @@ async function showTimelineWebview(context: vscode.ExtensionContext) {
     h1 { font-size: 1.4em; margin-bottom: 4px; }
     h2 { font-size: 1.1em; margin-top: 24px; margin-bottom: 8px; color: var(--vscode-descriptionForeground); }
     .bar-row { display: flex; align-items: center; margin: 3px 0; height: 24px; }
+    .bar-row.clickable { cursor: pointer; border-radius: 4px; padding: 0 4px; }
+    .bar-row.clickable:hover { background: var(--vscode-list-hoverBackground); }
     .bar-label {
         width: 280px; min-width: 280px;
         font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -1855,7 +1936,7 @@ async function showTimelineWebview(context: vscode.ExtensionContext) {
 </head>
 <body>
     <h1>📊 Build Timeline</h1>
-    <p style="color:var(--vscode-descriptionForeground)">${getFileName(currentBinlogPath || '')}</p>
+    <p style="color:var(--vscode-descriptionForeground)">${getFileName(currentBinlogPath || '')} — click any bar to analyze in Copilot Chat</p>
 
     <div class="summary">
         <div class="summary-item">
@@ -1873,15 +1954,29 @@ async function showTimelineWebview(context: vscode.ExtensionContext) {
     </div>
 
     <h2><span class="section-icon">🔥</span>Slowest Targets</h2>
-    ${renderBars(targetBars, maxTargetMs, 'var(--vscode-charts-red, #f14c4c)')}
+    ${targetBars.length > 0 ? renderBars(targetBars, maxTargetMs, 'var(--vscode-charts-red, #f14c4c)') : '<p style="color:var(--vscode-descriptionForeground)">No target data</p>'}
 
     <h2><span class="section-icon">🔧</span>Slowest Tasks</h2>
-    ${renderBars(taskBars, maxTaskMs, 'var(--vscode-charts-blue, #3794ff)')}
+    ${taskBars.length > 0 ? renderBars(taskBars, maxTaskMs, 'var(--vscode-charts-blue, #3794ff)') : '<p style="color:var(--vscode-descriptionForeground)">No task data</p>'}
 
-    <h2><span class="section-icon">📁</span>Project Build Times</h2>
-    ${renderBars(uniqueProjectBars, maxProjectMs, 'var(--vscode-charts-green, #89d185)')}
+    ${uniqueProjectBars.length > 0 ? `<h2><span class="section-icon">📁</span>Project Build Times</h2>
+    ${renderBars(uniqueProjectBars, maxProjectMs, 'var(--vscode-charts-green, #89d185)')}` : ''}
+
+    <script>
+        const vscode = acquireVsCodeApi();
+        function analyze(name, duration, count) {
+            vscode.postMessage({ command: 'analyze', name, duration, count });
+        }
+    </script>
 </body>
 </html>`;
+
+    // Handle messages from the webview (click-to-analyze)
+    panel.webview.onDidReceiveMessage(message => {
+        if (message.command === 'analyze') {
+            vscode.commands.executeCommand('binlog.analyzeInChat', message.name, message.duration, message.count);
+        }
+    });
 }
 
 /**
@@ -1927,10 +2022,18 @@ async function showComparisonTimelineWebview(context: vscode.ExtensionContext) {
         return;
     }
 
-    function parseBars(data: Record<string, any>): Map<string, number> {
+    function parseBars(data: any): Map<string, number> {
         const map = new Map<string, number>();
-        for (const [name, info] of Object.entries(data)) {
-            map.set(name, info.inclusiveDurationMs || info.totalDurationMs || info.durationMs || 0);
+        if (Array.isArray(data)) {
+            for (const entry of data) {
+                const name = entry.name || entry.Name || entry.targetName || entry.TargetName || entry.taskName || entry.TaskName || '';
+                const ms = entry.ExclusiveDurationMs || entry.exclusiveDurationMs || entry.totalExclusiveMs || entry.InclusiveDurationMs || entry.inclusiveDurationMs || entry.totalInclusiveMs || entry.totalDurationMs || entry.durationMs || entry.duration || 0;
+                if (name) { map.set(name, ms); }
+            }
+        } else {
+            for (const [name, info] of Object.entries(data as Record<string, any>)) {
+                map.set(name, info.ExclusiveDurationMs || info.exclusiveDurationMs || info.totalExclusiveMs || info.InclusiveDurationMs || info.inclusiveDurationMs || info.totalInclusiveMs || info.totalDurationMs || info.durationMs || info.duration || 0);
+            }
         }
         return map;
     }

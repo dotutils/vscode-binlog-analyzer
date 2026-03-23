@@ -2,7 +2,7 @@
   "name": "binlog-analyzer",
   "displayName": "MSBuild Binlog Analyzer",
   "description": "Analyze MSBuild binary logs with Copilot Chat and MCP tools",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "preview": true,
   "publisher": "dotutils",
   "license": "MIT",
@@ -184,6 +184,11 @@
         "command": "binlog.detectDoubleWrites",
         "title": "Binlog: Detect Double Writes",
         "icon": "$(warning)"
+      },
+      {
+        "command": "binlog.analyzeInChat",
+        "title": "Analyze in Copilot Chat",
+        "icon": "$(comment-discussion)"
       }
     ],
     "configuration": {
@@ -259,10 +264,6 @@
           {
             "name": "summary",
             "description": "Show a comprehensive build summary"
-          },
-          {
-            "name": "secrets",
-            "description": "Guidance on secrets scanning and redaction via Structured Log Viewer"
           },
           {
             "name": "compare",
@@ -352,6 +353,11 @@
           "command": "binlog.copyAllWarnings",
           "when": "view == binlogExplorer && viewItem == warningsRoot",
           "group": "1_copy"
+        },
+        {
+          "command": "binlog.analyzeInChat",
+          "when": "view == binlogExplorer && viewItem =~ /^copyable-(perf|target|task)/",
+          "group": "0_analyze"
         }
       ]
     }

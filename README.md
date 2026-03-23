@@ -26,15 +26,20 @@ The [BinlogInsights.Mcp](https://www.nuget.org/packages/BinlogInsights.Mcp) serv
 | Feature | Description |
 |---------|-------------|
 | **@binlog Chat** | Ask Copilot about errors, performance, targets, imports, NuGet issues |
-| **Slash Commands** | `/errors` `/summary` `/perf` `/timeline` `/targets` `/incremental` `/compare` `/secrets` |
+| **Slash Commands** | `/errors` `/summary` `/perf` `/timeline` `/targets` `/incremental` `/compare` `/search` `/doublewrite` `/properties` `/items` |
 | **Build & Collect** | Build a project and capture a `.binlog` in one step (with optional `--no-restore`) |
-| **Binlog Explorer** | Sidebar tree: projects, errors, warnings, performance, actions |
+| **Binlog Explorer** | Sidebar tree with expandable project → target → task hierarchy, errors, warnings, performance, properties, items, double-write detection |
 | **Build Timeline** | Visual bar charts of target/task durations and project build times |
+| **Click-to-Analyze** | Click any target/task in the tree to open Copilot Chat with optimization suggestions |
 | **Optimize Build** | Multi-step wizard: pick optimizations, Copilot applies changes, verify with A/B comparison |
 | **Problems Panel** | Build diagnostics as native VS Code errors/warnings with per-project CodeLens |
 | **Fix All Issues** | One-click Copilot agent to fix all build warnings/errors |
 | **Multi-Binlog** | Load and compare multiple binlogs |
-| **Secrets** | `/secrets` guides you to scan and redact credentials via [Structured Log Viewer](https://msbuildlog.com/) |
+| **Search** | Search across all build events — targets, tasks, messages, properties |
+| **Double Writes** | Detect files written by multiple tasks — a common source of build flakiness |
+| **Properties & Items** | Browse MSBuild properties and item groups (PackageReference, Compile, etc.) |
+| **Export Text Log** | Generate text logs at Minimal/Normal/Detailed/Diagnostic verbosity |
+| **MCP Auto-Restart** | Automatic recovery with exponential backoff when MCP server crashes |
 
 ## Configuration
 
@@ -43,6 +48,7 @@ The [BinlogInsights.Mcp](https://www.nuget.org/packages/BinlogInsights.Mcp) serv
 | `binlogAnalyzer.mcpServerPath` | `""` | Custom path to the MCP server executable |
 | `binlogAnalyzer.autoLoad` | `true` | Auto-load binlog diagnostics on activation |
 | `binlogAnalyzer.diagnosticsSeverityFilter` | `"Warning"` | Min severity for Problems panel |
+| `binlogAnalyzer.inlineDecorations` | `true` | Show build errors as inline decorations in source files |
 
 ## Related Projects
 
