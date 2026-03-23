@@ -7,6 +7,11 @@ type NodeKind =
     | 'binlog-file'   // individual binlog file
     | 'root-projects' // "Projects" section
     | 'project'       // individual project
+    | 'project-targets' // targets under a project (lazy)
+    | 'target'        // individual target
+    | 'target-tasks'  // tasks under a target (lazy)
+    | 'task'          // individual task
+    | 'message'       // individual message/detail
     | 'root-errors'   // "Errors" section
     | 'diagnostic'    // individual error/warning
     | 'root-warnings' // "Warnings" section
@@ -15,6 +20,14 @@ type NodeKind =
     | 'perf-tasks'    // "Slowest Tasks" sub-section
     | 'perf-analyzers' // "Slowest Analyzers" sub-section
     | 'perf-item'     // individual target/task
+    | 'root-properties' // "Properties" section
+    | 'property-item'   // individual property
+    | 'root-items'      // "Items" section
+    | 'item-type'       // item type group (e.g. PackageReference)
+    | 'item-entry'      // individual item entry
+    | 'root-doublewrite' // "Double Writes" section
+    | 'doublewrite-file' // file written by multiple tasks
+    | 'doublewrite-source' // source task/target that wrote the file
     | 'root-actions'  // "Actions" section
     | 'action'        // individual action
     | 'loading'       // loading placeholder
@@ -33,6 +46,10 @@ interface TreeNodeData {
     projectFile?: string;
     /** For project nodes: project id from MCP */
     projectId?: string;
+    /** For target nodes: target name */
+    targetName?: string;
+    /** For item type nodes: the item type name */
+    itemType?: string;
 }
 
 export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTreeItem> {
@@ -50,6 +67,9 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
     private targetsCache: TreeNodeData[] | null = null;
     private tasksCache: TreeNodeData[] | null = null;
     private analyzersCache: TreeNodeData[] | null = null;
+    private propertiesCache: TreeNodeData[] | null = null;
+    private itemTypesCache: TreeNodeData[] | null = null;
+    private doubleWriteCache: TreeNodeData[] | null = null;
     private loadingSet = new Set<NodeKind>();
 
     setBinlogPaths(paths: string[]) {
@@ -159,10 +179,11 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                     kind: 'project',
                     label: this.extractFileName(filePath),
                     description: dirPath || undefined,
-                    tooltip: `${file}\n\nClick to view project details`,
+                    tooltip: `${file}\n\nExpand to see targets, or click to view project details`,
                     icon: 'package',
                     projectFile: filePath,
                     projectId: String(i),
+                    children: [], // marks as expandable
                     command: {
                         command: 'binlog.openProjectDetails',
                         title: 'View Project Details',
@@ -191,10 +212,11 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                     kind: 'project',
                     label: this.extractFileName(filePath),
                     description: desc,
-                    tooltip: `${file}\nTargets: ${targetNames || 'none'}\nBuild time: ${timeStr || '0.0s'}\n\nClick to view project details`,
+                    tooltip: `${file}\nTargets: ${targetNames || 'none'}\nBuild time: ${timeStr || '0.0s'}\n\nExpand to see targets`,
                     icon: 'package',
                     projectFile: String(file),
                     projectId: id,
+                    children: [], // marks as expandable
                     command: {
                         command: 'binlog.openProjectDetails',
                         title: 'View Project Details',
@@ -285,6 +307,9 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         this.targetsCache = null;
         this.tasksCache = null;
         this.analyzersCache = null;
+        this.propertiesCache = null;
+        this.itemTypesCache = null;
+        this.doubleWriteCache = null;
     }
 
     getTreeItem(element: BinlogTreeItem): vscode.TreeItem {
@@ -397,6 +422,38 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             perfNode.nodeKind = 'root-perf';
             perfNode.iconPath = new vscode.ThemeIcon('dashboard');
             items.push(perfNode);
+
+            // Properties section — browse MSBuild properties
+            const propsNode = new BinlogTreeItem(
+                'Properties',
+                vscode.TreeItemCollapsibleState.Collapsed
+            );
+            propsNode.nodeKind = 'root-properties';
+            propsNode.iconPath = new vscode.ThemeIcon('symbol-property');
+            items.push(propsNode);
+
+            // Items section — browse MSBuild items (PackageReference, Compile, etc.)
+            const itemsNode = new BinlogTreeItem(
+                'Items',
+                vscode.TreeItemCollapsibleState.Collapsed
+            );
+            itemsNode.nodeKind = 'root-items';
+            itemsNode.iconPath = new vscode.ThemeIcon('symbol-array');
+            items.push(itemsNode);
+
+            // Double Writes section — detect files written by multiple tasks
+            const doubleWriteNode = new BinlogTreeItem(
+                'Double Writes',
+                vscode.TreeItemCollapsibleState.Collapsed
+            );
+            doubleWriteNode.nodeKind = 'root-doublewrite';
+            doubleWriteNode.iconPath = new vscode.ThemeIcon('warning');
+            if (this.doubleWriteCache) {
+                doubleWriteNode.description = this.doubleWriteCache.length > 0
+                    ? `(${this.doubleWriteCache.length} conflicts)`
+                    : '(none)';
+            }
+            items.push(doubleWriteNode);
         } else if (this._isLoading) {
             // MCP client not ready yet — show loading indicator
             const loading = new BinlogTreeItem(
@@ -426,6 +483,12 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                 return this.getFileChildren();
             case 'root-projects':
                 return this.fetchProjects();
+            case 'project':
+                return this.fetchProjectTargets(element);
+            case 'target':
+                return this.fetchTargetTasks(element);
+            case 'task':
+                return this.fetchTaskDetails(element);
             case 'root-errors':
                 return this.fetchDiagnostics('Error');
             case 'root-warnings':
@@ -438,6 +501,16 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                 return this.fetchExpensiveTasks();
             case 'perf-analyzers':
                 return this.fetchExpensiveAnalyzers();
+            case 'root-properties':
+                return this.fetchProperties();
+            case 'root-items':
+                return this.fetchItemTypes();
+            case 'item-type':
+                return this.fetchItemsOfType(element);
+            case 'root-doublewrite':
+                return this.fetchDoubleWrites();
+            case 'doublewrite-file':
+                return this.getDoubleWriteSources(element);
             case 'root-actions':
                 return this.getActionChildren();
             default:
@@ -595,6 +668,381 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         return items;
     }
 
+    /** Fetch targets for a specific project (lazy on expand) */
+    private async fetchProjectTargets(element: BinlogTreeItem): Promise<BinlogTreeItem[]> {
+        if (!this.mcpClient) {
+            return [this.makeInfoItem('MCP server not connected', 'info')];
+        }
+        const projectFile = element.projectFile;
+        if (!projectFile) {
+            return [this.makeInfoItem('No project file', 'info')];
+        }
+        try {
+            const result = await this.mcpClient.callTool('binlog_project_targets', {
+                project_path: projectFile,
+            });
+            const data = this.tryParseJson(result.text);
+            const items: BinlogTreeItem[] = [];
+            if (Array.isArray(data)) {
+                for (const t of data) {
+                    const name = t.targetName || t.name || '';
+                    const durationMs = t.durationMs || t.totalDurationMs || t.inclusiveDurationMs || 0;
+                    const durStr = durationMs >= 1000 ? `${(durationMs / 1000).toFixed(1)}s` : `${durationMs}ms`;
+                    const skipped = t.skipped || false;
+                    const icon = skipped ? 'debug-step-over' : 'symbol-event';
+                    const item = new BinlogTreeItem(
+                        String(name),
+                        vscode.TreeItemCollapsibleState.Collapsed
+                    );
+                    item.nodeKind = 'target';
+                    item.description = skipped ? '⏭ skipped' : durStr;
+                    item.tooltip = `Target: ${name}\nDuration: ${durStr}\nSkipped: ${skipped}`;
+                    item.iconPath = new vscode.ThemeIcon(icon);
+                    item.projectFile = projectFile;
+                    item.targetName = String(name);
+                    item.contextValue = 'copyable-target';
+                    item.fullText = `${name} — ${durStr}`;
+                    items.push(item);
+                }
+            } else if (data && typeof data === 'object') {
+                for (const [name, info] of Object.entries(data as Record<string, any>)) {
+                    const durationMs = info.durationMs || info.inclusiveDurationMs || info.totalDurationMs || 0;
+                    const durStr = durationMs >= 1000 ? `${(durationMs / 1000).toFixed(1)}s` : `${durationMs}ms`;
+                    const skipped = info.skipped || false;
+                    const item = new BinlogTreeItem(
+                        name,
+                        vscode.TreeItemCollapsibleState.Collapsed
+                    );
+                    item.nodeKind = 'target';
+                    item.description = skipped ? '⏭ skipped' : durStr;
+                    item.tooltip = `Target: ${name}\nDuration: ${durStr}`;
+                    item.iconPath = new vscode.ThemeIcon(skipped ? 'debug-step-over' : 'symbol-event');
+                    item.projectFile = projectFile;
+                    item.targetName = name;
+                    item.contextValue = 'copyable-target';
+                    item.fullText = `${name} — ${durStr}`;
+                    items.push(item);
+                }
+            }
+            return items.length > 0 ? items : [this.makeInfoItem('No targets found', 'info')];
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return [this.makeInfoItem(`Error: ${msg.substring(0, 80)}`, 'error')];
+        }
+    }
+
+    /** Fetch tasks within a target (lazy on expand) */
+    private async fetchTargetTasks(element: BinlogTreeItem): Promise<BinlogTreeItem[]> {
+        if (!this.mcpClient) {
+            return [this.makeInfoItem('MCP server not connected', 'info')];
+        }
+        const targetName = element.targetName;
+        if (!targetName) {
+            return [this.makeInfoItem('No target name', 'info')];
+        }
+        try {
+            const args: Record<string, unknown> = { target_name: targetName };
+            if (element.projectFile) {
+                args.project_path = element.projectFile;
+            }
+            const result = await this.mcpClient.callTool('binlog_tasks_in_target', args);
+            const data = this.tryParseJson(result.text);
+            const items: BinlogTreeItem[] = [];
+            const entries = Array.isArray(data) ? data : (data && typeof data === 'object' ? Object.entries(data).map(([name, info]) => ({ name, ...(info as object) })) : []);
+            for (const t of entries) {
+                const name = t.taskName || t.name || '';
+                const durationMs = t.durationMs || t.totalDurationMs || 0;
+                const durStr = durationMs >= 1000 ? `${(durationMs / 1000).toFixed(1)}s` : `${durationMs}ms`;
+                const item = new BinlogTreeItem(
+                    String(name),
+                    vscode.TreeItemCollapsibleState.Collapsed
+                );
+                item.nodeKind = 'task';
+                item.description = durStr;
+                item.tooltip = `Task: ${name}\nDuration: ${durStr}\nTarget: ${targetName}`;
+                item.iconPath = new vscode.ThemeIcon('tools');
+                item.projectFile = element.projectFile;
+                item.targetName = targetName;
+                item.taskName = String(name);
+                item.contextValue = 'copyable-task';
+                item.fullText = `${name} — ${durStr}`;
+                items.push(item);
+            }
+            // If we got raw text but no structured data, show as messages
+            if (items.length === 0 && result.text.trim()) {
+                const lines = result.text.split('\n').filter((l: string) => l.trim());
+                for (const line of lines.slice(0, 20)) {
+                    const msgItem = new BinlogTreeItem(
+                        line.trim().substring(0, 120),
+                        vscode.TreeItemCollapsibleState.None
+                    );
+                    msgItem.nodeKind = 'message';
+                    msgItem.iconPath = new vscode.ThemeIcon('note');
+                    msgItem.fullText = line.trim();
+                    items.push(msgItem);
+                }
+            }
+            return items.length > 0 ? items : [this.makeInfoItem('No tasks found', 'info')];
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return [this.makeInfoItem(`Error: ${msg.substring(0, 80)}`, 'error')];
+        }
+    }
+
+    /** Fetch task details (lazy on expand) */
+    private async fetchTaskDetails(element: BinlogTreeItem): Promise<BinlogTreeItem[]> {
+        if (!this.mcpClient) {
+            return [this.makeInfoItem('MCP server not connected', 'info')];
+        }
+        const taskName = element.taskName;
+        if (!taskName) {
+            return [this.makeInfoItem('No task name', 'info')];
+        }
+        try {
+            const args: Record<string, unknown> = { task_name: taskName };
+            if (element.projectFile) {
+                args.project_path = element.projectFile;
+            }
+            const result = await this.mcpClient.callTool('binlog_task_details', args);
+            const items: BinlogTreeItem[] = [];
+            // Parse the result as lines/messages
+            const lines = result.text.split('\n').filter((l: string) => l.trim());
+            for (const line of lines.slice(0, 50)) {
+                const msgItem = new BinlogTreeItem(
+                    line.trim().substring(0, 150),
+                    vscode.TreeItemCollapsibleState.None
+                );
+                msgItem.nodeKind = 'message';
+                msgItem.iconPath = new vscode.ThemeIcon('note');
+                msgItem.fullText = line.trim();
+                msgItem.contextValue = 'copyable-message';
+                items.push(msgItem);
+            }
+            return items.length > 0 ? items : [this.makeInfoItem('No details available', 'info')];
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return [this.makeInfoItem(`Error: ${msg.substring(0, 80)}`, 'error')];
+        }
+    }
+
+    /** Fetch MSBuild properties */
+    private async fetchProperties(): Promise<BinlogTreeItem[]> {
+        if (this.propertiesCache) {
+            return this.propertiesCache.map(d => this.dataToItem(d));
+        }
+        return this.callMcpTool('binlog_properties', {}, 'root-properties', (text) => {
+            const data = this.tryParseJson(text);
+            const items: TreeNodeData[] = [];
+            if (data && typeof data === 'object' && !Array.isArray(data)) {
+                for (const [name, value] of Object.entries(data as Record<string, any>)) {
+                    const valStr = String(value ?? '');
+                    items.push({
+                        kind: 'property-item',
+                        label: name,
+                        description: valStr.length > 80 ? valStr.substring(0, 77) + '...' : valStr,
+                        tooltip: `${name} = ${valStr}`,
+                        icon: 'symbol-property',
+                    });
+                }
+            } else if (Array.isArray(data)) {
+                for (const entry of data) {
+                    const name = entry.name || entry.propertyName || '';
+                    const value = entry.value || entry.propertyValue || '';
+                    items.push({
+                        kind: 'property-item',
+                        label: String(name),
+                        description: String(value).length > 80 ? String(value).substring(0, 77) + '...' : String(value),
+                        tooltip: `${name} = ${value}`,
+                        icon: 'symbol-property',
+                    });
+                }
+            }
+            this.propertiesCache = items;
+            return items;
+        });
+    }
+
+    /** Fetch MSBuild item types */
+    private async fetchItemTypes(): Promise<BinlogTreeItem[]> {
+        if (this.itemTypesCache) {
+            return this.itemTypesCache.map(d => this.dataToItem(d));
+        }
+        return this.callMcpTool('binlog_item_types', {}, 'root-items', (text) => {
+            const data = this.tryParseJson(text);
+            const items: TreeNodeData[] = [];
+            const typeNames: string[] = Array.isArray(data)
+                ? data.map((e: any) => String(e.name || e.itemType || e))
+                : (typeof data === 'string' ? data.split('\n').filter(Boolean) : []);
+
+            for (const name of typeNames) {
+                items.push({
+                    kind: 'item-type',
+                    label: name,
+                    icon: 'symbol-array',
+                    children: [], // expandable
+                    itemType: name,
+                });
+            }
+            this.itemTypesCache = items;
+            return items;
+        });
+    }
+
+    /** Fetch items of a specific type (lazy on expand) */
+    private async fetchItemsOfType(element: BinlogTreeItem): Promise<BinlogTreeItem[]> {
+        if (!this.mcpClient) {
+            return [this.makeInfoItem('MCP server not connected', 'info')];
+        }
+        const itemType = element.itemType;
+        if (!itemType) {
+            return [this.makeInfoItem('No item type', 'info')];
+        }
+        try {
+            const result = await this.mcpClient.callTool('binlog_items', { item_type: itemType });
+            const data = this.tryParseJson(result.text);
+            const items: BinlogTreeItem[] = [];
+            const entries = Array.isArray(data) ? data : [];
+            for (const entry of entries.slice(0, 100)) {
+                const identity = entry.identity || entry.itemSpec || entry.include || entry.name || String(entry);
+                const metadata = entry.metadata || {};
+                const metaStr = Object.entries(metadata)
+                    .map(([k, v]) => `${k}=${v}`)
+                    .join('; ');
+                const item = new BinlogTreeItem(
+                    String(identity).substring(0, 120),
+                    vscode.TreeItemCollapsibleState.None
+                );
+                item.nodeKind = 'item-entry';
+                item.description = metaStr.length > 80 ? metaStr.substring(0, 77) + '...' : metaStr;
+                item.tooltip = `${identity}\n${metaStr || '(no metadata)'}`;
+                item.iconPath = new vscode.ThemeIcon('symbol-field');
+                item.fullText = metaStr ? `${identity} — ${metaStr}` : String(identity);
+                item.contextValue = 'copyable-item';
+                items.push(item);
+            }
+            if (entries.length > 100) {
+                items.push(this.makeInfoItem(`... and ${entries.length - 100} more items`, 'info'));
+            }
+            return items.length > 0 ? items : [this.makeInfoItem('No items found', 'info')];
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return [this.makeInfoItem(`Error: ${msg.substring(0, 80)}`, 'error')];
+        }
+    }
+
+    /** Detect files written by multiple tasks (double writes) */
+    private async fetchDoubleWrites(): Promise<BinlogTreeItem[]> {
+        if (this.doubleWriteCache) {
+            if (this.doubleWriteCache.length === 0) {
+                return [this.makeInfoItem('No double writes detected', 'info')];
+            }
+            return this.doubleWriteCache.map(d => this.dataToItem(d));
+        }
+        if (!this.mcpClient) {
+            return [this.makeInfoItem('MCP server not connected', 'info')];
+        }
+        try {
+            // Use binlog_search to find Copy task outputs and detect collisions
+            const result = await this.mcpClient.callTool('binlog_search', {
+                query: 'Copying file from',
+                max_results: 500,
+            });
+            const text = result.text;
+            // Parse copy operations: "Copying file from X to Y"
+            const copyRegex = /Copying file from ["']?(.+?)["']?\s+to\s+["']?(.+?)["']?\.?\s*$/gmi;
+            const outputFiles = new Map<string, Set<string>>(); // dest → set of source descriptions
+            let match;
+            while ((match = copyRegex.exec(text)) !== null) {
+                const dest = match[2].trim().toLowerCase();
+                const source = match[1].trim();
+                if (!outputFiles.has(dest)) {
+                    outputFiles.set(dest, new Set());
+                }
+                outputFiles.get(dest)!.add(source);
+            }
+
+            // Also search for Csc output
+            try {
+                const cscResult = await this.mcpClient.callTool('binlog_search', {
+                    query: 'Writing assembly to',
+                    max_results: 100,
+                });
+                const writeRegex = /Writing (?:assembly|resource) to ["']?(.+?)["']?\s*$/gmi;
+                let wMatch;
+                while ((wMatch = writeRegex.exec(cscResult.text)) !== null) {
+                    const dest = wMatch[1].trim().toLowerCase();
+                    if (!outputFiles.has(dest)) {
+                        outputFiles.set(dest, new Set());
+                    }
+                    outputFiles.get(dest)!.add('Csc (compiler)');
+                }
+            } catch { /* non-fatal */ }
+
+            // Filter to files written by multiple sources
+            const conflicts: TreeNodeData[] = [];
+            for (const [dest, sources] of outputFiles) {
+                if (sources.size > 1) {
+                    const children: TreeNodeData[] = [...sources].map(src => ({
+                        kind: 'doublewrite-source' as NodeKind,
+                        label: src.length > 100 ? src.substring(0, 97) + '...' : src,
+                        icon: 'file-code',
+                    }));
+                    const fileName = dest.split(/[/\\]/).pop() || dest;
+                    conflicts.push({
+                        kind: 'doublewrite-file',
+                        label: fileName,
+                        description: `${sources.size} writers`,
+                        tooltip: `Output: ${dest}\nWritten by ${sources.size} different sources:\n${[...sources].join('\n')}`,
+                        icon: 'warning',
+                        children,
+                    });
+                }
+            }
+
+            this.doubleWriteCache = conflicts;
+            this._onDidChangeTreeData.fire(undefined); // Refresh to update count
+            return conflicts.length > 0
+                ? conflicts.map(d => this.dataToItem(d))
+                : [this.makeInfoItem('No double writes detected ✅', 'info')];
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return [this.makeInfoItem(`Error: ${msg.substring(0, 80)}`, 'error')];
+        }
+    }
+
+    /** Get children of a double-write file node (the sources that wrote it) */
+    private getDoubleWriteSources(element: BinlogTreeItem): BinlogTreeItem[] {
+        if (!this.doubleWriteCache) { return []; }
+        const parent = this.doubleWriteCache.find(d =>
+            d.label === (typeof element.label === 'string' ? element.label : '')
+        );
+        if (!parent?.children) { return []; }
+        return parent.children.map(c => {
+            const item = new BinlogTreeItem(c.label, vscode.TreeItemCollapsibleState.None);
+            item.nodeKind = c.kind;
+            item.iconPath = new vscode.ThemeIcon(c.icon || 'file-code');
+            item.fullText = c.label;
+            item.contextValue = 'copyable-source';
+            return item;
+        });
+    }
+
+    /** Execute a search query against the binlog and return results */
+    async searchBinlog(query: string, maxResults: number = 100): Promise<{ text: string }> {
+        if (!this.mcpClient) {
+            throw new Error('MCP server not connected');
+        }
+        return this.mcpClient.callTool('binlog_search', {
+            query,
+            max_results: maxResults,
+        });
+    }
+
+    /** Get the internal MCP client for direct access */
+    getMcpClient(): McpClient | null {
+        return this.mcpClient;
+    }
+
     private getActionChildren(): BinlogTreeItem[] {
         const actions: BinlogTreeItem[] = [];
 
@@ -691,6 +1139,10 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         if (data.tooltip) { item.tooltip = data.tooltip; }
         if (data.icon) { item.iconPath = new vscode.ThemeIcon(data.icon); }
         if (data.command) { item.command = data.command; }
+        if (data.projectFile) { item.projectFile = data.projectFile; }
+        if (data.projectId) { /* stored in command args */ }
+        if (data.targetName) { item.targetName = data.targetName; }
+        if (data.itemType) { item.itemType = data.itemType; }
         // Build full text for clipboard and set context for menus
         const parts = [data.label];
         if (data.description) { parts.push(data.description); }
@@ -828,6 +1280,14 @@ export class BinlogTreeItem extends vscode.TreeItem {
     nodeKind: NodeKind = 'info';
     /** Full text for clipboard copy (label + description + tooltip details) */
     fullText?: string;
+    /** For project nodes: full path of the project file */
+    projectFile?: string;
+    /** For target nodes: target name */
+    targetName?: string;
+    /** For task nodes: task name */
+    taskName?: string;
+    /** For item type nodes: the item type name */
+    itemType?: string;
     constructor(label: string, collapsibleState: vscode.TreeItemCollapsibleState) {
         super(label, collapsibleState);
     }

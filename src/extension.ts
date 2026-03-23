@@ -611,6 +611,239 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
+    // Command: Search Build Events — search across binlog using Quick Pick
+    context.subscriptions.push(
+        vscode.commands.registerCommand('binlog.searchBinlog', async () => {
+            telemetry.trackCommand('searchBinlog');
+            if (!mcpClient) {
+                vscode.window.showWarningMessage('No binlog loaded. Use "Binlog: Load File" first.');
+                return;
+            }
+
+            const query = await vscode.window.showInputBox({
+                prompt: 'Search across all build events (targets, tasks, messages, properties)',
+                placeHolder: 'e.g. "PackageReference", "error CS", "ResolveAssembly"',
+                title: 'Search Binlog',
+            });
+
+            if (!query?.trim()) { return; }
+
+            await vscode.window.withProgress(
+                { location: vscode.ProgressLocation.Notification, title: `Searching binlog for "${query}"...` },
+                async () => {
+                    try {
+                        const result = await mcpClient!.callTool('binlog_search', {
+                            query: query.trim(),
+                            max_results: 200,
+                        });
+
+                        // Show results in a virtual document
+                        const header = `🔍 Search Results for "${query}"\n${'═'.repeat(60)}\n\n`;
+                        const content = header + (result.text || 'No results found.');
+
+                        const doc = await vscode.workspace.openTextDocument({
+                            content,
+                            language: 'log',
+                        });
+                        await vscode.window.showTextDocument(doc, { preview: true });
+                    } catch (err) {
+                        const msg = err instanceof Error ? err.message : String(err);
+                        vscode.window.showErrorMessage(`Search failed: ${msg}`);
+                    }
+                }
+            );
+        })
+    );
+
+    // Command: Export as Text Log — generate text log at various verbosity levels
+    context.subscriptions.push(
+        vscode.commands.registerCommand('binlog.exportTextLog', async () => {
+            telemetry.trackCommand('exportTextLog');
+            if (!mcpClient || !currentBinlogPath) {
+                vscode.window.showWarningMessage('No binlog loaded. Use "Binlog: Load File" first.');
+                return;
+            }
+
+            const verbosity = await vscode.window.showQuickPick(
+                [
+                    { label: 'Minimal', description: 'Errors and warnings only', value: 'minimal' },
+                    { label: 'Normal', description: 'Errors, warnings, and key build information', value: 'normal' },
+                    { label: 'Detailed', description: 'Comprehensive log with targets and tasks', value: 'detailed' },
+                    { label: 'Diagnostic', description: 'Full verbose output — everything', value: 'diagnostic' },
+                ],
+                {
+                    placeHolder: 'Select log verbosity level',
+                    title: 'Export Binlog as Text Log',
+                }
+            );
+            if (!verbosity) { return; }
+
+            await vscode.window.withProgress(
+                { location: vscode.ProgressLocation.Notification, title: `Generating ${verbosity.label} text log...` },
+                async () => {
+                    try {
+                        const sections: string[] = [];
+                        const binlogName = getFileName(currentBinlogPath || '');
+                        sections.push(`MSBuild Text Log — ${binlogName}`);
+                        sections.push(`Verbosity: ${verbosity.label}`);
+                        sections.push(`Generated: ${new Date().toISOString()}`);
+                        sections.push('═'.repeat(60));
+                        sections.push('');
+
+                        // Always include overview
+                        try {
+                            const overview = await mcpClient!.callTool('binlog_overview', {});
+                            sections.push('BUILD OVERVIEW');
+                            sections.push('─'.repeat(40));
+                            sections.push(overview.text);
+                            sections.push('');
+                        } catch { /* non-fatal */ }
+
+                        // Always include errors
+                        try {
+                            const errors = await mcpClient!.callTool('binlog_errors', {});
+                            sections.push('ERRORS');
+                            sections.push('─'.repeat(40));
+                            sections.push(errors.text || 'None');
+                            sections.push('');
+                        } catch { /* non-fatal */ }
+
+                        // Always include warnings
+                        try {
+                            const warnings = await mcpClient!.callTool('binlog_warnings', {});
+                            sections.push('WARNINGS');
+                            sections.push('─'.repeat(40));
+                            sections.push(warnings.text || 'None');
+                            sections.push('');
+                        } catch { /* non-fatal */ }
+
+                        if (verbosity.value !== 'minimal') {
+                            // Normal+: include projects and properties
+                            try {
+                                const projects = await mcpClient!.callTool('binlog_projects', {});
+                                sections.push('PROJECTS');
+                                sections.push('─'.repeat(40));
+                                sections.push(projects.text);
+                                sections.push('');
+                            } catch { /* non-fatal */ }
+
+                            try {
+                                const props = await mcpClient!.callTool('binlog_properties', {});
+                                sections.push('PROPERTIES');
+                                sections.push('─'.repeat(40));
+                                sections.push(props.text);
+                                sections.push('');
+                            } catch { /* non-fatal */ }
+                        }
+
+                        if (verbosity.value === 'detailed' || verbosity.value === 'diagnostic') {
+                            // Detailed+: include targets and tasks
+                            try {
+                                const targets = await mcpClient!.callTool('binlog_expensive_targets', { top_number: 30 });
+                                sections.push('TARGETS (by duration)');
+                                sections.push('─'.repeat(40));
+                                sections.push(targets.text);
+                                sections.push('');
+                            } catch { /* non-fatal */ }
+
+                            try {
+                                const tasks = await mcpClient!.callTool('binlog_expensive_tasks', { top_number: 30 });
+                                sections.push('TASKS (by duration)');
+                                sections.push('─'.repeat(40));
+                                sections.push(tasks.text);
+                                sections.push('');
+                            } catch { /* non-fatal */ }
+
+                            try {
+                                const itemTypes = await mcpClient!.callTool('binlog_item_types', {});
+                                sections.push('ITEM TYPES');
+                                sections.push('─'.repeat(40));
+                                sections.push(itemTypes.text);
+                                sections.push('');
+                            } catch { /* non-fatal */ }
+                        }
+
+                        if (verbosity.value === 'diagnostic') {
+                            // Diagnostic: include imports, NuGet, compiler, analyzers
+                            try {
+                                const imports = await mcpClient!.callTool('binlog_imports', {});
+                                sections.push('IMPORTS');
+                                sections.push('─'.repeat(40));
+                                sections.push(imports.text);
+                                sections.push('');
+                            } catch { /* non-fatal */ }
+
+                            try {
+                                const nuget = await mcpClient!.callTool('binlog_nuget', {});
+                                sections.push('NUGET');
+                                sections.push('─'.repeat(40));
+                                sections.push(nuget.text);
+                                sections.push('');
+                            } catch { /* non-fatal */ }
+
+                            try {
+                                const analyzers = await mcpClient!.callTool('binlog_expensive_analyzers', { top_number: 20 });
+                                sections.push('ANALYZERS (by duration)');
+                                sections.push('─'.repeat(40));
+                                sections.push(analyzers.text);
+                                sections.push('');
+                            } catch { /* non-fatal */ }
+
+                            try {
+                                const compiler = await mcpClient!.callTool('binlog_compiler', {});
+                                sections.push('COMPILER COMMAND LINE');
+                                sections.push('─'.repeat(40));
+                                sections.push(compiler.text);
+                                sections.push('');
+                            } catch { /* non-fatal */ }
+                        }
+
+                        const content = sections.join('\n');
+
+                        // Offer to save or open as untitled
+                        const action = await vscode.window.showQuickPick(
+                            [
+                                { label: 'Open in Editor', description: 'View the text log in a new tab', value: 'editor' },
+                                { label: 'Save to File', description: 'Save as .log file next to the binlog', value: 'save' },
+                            ],
+                            { placeHolder: 'What to do with the generated log?' }
+                        );
+
+                        if (action?.value === 'save') {
+                            const logPath = currentBinlogPath!.replace(/\.binlog$/, `.${verbosity.value}.log`);
+                            fs.writeFileSync(logPath, content, 'utf8');
+                            const doc = await vscode.workspace.openTextDocument(logPath);
+                            await vscode.window.showTextDocument(doc, { preview: true });
+                            vscode.window.showInformationMessage(`Text log saved to ${getFileName(logPath)}`);
+                        } else {
+                            const doc = await vscode.workspace.openTextDocument({
+                                content,
+                                language: 'log',
+                            });
+                            await vscode.window.showTextDocument(doc, { preview: true });
+                        }
+                    } catch (err) {
+                        const msg = err instanceof Error ? err.message : String(err);
+                        vscode.window.showErrorMessage(`Export failed: ${msg}`);
+                    }
+                }
+            );
+        })
+    );
+
+    // Command: Detect Double Writes — find files written by multiple tasks
+    context.subscriptions.push(
+        vscode.commands.registerCommand('binlog.detectDoubleWrites', async () => {
+            telemetry.trackCommand('detectDoubleWrites');
+            if (!currentBinlogPath) {
+                vscode.window.showWarningMessage('No binlog loaded. Use "Binlog: Load File" first.');
+                return;
+            }
+            // Open the chat with the doublewrite command
+            vscode.commands.executeCommand('workbench.action.chat.open', '@binlog /doublewrite');
+        })
+    );
+
     // Register chat participant
     chatParticipant.register(context);
 
@@ -972,7 +1205,12 @@ async function cleanupBinlogInstructions() {
 /**
  * Starts a private MCP client subprocess for populating the tree view.
  * This is separate from the VS Code MCP integration used by Copilot Chat.
+ * Automatically restarts on unexpected exit with exponential backoff.
  */
+let mcpRestartAttempts = 0;
+const MCP_MAX_RESTART_ATTEMPTS = 5;
+const MCP_BACKOFF_BASE_MS = 1000;
+
 async function startMcpClientForTree(binlogPaths: string[]) {
     // Dispose previous client
     if (mcpClient) {
@@ -992,9 +1230,43 @@ async function startMcpClientForTree(binlogPaths: string[]) {
         const client = new McpClient(toolExe, binlogPaths);
         await client.start();
         mcpClient = client;
+        mcpRestartAttempts = 0; // Reset on successful start
         treeDataProvider?.setMcpClient(client);
         binlogDocProvider?.setMcpClient(client);
         chatParticipant?.setMcpClient(client);
+
+        // Auto-restart on unexpected exit
+        client.on('unexpected-exit', () => {
+            if (client.isDisposed) { return; }
+            mcpRestartAttempts++;
+            if (mcpRestartAttempts > MCP_MAX_RESTART_ATTEMPTS) {
+                vscode.window.showErrorMessage(
+                    `Binlog MCP server crashed ${MCP_MAX_RESTART_ATTEMPTS} times. ` +
+                    `Reload the window or use "Binlog: Reload" to retry.`
+                );
+                treeDataProvider?.setMcpClient(null);
+                binlogDocProvider?.setMcpClient(null);
+                chatParticipant?.setMcpClient(null);
+                updateStatusBar();
+                return;
+            }
+
+            const delay = Math.min(MCP_BACKOFF_BASE_MS * Math.pow(2, mcpRestartAttempts - 1), 30000);
+            vscode.window.setStatusBarMessage(
+                `$(sync~spin) MCP server crashed — restarting in ${(delay / 1000).toFixed(0)}s (attempt ${mcpRestartAttempts}/${MCP_MAX_RESTART_ATTEMPTS})...`,
+                delay + 5000
+            );
+
+            setTimeout(async () => {
+                try {
+                    await startMcpClientForTree(binlogPaths);
+                    vscode.window.setStatusBarMessage('$(check) MCP server reconnected', 3000);
+                    updateStatusBar();
+                } catch (err) {
+                    telemetry.trackMcpError('autoRestart', String(err));
+                }
+            }, delay);
+        });
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.warn('Failed to start MCP client for tree view:', msg);

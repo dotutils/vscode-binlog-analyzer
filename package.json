@@ -169,6 +169,21 @@
         "command": "binlog.optimizeBuild",
         "title": "Binlog: Optimize Build (Apply & Compare)",
         "icon": "$(sparkle)"
+      },
+      {
+        "command": "binlog.searchBinlog",
+        "title": "Binlog: Search Build Events",
+        "icon": "$(search)"
+      },
+      {
+        "command": "binlog.exportTextLog",
+        "title": "Binlog: Export as Text Log",
+        "icon": "$(output)"
+      },
+      {
+        "command": "binlog.detectDoubleWrites",
+        "title": "Binlog: Detect Double Writes",
+        "icon": "$(warning)"
       }
     ],
     "configuration": {
@@ -260,6 +275,22 @@
           {
             "name": "incremental",
             "description": "Analyze build incrementality — find targets that rebuild unnecessarily and suggest fixes"
+          },
+          {
+            "name": "search",
+            "description": "Search across all build events — targets, tasks, messages, properties"
+          },
+          {
+            "name": "doublewrite",
+            "description": "Detect files written by multiple tasks — a common source of build flakiness"
+          },
+          {
+            "name": "properties",
+            "description": "Browse and analyze MSBuild properties from the build"
+          },
+          {
+            "name": "items",
+            "description": "Browse MSBuild items (PackageReference, Compile, etc.) and their metadata"
           }
         ]
       }

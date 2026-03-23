@@ -14,6 +14,9 @@ function log(msg: string) {
 /**
  * Minimal MCP (Model Context Protocol) client that communicates with
  * BinlogInsights.Mcp over stdio using JSON-RPC 2.0 with newline-delimited JSON.
+ *
+ * Emits:
+ * - 'unexpected-exit' when the server process exits unexpectedly (not via dispose())
  */
 export class McpClient extends EventEmitter {
     private proc: ChildProcess | null = null;
@@ -21,6 +24,7 @@ export class McpClient extends EventEmitter {
     private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
     private buffer = '';
     private initialized = false;
+    private disposed = false;
 
     constructor(
         private readonly exePath: string,
@@ -29,7 +33,14 @@ export class McpClient extends EventEmitter {
         super();
     }
 
+    /** Whether the client has been explicitly disposed (vs crashed) */
+    get isDisposed(): boolean { return this.disposed; }
+
+    /** Whether the client is ready to accept tool calls */
+    get isReady(): boolean { return this.initialized && !this.disposed; }
+
     async start(): Promise<void> {
+        this.disposed = false;
         const args = this.binlogPaths.flatMap(p => ['--binlog', p]);
         this.proc = spawn(this.exePath, args, {
             stdio: ['pipe', 'pipe', 'pipe'],
@@ -38,12 +49,18 @@ export class McpClient extends EventEmitter {
 
         this.proc.stdout!.on('data', (chunk: Buffer) => this.onData(chunk));
         this.proc.stderr!.on('data', () => { /* ignore debug logs */ });
-        this.proc.on('exit', () => {
+        this.proc.on('exit', (code) => {
+            const wasInitialized = this.initialized;
             this.initialized = false;
             for (const p of this.pending.values()) {
                 p.reject(new Error('MCP server exited'));
             }
             this.pending.clear();
+            // Emit unexpected-exit if we didn't explicitly dispose
+            if (!this.disposed && wasInitialized) {
+                log(`MCP server exited unexpectedly (code ${code}). Emitting unexpected-exit.`);
+                this.emit('unexpected-exit', code);
+            }
         });
 
         // Wait for server to start, then try handshake with quick retry
@@ -108,6 +125,7 @@ export class McpClient extends EventEmitter {
     }
 
     dispose(): void {
+        this.disposed = true;
         if (this.proc) {
             this.proc.kill();
             this.proc = null;
