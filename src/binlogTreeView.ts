@@ -920,13 +920,15 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                 // Show parameters, messages, etc.
                 if (details.parameters) {
                     for (const [k, v] of Object.entries(details.parameters)) {
+                        const valStr = String(v);
                         const paramItem = new BinlogTreeItem(
-                            `${k} = ${String(v).substring(0, 100)}`,
+                            `${k} = ${valStr}`,
                             vscode.TreeItemCollapsibleState.None
                         );
                         paramItem.nodeKind = 'message';
                         paramItem.iconPath = new vscode.ThemeIcon('symbol-parameter');
-                        paramItem.fullText = `${k} = ${v}`;
+                        paramItem.tooltip = `${k} = ${valStr}`;
+                        paramItem.fullText = `${k} = ${valStr}`;
                         paramItem.contextValue = 'copyable-message';
                         items.push(paramItem);
                     }
@@ -934,13 +936,15 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                 if (details.messages && Array.isArray(details.messages)) {
                     for (const msg of details.messages.slice(0, 30)) {
                         const msgText = typeof msg === 'string' ? msg : (msg.text || msg.message || JSON.stringify(msg));
+                        const msgStr = String(msgText);
                         const msgItem = new BinlogTreeItem(
-                            String(msgText).substring(0, 150),
+                            msgStr,
                             vscode.TreeItemCollapsibleState.None
                         );
                         msgItem.nodeKind = 'message';
                         msgItem.iconPath = new vscode.ThemeIcon('note');
-                        msgItem.fullText = String(msgText);
+                        msgItem.tooltip = msgStr;
+                        msgItem.fullText = msgStr;
                         msgItem.contextValue = 'copyable-message';
                         items.push(msgItem);
                     }
@@ -951,13 +955,15 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             if (items.length === 0) {
                 const lines = result.text.split('\n').filter((l: string) => l.trim());
                 for (const line of lines.slice(0, 50)) {
+                    const trimmed = line.trim();
                     const msgItem = new BinlogTreeItem(
-                        line.trim().substring(0, 150),
+                        trimmed,
                         vscode.TreeItemCollapsibleState.None
                     );
                     msgItem.nodeKind = 'message';
                     msgItem.iconPath = new vscode.ThemeIcon('note');
-                    msgItem.fullText = line.trim();
+                    msgItem.tooltip = trimmed;
+                    msgItem.fullText = trimmed;
                     msgItem.contextValue = 'copyable-message';
                     items.push(msgItem);
                 }
