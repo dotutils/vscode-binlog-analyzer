@@ -99,7 +99,7 @@ export function parseDiagnostics(data: unknown): { errors: ParsedDiagnostic[]; w
                 const label = code ? `${code}: ${msg}` : msg;
                 const loc = file ? `${extractFileName(file)}${line ? ':' + line : ''}` : '';
                 const item: ParsedDiagnostic = {
-                    label: label.length > 120 ? label.substring(0, 117) + '...' : label,
+                    label,
                     description: loc,
                     tooltip: `${label}\n${file}${line ? ':' + line : ''}`,
                     severity: isError(sev) ? 'error' : 'warning',

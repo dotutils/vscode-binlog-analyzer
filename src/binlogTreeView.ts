@@ -250,7 +250,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                 const loc = file ? `${this.extractFileName(String(file))}${line ? ':' + line : ''}` : '';
                 items.push({
                     kind: 'diagnostic',
-                    label: label.length > 120 ? label.substring(0, 117) + '...' : label,
+                    label,
                     description: loc,
                     tooltip: `${label}\n${file}${line ? ':' + line : ''}`,
                     icon: severity === 'error' ? 'error' : 'warning',
@@ -283,7 +283,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                     const loc = file ? `${this.extractFileName(String(file))}${line ? ':' + line : ''}` : '';
                     const item: TreeNodeData = {
                         kind: 'diagnostic',
-                        label: label.length > 120 ? label.substring(0, 117) + '...' : label,
+                        label,
                         description: loc,
                         tooltip: `${label}\n${file}${line ? ':' + line : ''}`,
                         icon: this.isError(sev) ? 'error' : 'warning',
@@ -876,11 +876,12 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                 const lines = result.text.split('\n').filter((l: string) => l.trim());
                 for (const line of lines.slice(0, 20)) {
                     const msgItem = new BinlogTreeItem(
-                        line.trim().substring(0, 120),
+                        line.trim(),
                         vscode.TreeItemCollapsibleState.None
                     );
                     msgItem.nodeKind = 'message';
                     msgItem.iconPath = new vscode.ThemeIcon('note');
+                    msgItem.tooltip = line.trim();
                     msgItem.fullText = line.trim();
                     items.push(msgItem);
                 }

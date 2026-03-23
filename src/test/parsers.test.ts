@@ -147,15 +147,14 @@ suite('Parsers', () => {
             assert.strictEqual(result.errors[0].label, 'Generic error');
         });
 
-        test('truncates long labels', () => {
+        test('preserves full label text', () => {
             const data = {
                 diagnostics: [
                     { severity: 'Warning', message: 'A'.repeat(200) },
                 ],
             };
             const result = parseDiagnostics(data);
-            assert.ok(result.warnings[0].label.length <= 120);
-            assert.ok(result.warnings[0].label.endsWith('...'));
+            assert.strictEqual(result.warnings[0].label.length, 200);
         });
 
         test('formats file location description', () => {
