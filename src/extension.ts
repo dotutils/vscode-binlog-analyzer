@@ -1811,16 +1811,21 @@ async function showTimelineWebview(context: vscode.ExtensionContext) {
     let targetsData: Record<string, any> = {};
     let tasksData: Record<string, any> = {};
     let projectsData: Record<string, any> = {};
+    let totalProjectCount = 0;
 
     try {
-        const [targetsResult, tasksResult, projectsResult] = await Promise.all([
+        const [targetsResult, tasksResult, projectsResult, allProjectsResult] = await Promise.all([
             mcpClient.callTool('binlog_expensive_targets', { top_number: 20 }),
             mcpClient.callTool('binlog_expensive_tasks', { top_number: 20 }),
             mcpClient.callTool('binlog_expensive_projects', { limit: 20 }),
+            mcpClient.callTool('binlog_projects'),
         ]);
         targetsData = JSON.parse(targetsResult.text);
         tasksData = JSON.parse(tasksResult.text);
         projectsData = JSON.parse(projectsResult.text);
+        const allProjects = JSON.parse(allProjectsResult.text);
+        totalProjectCount = Array.isArray(allProjects) ? allProjects.length
+            : (allProjects && typeof allProjects === 'object') ? Object.keys(allProjects).length : 0;
     } catch {
         panel.webview.html = '<html><body><h2>Failed to load timeline data</h2></body></html>';
         return;
@@ -1964,7 +1969,7 @@ async function showTimelineWebview(context: vscode.ExtensionContext) {
 
     <div class="summary">
         <div class="summary-item">
-            <div class="summary-value">${uniqueProjectBars.length}</div>
+            <div class="summary-value">${totalProjectCount || uniqueProjectBars.length}</div>
             <div class="summary-label">Projects</div>
         </div>
         <div class="summary-item">

@@ -1027,63 +1027,39 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
 
             for (const query of searchQueries) {
                 try {
-                    const result = await this.mcpClient.callTool('binlog_search', {
-                        query,
-                        limit: 500,
-                    });
-                    // binlog_search returns JSON: [{message, projectFile, nodeType, ...}, ...]
-                    const items = this.parseSearchResults(result.text);
-                    for (const item of items) {
-                        const msg = item.message || '';
-                        const proj = this.extractFileName(item.projectFile || '');
-                        // "Copying file from 'X' to 'Y'."
-                        const copyMatch = msg.match(/Copying file from ["']?(.+?)["']?\s+to\s+["']?(.+?)["']?\.?\s*$/i);
-                        if (copyMatch) {
-                            addDest(copyMatch[2], `Copy from ${this.extractFileName(copyMatch[1])} (${proj})`);
-                            continue;
+                    // Paginate to get ALL results — large builds can have thousands of copy ops
+                    let offset = 0;
+                    const pageSize = 500;
+                    const maxTotal = 10000; // safety cap
+                    while (offset < maxTotal) {
+                        const result = await this.mcpClient.callTool('binlog_search', {
+                            query,
+                            limit: pageSize,
+                            offset,
+                        });
+                        const items = this.parseSearchResults(result.text);
+                        if (items.length === 0) { break; }
+
+                        for (const item of items) {
+                            const msg = item.message || item.Message || '';
+                            const proj = this.extractFileName(item.projectFile || item.ProjectFile || '');
+                            // "Copying file from 'X' to 'Y'."
+                            const copyMatch = msg.match(/Copying file from ["']?(.+?)["']?\s+to\s+["']?(.+?)["']?\.?\s*$/i);
+                            if (copyMatch) {
+                                addDest(copyMatch[2], `Copy from ${this.extractFileName(copyMatch[1])} (${proj})`);
+                                continue;
+                            }
+                            // "Creating hard link to create 'Y' from 'X'."
+                            const linkMatch = msg.match(/Creating (?:hard|symbolic) link.*?["'](.+?)["'].*?from\s+["']?(.+?)["']?/i);
+                            if (linkMatch) {
+                                addDest(linkMatch[1], `HardLink from ${this.extractFileName(linkMatch[2])} (${proj})`);
+                            }
                         }
-                        // "Creating hard link to create 'Y' from 'X'."
-                        const linkMatch = msg.match(/Creating (?:hard|symbolic) link.*?["'](.+?)["'].*?from\s+["']?(.+?)["']?/i);
-                        if (linkMatch) {
-                            addDest(linkMatch[1], `HardLink from ${this.extractFileName(linkMatch[2])} (${proj})`);
-                        }
+                        if (items.length < pageSize) { break; }
+                        offset += pageSize;
                     }
                 } catch { /* search may fail for some queries — non-fatal */ }
             }
-
-            // --- Approach 2: Use binlog_search_tasks + task_details for structured detection ---
-            try {
-                const copyTasks = await this.mcpClient.callTool('binlog_search_tasks', {
-                    task_name: 'Copy',
-                    limit: 200,
-                });
-                const tasks = this.parseSearchResults(copyTasks.text);
-                for (const task of tasks) {
-                    const taskId = task.id;
-                    const proj = this.extractFileName(task.projectFile || task.ProjectFile || '');
-                    const target = task.targetName || task.TargetName || '';
-                    try {
-                        const details = await this.mcpClient.callTool('binlog_task_details', {
-                            project: proj,
-                            target_name: target,
-                            task_name: 'Copy',
-                        });
-                        const detailData = this.parseSingleResult(details.text);
-                        const params = detailData?.parameters || detailData?.Parameters || {};
-                        // DestinationFiles can be a string or semicolon-delimited list
-                        const destFiles = params.DestinationFiles || params.destinationFiles || '';
-                        const sourceFiles = params.SourceFiles || params.sourceFiles || '';
-                        if (destFiles) {
-                            const dests = destFiles.split(';').map((d: string) => d.trim()).filter(Boolean);
-                            const srcs = sourceFiles.split(';').map((s: string) => s.trim()).filter(Boolean);
-                            for (let i = 0; i < dests.length; i++) {
-                                const src = i < srcs.length ? this.extractFileName(srcs[i]) : 'Copy task';
-                                addDest(dests[i], `${target} → Copy (${proj}): ${src}`);
-                            }
-                        }
-                    } catch { /* task_details may fail — non-fatal */ }
-                }
-            } catch { /* binlog_search_tasks may not be available */ }
 
             // Filter to files written by multiple distinct sources
             const conflicts: TreeNodeData[] = [];
@@ -1125,13 +1101,6 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             if (data && typeof data === 'object') { return Object.values(data); }
         } catch { /* not JSON — try line-by-line */ }
         return [];
-    }
-
-    /** Parse a single JSON object from MCP response */
-    private parseSingleResult(text: string): any {
-        try {
-            return JSON.parse(text);
-        } catch { return null; }
     }
 
     /** Get children of a double-write file node (the sources that wrote it) */
