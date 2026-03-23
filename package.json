@@ -181,11 +181,6 @@
         "icon": "$(output)"
       },
       {
-        "command": "binlog.detectDoubleWrites",
-        "title": "Binlog: Detect Double Writes",
-        "icon": "$(warning)"
-      },
-      {
         "command": "binlog.analyzeInChat",
         "title": "Analyze in Copilot Chat",
         "icon": "$(comment-discussion)"
@@ -280,10 +275,6 @@
           {
             "name": "search",
             "description": "Search across all build events — targets, tasks, messages, properties"
-          },
-          {
-            "name": "doublewrite",
-            "description": "Detect files written by multiple tasks — a common source of build flakiness"
           },
           {
             "name": "properties",

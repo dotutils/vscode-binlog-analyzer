@@ -25,9 +25,6 @@ type NodeKind =
     | 'root-items'      // "Items" section
     | 'item-type'       // item type group (e.g. PackageReference)
     | 'item-entry'      // individual item entry
-    | 'root-doublewrite' // "Double Writes" section
-    | 'doublewrite-file' // file written by multiple tasks
-    | 'doublewrite-source' // source task/target that wrote the file
     | 'root-actions'  // "Actions" section
     | 'action'        // individual action
     | 'loading'       // loading placeholder
@@ -68,7 +65,6 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
     private tasksCache: TreeNodeData[] | null = null;
     private analyzersCache: TreeNodeData[] | null = null;
 
-    private doubleWriteCache: TreeNodeData[] | null = null;
     private loadingSet = new Set<NodeKind>();
 
     setBinlogPaths(paths: string[]) {
@@ -311,8 +307,6 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         this.targetsCache = null;
         this.tasksCache = null;
         this.analyzersCache = null;
-
-        this.doubleWriteCache = null;
     }
 
     getTreeItem(element: BinlogTreeItem): vscode.TreeItem {
@@ -425,20 +419,6 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             perfNode.nodeKind = 'root-perf';
             perfNode.iconPath = new vscode.ThemeIcon('dashboard');
             items.push(perfNode);
-
-            // Double Writes section — detect files written by multiple tasks
-            const doubleWriteNode = new BinlogTreeItem(
-                'Double Writes',
-                vscode.TreeItemCollapsibleState.Collapsed
-            );
-            doubleWriteNode.nodeKind = 'root-doublewrite';
-            doubleWriteNode.iconPath = new vscode.ThemeIcon('warning');
-            if (this.doubleWriteCache) {
-                doubleWriteNode.description = this.doubleWriteCache.length > 0
-                    ? `(${this.doubleWriteCache.length} conflicts)`
-                    : '(none)';
-            }
-            items.push(doubleWriteNode);
         } else if (this._isLoading) {
             // MCP client not ready yet — show loading indicator
             const loading = new BinlogTreeItem(
@@ -487,10 +467,6 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             case 'perf-analyzers':
                 return this.fetchExpensiveAnalyzers();
 
-            case 'root-doublewrite':
-                return this.fetchDoubleWrites();
-            case 'doublewrite-file':
-                return this.getDoubleWriteSources(element);
             case 'root-actions':
                 return this.getActionChildren();
             default:
@@ -994,133 +970,6 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
     }
 
 
-
-    /** Detect files written by multiple tasks (double writes) */
-    private async fetchDoubleWrites(): Promise<BinlogTreeItem[]> {
-        if (this.doubleWriteCache) {
-            if (this.doubleWriteCache.length === 0) {
-                return [this.makeInfoItem('No double writes detected', 'info')];
-            }
-            return this.doubleWriteCache.map(d => this.dataToItem(d));
-        }
-        if (!this.mcpClient) {
-            return [this.makeInfoItem('MCP server not connected', 'info')];
-        }
-        try {
-            // dest path (lowercased) → Set of "source description" strings
-            const outputFiles = new Map<string, Set<string>>();
-
-            const addDest = (dest: string, source: string) => {
-                const key = dest.trim().toLowerCase().replace(/\//g, '\\');
-                if (!key) { return; }
-                if (!outputFiles.has(key)) { outputFiles.set(key, new Set()); }
-                outputFiles.get(key)!.add(source);
-            };
-
-            // --- Approach 1: Parse messages from binlog_search ---
-            // Search for common copy-related message patterns
-            const searchQueries = [
-                'Copying file from',        // MSBuild Copy task
-                'Creating hard link',       // Copy with UseHardlinksIfPossible
-                'Creating symbolic link',   // Copy with UseSymboliclinksIfPossible
-            ];
-
-            for (const query of searchQueries) {
-                try {
-                    // Paginate to get ALL results — large builds can have thousands of copy ops
-                    let offset = 0;
-                    const pageSize = 500;
-                    const maxTotal = 10000; // safety cap
-                    while (offset < maxTotal) {
-                        const result = await this.mcpClient.callTool('binlog_search', {
-                            query,
-                            limit: pageSize,
-                            offset,
-                        });
-                        const items = this.parseSearchResults(result.text);
-                        if (items.length === 0) { break; }
-
-                        for (const item of items) {
-                            const msg = item.message || item.Message || '';
-                            const proj = this.extractFileName(item.projectFile || item.ProjectFile || '');
-                            const target = item.targetName || item.TargetName || '';
-                            const ctx = target ? `${proj} → ${target}` : proj;
-                            // "Copying file from 'X' to 'Y'."
-                            const copyMatch = msg.match(/Copying file from ["']?(.+?)["']?\s+to\s+["']?(.+?)["']?\.?\s*$/i);
-                            if (copyMatch) {
-                                addDest(copyMatch[2], `Copy from ${this.extractFileName(copyMatch[1])} (${ctx})`);
-                                continue;
-                            }
-                            // "Creating hard link to create 'Y' from 'X'."
-                            const linkMatch = msg.match(/Creating (?:hard|symbolic) link.*?["'](.+?)["'].*?from\s+["']?(.+?)["']?/i);
-                            if (linkMatch) {
-                                addDest(linkMatch[1], `HardLink from ${this.extractFileName(linkMatch[2])} (${ctx})`);
-                            }
-                        }
-                        if (items.length < pageSize) { break; }
-                        offset += pageSize;
-                    }
-                } catch { /* search may fail for some queries — non-fatal */ }
-            }
-
-            // Filter to files written by multiple distinct sources
-            const conflicts: TreeNodeData[] = [];
-            for (const [dest, sources] of outputFiles) {
-                if (sources.size > 1) {
-                    const children: TreeNodeData[] = [...sources].map(src => ({
-                        kind: 'doublewrite-source' as NodeKind,
-                        label: src.length > 100 ? src.substring(0, 97) + '...' : src,
-                        icon: 'file-code',
-                    }));
-                    const fileName = dest.split(/[/\\]/).pop() || dest;
-                    conflicts.push({
-                        kind: 'doublewrite-file',
-                        label: fileName,
-                        description: `${sources.size} writers`,
-                        tooltip: `Output: ${dest}\nWritten by ${sources.size} different sources:\n${[...sources].join('\n')}`,
-                        icon: 'warning',
-                        children,
-                    });
-                }
-            }
-
-            this.doubleWriteCache = conflicts;
-            this._onDidChangeTreeData.fire(undefined); // Refresh to update count
-            return conflicts.length > 0
-                ? conflicts.map(d => this.dataToItem(d))
-                : [this.makeInfoItem('No double writes detected ✅', 'info')];
-        } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            return [this.makeInfoItem(`Error: ${msg.substring(0, 80)}`, 'error')];
-        }
-    }
-
-    /** Parse binlog_search / binlog_search_tasks JSON response into an array of objects */
-    private parseSearchResults(text: string): any[] {
-        try {
-            const data = JSON.parse(text);
-            if (Array.isArray(data)) { return data; }
-            if (data && typeof data === 'object') { return Object.values(data); }
-        } catch { /* not JSON — try line-by-line */ }
-        return [];
-    }
-
-    /** Get children of a double-write file node (the sources that wrote it) */
-    private getDoubleWriteSources(element: BinlogTreeItem): BinlogTreeItem[] {
-        if (!this.doubleWriteCache) { return []; }
-        const parent = this.doubleWriteCache.find(d =>
-            d.label === (typeof element.label === 'string' ? element.label : '')
-        );
-        if (!parent?.children) { return []; }
-        return parent.children.map(c => {
-            const item = new BinlogTreeItem(c.label, vscode.TreeItemCollapsibleState.None);
-            item.nodeKind = c.kind;
-            item.iconPath = new vscode.ThemeIcon(c.icon || 'file-code');
-            item.fullText = c.label;
-            item.contextValue = 'copyable-source';
-            return item;
-        });
-    }
 
     /** Execute a search query against the binlog and return results */
     async searchBinlog(query: string, maxResults: number = 100): Promise<{ text: string }> {

@@ -914,19 +914,6 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    // Command: Detect Double Writes — find files written by multiple tasks
-    context.subscriptions.push(
-        vscode.commands.registerCommand('binlog.detectDoubleWrites', async () => {
-            telemetry.trackCommand('detectDoubleWrites');
-            if (!currentBinlogPath) {
-                vscode.window.showWarningMessage('No binlog loaded. Use "Binlog: Load File" first.');
-                return;
-            }
-            // Open the chat with the doublewrite command
-            vscode.commands.executeCommand('workbench.action.chat.open', '@binlog /doublewrite');
-        })
-    );
-
     // Register chat participant
     chatParticipant.register(context);
 

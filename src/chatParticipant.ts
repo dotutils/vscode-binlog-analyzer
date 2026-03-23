@@ -160,19 +160,7 @@ const COMMAND_PROMPTS: Record<string, string> = {
         'Present results grouped by category (errors, warnings, messages, targets, tasks). ' +
         'For each result, show the file path and line number if available. ' +
         'Highlight the most relevant matches first.',
-    doublewrite: 'Detect DOUBLE WRITES in the build — files that are written to by multiple tasks or targets. ' +
-        'This is a common source of build flakiness and incorrect incremental builds.\n\n' +
-        'Steps:\n' +
-        '1. Use binlog_search with query "Copying file" to find all Copy operations\n' +
-        '2. Use binlog_search with query "Writing assembly" to find compiler outputs\n' +
-        '3. Group output files by destination path\n' +
-        '4. Report any destination that has MULTIPLE sources writing to it\n' +
-        '5. For each conflict, explain:\n' +
-        '   - Which tasks/targets write to the file\n' +
-        '   - Why this is dangerous (race conditions, stale outputs, broken incrementality)\n' +
-        '   - How to fix it (unique OutputPath per project, AppendTargetFrameworkToOutputPath, --artifacts-path)\n' +
-        '6. If no double writes found, confirm the build is clean.',
-    properties: 'Show the MSBuild PROPERTIES from the build. ' +
+    properties:'Show the MSBuild PROPERTIES from the build. ' +
         'Use binlog_properties to get all evaluated properties. ' +
         'Group them by category: Configuration (Configuration, Platform, TargetFramework), ' +
         'Output (OutputPath, IntermediateOutputPath, BaseOutputPath), ' +
