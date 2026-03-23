@@ -314,6 +314,10 @@ export function activate(context: vscode.ExtensionContext) {
                     // Pre-save binlog paths under the NEW workspace key so they survive the reload
                     const targetKey = `binlog.loadedPaths:${folderUri.toString()}`;
                     context.globalState.update(targetKey, allBinlogPaths);
+                    // Also write to activeBinlogs Global setting — the auto-load on
+                    // activation (line ~944) reads this and opens the binlog automatically
+                    const cfg = vscode.workspace.getConfiguration('binlogAnalyzer');
+                    await cfg.update('activeBinlogs', [...allBinlogPaths], vscode.ConfigurationTarget.Global);
                     await vscode.commands.executeCommand('vscode.openFolder', folderUri, false);
                 }
             } catch (err: any) {
