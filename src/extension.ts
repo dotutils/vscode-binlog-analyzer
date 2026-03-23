@@ -946,11 +946,9 @@ export function activate(context: vscode.ExtensionContext) {
     }
 
     if (savedBinlogs.length > 0) {
-        // Clear activeBinlogs setting after reading to prevent stale data
-        setTimeout(() => {
-            config.update('activeBinlogs', undefined, vscode.ConfigurationTarget.Workspace).then(() => {}, () => {});
-            config.update('activeBinlogs', undefined, vscode.ConfigurationTarget.Global).then(() => {}, () => {});
-        }, 3000);
+        // Clear activeBinlogs immediately after reading to prevent stale loads in other projects
+        config.update('activeBinlogs', undefined, vscode.ConfigurationTarget.Workspace).then(() => {}, () => {});
+        config.update('activeBinlogs', undefined, vscode.ConfigurationTarget.Global).then(() => {}, () => {});
 
         // Verify files still exist
         const validBinlogs = savedBinlogs.filter((p: string) => {
