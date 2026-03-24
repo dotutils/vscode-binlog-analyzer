@@ -27,9 +27,24 @@ type NodeKind =
     | 'item-entry'      // individual item entry
     | 'root-actions'  // "Actions" section
     | 'action'        // individual action
+    | 'root-about'    // "About" section
+    | 'about-item'    // individual about info item
+    | 'about-mcp'     // "MCP Server" sub-section under About
+    | 'mcp-item'      // individual MCP server info item
+    | 'action-item'   // standalone action (e.g. Load Binlog when no binlog loaded)
     | 'loading'       // loading placeholder
     | 'error'         // error placeholder
     | 'info';         // informational text
+
+export interface AboutInfo {
+    extensionVersion: string;
+    mcpVersion: string | null;
+    mcpToolPath: string | null;
+    mcpLatestVersion: string | null;
+    mcpUpdateAvailable: boolean;
+    /** Paths to mcp.json files that define the server */
+    mcpConfigPaths?: string[];
+}
 
 interface TreeNodeData {
     kind: NodeKind;
@@ -56,6 +71,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
     private binlogPaths: string[] = [];
     private mcpClient: McpClient | null = null;
     private _isLoading = false;
+    private _isRestoring = false;
 
     // Cached data from MCP calls
     private projectsCache: TreeNodeData[] | null = null;
@@ -66,6 +82,14 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
     private analyzersCache: TreeNodeData[] | null = null;
 
     private loadingSet = new Set<NodeKind>();
+
+    // About info
+    private aboutInfo: AboutInfo = { extensionVersion: '', mcpVersion: null, mcpToolPath: null, mcpLatestVersion: null, mcpUpdateAvailable: false };
+
+    setAboutInfo(info: AboutInfo) {
+        this.aboutInfo = info;
+        this._onDidChangeTreeData.fire(undefined);
+    }
 
     setBinlogPaths(paths: string[]) {
         this.binlogPaths = paths;
@@ -80,6 +104,11 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
 
     isLoading(): boolean {
         return this._isLoading;
+    }
+
+    setRestoring(restoring: boolean) {
+        this._isRestoring = restoring;
+        this._onDidChangeTreeData.fire(undefined);
     }
 
     setMcpClient(client: McpClient | null) {
@@ -321,11 +350,22 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
     }
 
     private getRootChildren(): BinlogTreeItem[] {
-        if (this.binlogPaths.length === 0 && !this._isLoading) {
-            return [];
+        if (this.binlogPaths.length === 0 && !this._isLoading && !this._isRestoring) {
+            return this.getAboutOnlyRoot();
         }
 
         const items: BinlogTreeItem[] = [];
+
+        if (this._isRestoring && this.binlogPaths.length === 0) {
+            const restoring = new BinlogTreeItem(
+                'Restoring previous session…',
+                vscode.TreeItemCollapsibleState.None
+            );
+            restoring.nodeKind = 'loading';
+            restoring.iconPath = new vscode.ThemeIcon('sync~spin');
+            items.push(restoring);
+            return items;
+        }
 
         if (this._isLoading && this.binlogPaths.length === 0) {
             // Show loading placeholder before binlog paths arrive
@@ -439,6 +479,52 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         actionsNode.iconPath = new vscode.ThemeIcon('rocket');
         items.push(actionsNode);
 
+        // About section (always shown)
+        const aboutNode = new BinlogTreeItem(
+            'About',
+            vscode.TreeItemCollapsibleState.Collapsed
+        );
+        aboutNode.nodeKind = 'root-about';
+        aboutNode.iconPath = new vscode.ThemeIcon('info');
+        aboutNode.contextValue = 'aboutRoot';
+        const extVer = this.aboutInfo.extensionVersion ? `v${this.aboutInfo.extensionVersion}` : '';
+        const mcpVer = this.aboutInfo.mcpVersion ? `MCP v${this.aboutInfo.mcpVersion}` : '';
+        aboutNode.description = [extVer, mcpVer].filter(Boolean).join(' · ') || undefined;
+        items.push(aboutNode);
+
+        return items;
+    }
+
+    /** When no binlog is loaded, show load actions + About so users can still check versions / update. */
+    private getAboutOnlyRoot(): BinlogTreeItem[] {
+        const items: BinlogTreeItem[] = [];
+
+        // Load actions so users can still open a binlog
+        const loadItem = new BinlogTreeItem('Load Binlog File', vscode.TreeItemCollapsibleState.None);
+        loadItem.nodeKind = 'action-item';
+        loadItem.iconPath = new vscode.ThemeIcon('folder-opened');
+        loadItem.command = { command: 'binlog.loadFile', title: 'Load Binlog File' };
+        items.push(loadItem);
+
+        const buildItem = new BinlogTreeItem('Build & Collect Binlog', vscode.TreeItemCollapsibleState.None);
+        buildItem.nodeKind = 'action-item';
+        buildItem.iconPath = new vscode.ThemeIcon('tools');
+        buildItem.command = { command: 'binlog.buildAndCollect', title: 'Build & Collect Binlog' };
+        items.push(buildItem);
+
+        // About section
+        const aboutNode = new BinlogTreeItem(
+            'About',
+            vscode.TreeItemCollapsibleState.Collapsed
+        );
+        aboutNode.nodeKind = 'root-about';
+        aboutNode.iconPath = new vscode.ThemeIcon('info');
+        aboutNode.contextValue = 'aboutRoot';
+        const extVer = this.aboutInfo.extensionVersion ? `v${this.aboutInfo.extensionVersion}` : '';
+        const mcpVer = this.aboutInfo.mcpVersion ? `MCP v${this.aboutInfo.mcpVersion}` : '';
+        aboutNode.description = [extVer, mcpVer].filter(Boolean).join(' · ') || undefined;
+        items.push(aboutNode);
+
         return items;
     }
 
@@ -469,6 +555,10 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
 
             case 'root-actions':
                 return this.getActionChildren();
+            case 'root-about':
+                return this.getAboutChildren();
+            case 'about-mcp':
+                return this.getMcpChildren();
             default:
                 return [];
         }
@@ -1044,6 +1134,107 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         actions.push(optimize);
 
         return actions;
+    }
+
+    private getAboutChildren(): BinlogTreeItem[] {
+        const items: BinlogTreeItem[] = [];
+        const info = this.aboutInfo;
+
+        // Extension version
+        if (info.extensionVersion) {
+            const ext = new BinlogTreeItem(
+                'Extension Version',
+                vscode.TreeItemCollapsibleState.None
+            );
+            ext.nodeKind = 'about-item';
+            ext.description = `v${info.extensionVersion}`;
+            ext.iconPath = new vscode.ThemeIcon('extensions');
+            items.push(ext);
+        }
+
+        // MCP Server sub-section
+        const mcpNode = new BinlogTreeItem(
+            'MCP Server',
+            vscode.TreeItemCollapsibleState.Collapsed
+        );
+        mcpNode.nodeKind = 'about-mcp';
+        mcpNode.iconPath = new vscode.ThemeIcon('server');
+        mcpNode.contextValue = 'mcpRoot';
+        if (info.mcpVersion) {
+            mcpNode.description = `v${info.mcpVersion}`;
+        }
+        items.push(mcpNode);
+
+        return items;
+    }
+
+    private getMcpChildren(): BinlogTreeItem[] {
+        const items: BinlogTreeItem[] = [];
+        const info = this.aboutInfo;
+
+        // Location
+        if (info.mcpToolPath) {
+            const location = new BinlogTreeItem(
+                'Location',
+                vscode.TreeItemCollapsibleState.None
+            );
+            location.nodeKind = 'mcp-item';
+            location.description = info.mcpToolPath;
+            location.tooltip = info.mcpToolPath;
+            location.iconPath = new vscode.ThemeIcon('folder-library');
+            items.push(location);
+        }
+
+        // Config file links
+        if (info.mcpConfigPaths && info.mcpConfigPaths.length > 0) {
+            for (const cfgPath of info.mcpConfigPaths) {
+                const label = cfgPath.includes('.vscode') ? 'Workspace mcp.json' : 'User mcp.json';
+                const cfg = new BinlogTreeItem(label, vscode.TreeItemCollapsibleState.None);
+                cfg.nodeKind = 'mcp-item';
+                cfg.description = cfgPath;
+                cfg.tooltip = `Click to open ${cfgPath}`;
+                cfg.iconPath = new vscode.ThemeIcon('go-to-file');
+                cfg.command = {
+                    command: 'vscode.open',
+                    title: 'Open Config',
+                    arguments: [vscode.Uri.file(cfgPath)]
+                };
+                items.push(cfg);
+            }
+        }
+
+        // Check for updates button
+        const check = new BinlogTreeItem(
+            'Check for updates',
+            vscode.TreeItemCollapsibleState.None
+        );
+        check.nodeKind = 'mcp-item';
+        check.iconPath = new vscode.ThemeIcon('sync');
+        check.command = { command: 'binlog.checkForUpdates', title: 'Check for updates' };
+        items.push(check);
+
+        // Update status (at the bottom)
+        if (info.mcpUpdateAvailable && info.mcpLatestVersion) {
+            const update = new BinlogTreeItem(
+                `Update available: v${info.mcpLatestVersion}`,
+                vscode.TreeItemCollapsibleState.None
+            );
+            update.nodeKind = 'mcp-item';
+            update.description = 'click to update';
+            update.iconPath = new vscode.ThemeIcon('cloud-download');
+            update.command = { command: 'binlog.updateMcpServer', title: 'Update' };
+            items.push(update);
+        } else if (info.mcpVersion && info.mcpLatestVersion) {
+            const upToDate = new BinlogTreeItem(
+                'Up to date',
+                vscode.TreeItemCollapsibleState.None
+            );
+            upToDate.nodeKind = 'mcp-item';
+            upToDate.iconPath = new vscode.ThemeIcon('check');
+            items.push(upToDate);
+        }
+
+        return items;
     }
 
     // --- MCP tool helper ---

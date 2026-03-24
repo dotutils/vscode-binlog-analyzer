@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { BinlogDiagnosticsProvider } from './diagnostics';
 import { BinlogChatParticipant } from './chatParticipant';
-import { BinlogTreeDataProvider, BinlogTreeItem } from './binlogTreeView';
+import { BinlogTreeDataProvider, BinlogTreeItem, AboutInfo } from './binlogTreeView';
 import { McpClient } from './mcpClient';
 import { BinlogDocumentProvider, BINLOG_SCHEME, openBinlogDocument } from './binlogDocumentProvider';
 import * as telemetry from './telemetry';
@@ -30,10 +30,24 @@ function binlogStateKey(): string {
     return ws ? `binlog.loadedPaths:${ws}` : 'binlog.loadedPaths:__noworkspace__';
 }
 
-export function activate(context: vscode.ExtensionContext) {
+export async function activate(context: vscode.ExtensionContext) {
     extensionContext = context;
     telemetry.initTelemetry(context);
     telemetry.trackActivation();
+
+    // Set updating context immediately so the welcome view never flickers to "No binlog loaded"
+    const hasPendingUpdate = !!context.globalState.get<boolean>('binlog.pendingToolUpdate');
+    if (hasPendingUpdate) {
+        vscode.commands.executeCommand('setContext', 'binlog.updatingMcp', true);
+    }
+
+    // Check if we have saved binlogs to restore — set flag before tree view is created
+    const savedBinlogState = context.globalState.get<string[]>(binlogStateKey(), []);
+    const hasBinlogsToRestore = !hasPendingUpdate && savedBinlogState.length > 0;
+
+    // Apply any pending tool update BEFORE MCP servers start
+    await applyPendingToolUpdate();
+
     diagnosticsProvider = new BinlogDiagnosticsProvider();
     chatParticipant = new BinlogChatParticipant();
 
@@ -45,6 +59,9 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Binlog Explorer tree view in sidebar
     treeDataProvider = new BinlogTreeDataProvider();
+    if (hasBinlogsToRestore) {
+        treeDataProvider.setRestoring(true);
+    }
     const treeView = vscode.window.createTreeView('binlogExplorer', {
         treeDataProvider,
         showCollapseAll: true
@@ -914,6 +931,28 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
+    // About / update commands
+    context.subscriptions.push(
+        vscode.commands.registerCommand('binlog.checkForUpdates', async () => {
+            await vscode.window.withProgress(
+                { location: vscode.ProgressLocation.Window, title: 'Checking for MCP updates...' },
+                () => fetchAboutInfo('interactive')
+            );
+        }),
+        vscode.commands.registerCommand('binlog.updateMcpServer', async () => {
+            await updateMcpServer();
+        }),
+        vscode.commands.registerCommand('binlog.refreshMcpInfo', async () => {
+            await vscode.window.withProgress(
+                { location: vscode.ProgressLocation.Window, title: 'Refreshing MCP info...' },
+                () => fetchAboutInfo('silent')
+            );
+        })
+    );
+
+    // Fetch about info on activation — show update popup if available
+    fetchAboutInfo('auto').catch(() => {});
+
     // Register chat participant
     chatParticipant.register(context);
 
@@ -951,6 +990,31 @@ export function activate(context: vscode.ExtensionContext) {
         }
     }
 
+    // Auto-restore binlogs from previous session (globalState) if nothing else loaded them
+    if (savedBinlogs.length === 0 && !openedViaUri) {
+        const restored = context.globalState.get<string[]>(binlogStateKey(), []);
+        const validRestored = restored.filter(p => {
+            try { return fs.existsSync(p); } catch { return false; }
+        });
+        if (validRestored.length > 0) {
+            // Restoring flag was already set on the tree provider at the top of activate()
+            // Short delay to let URI handler claim priority
+            setTimeout(() => {
+                if (!openedViaUri && allBinlogPaths.length === 0) {
+                    handleBinlogOpen(validRestored, context, false);
+                } else {
+                    treeDataProvider?.setRestoring(false);
+                }
+            }, 500);
+        } else {
+            // Saved paths no longer exist on disk — clear restoring indicator
+            treeDataProvider?.setRestoring(false);
+            if (hasPendingUpdate) {
+                vscode.commands.executeCommand('setContext', 'binlog.updatingMcp', false);
+            }
+        }
+    }
+
     // Listen for workspace folder changes — re-apply MCP config and refresh UI
     context.subscriptions.push(
         vscode.workspace.onDidChangeWorkspaceFolders(async () => {
@@ -968,6 +1032,9 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 async function handleBinlogOpen(binlogPaths: string[], context: vscode.ExtensionContext, interactive: boolean = true) {
+    // Clear any loading/updating states now that binlogs are loading
+    vscode.commands.executeCommand('setContext', 'binlog.updatingMcp', false);
+    treeDataProvider?.setRestoring(false);
     telemetry.trackBinlogLoad(binlogPaths.length, openedViaUri ? 'uri' : 'file');
     allBinlogPaths = [...binlogPaths];
     currentBinlogPath = binlogPaths[0];
@@ -1451,6 +1518,222 @@ async function writeUserMcpJson(serverConfig: Record<string, unknown>) {
     } catch { /* non-fatal */ }
 }
 
+const NUGET_PACKAGE_ID = 'BinlogInsights.Mcp';
+
+/** Checks whether a server config entry refers to the BinlogInsights MCP server. */
+function serverMatchesBinlogInsights(s: any): boolean {
+    const cmd = typeof s?.command === 'string' ? s.command : '';
+    const args: string[] = Array.isArray(s?.args) ? s.args : [];
+    const combined = [cmd, ...args].join(' ').toLowerCase();
+    return combined.includes('binlog-insights-mcp') || combined.includes('binloginsights.mcp');
+}
+
+/** Returns paths to mcp.json files that define the binlog-insights server. */
+function getMcpConfigPaths(): string[] {
+    const paths: string[] = [];
+
+    // Workspace .vscode/mcp.json
+    const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (ws) {
+        const wsMcp = path.join(ws, '.vscode', 'mcp.json');
+        if (fs.existsSync(wsMcp)) {
+            try {
+                const content = JSON.parse(fs.readFileSync(wsMcp, 'utf8'));
+                const servers = content.servers || {};
+                if (Object.values(servers).some((s: any) => serverMatchesBinlogInsights(s))) {
+                    paths.push(wsMcp);
+                }
+            } catch { /* ignore parse errors */ }
+        }
+    }
+
+    // User-level mcp.json
+    const isWindows = process.platform === 'win32';
+    const userMcp = isWindows
+        ? path.join(process.env.APPDATA || '', 'Code', 'User', 'mcp.json')
+        : path.join(os.homedir(), '.config', 'Code', 'User', 'mcp.json');
+    if (fs.existsSync(userMcp)) {
+        try {
+            const content = JSON.parse(fs.readFileSync(userMcp, 'utf8'));
+            const servers = content.servers || {};
+            if (Object.values(servers).some((s: any) =>
+                typeof s?.command === 'string' && s.command.includes('binlog'))) {
+                paths.push(userMcp);
+            }
+        } catch { /* ignore parse errors */ }
+    }
+
+    return paths;
+}
+
+async function fetchAboutInfo(mode: 'interactive' | 'auto' | 'silent') {
+    const toolPath = findBinlogInsightsTool();
+    const version = toolPath ? await getInstalledMcpVersion(toolPath) : null;
+    const latestVersion = await getLatestNuGetVersion();
+
+    const updateAvailable = !!(version && latestVersion && compareVersions(latestVersion, version) > 0);
+
+    const ext = vscode.extensions.getExtension('dotutils.binlog-analyzer');
+    const extensionVersion = ext?.packageJSON?.version || '';
+
+    // Find mcp.json config files
+    const configPaths = getMcpConfigPaths();
+
+    const info: AboutInfo = { extensionVersion, mcpVersion: version, mcpToolPath: toolPath, mcpLatestVersion: latestVersion, mcpUpdateAvailable: updateAvailable, mcpConfigPaths: configPaths };
+    treeDataProvider?.setAboutInfo(info);
+
+    if ((mode === 'interactive' || mode === 'auto') && updateAvailable) {
+        const choice = await vscode.window.showInformationMessage(
+            `BinlogInsights.Mcp update available: v${version} → v${latestVersion}`,
+            'Update Now'
+        );
+        if (choice === 'Update Now') {
+            await updateMcpServer();
+        }
+    } else if (mode === 'interactive' && !updateAvailable && version) {
+        vscode.window.showInformationMessage(`BinlogInsights.Mcp v${version} is up to date.`);
+    }
+}
+
+async function getInstalledMcpVersion(toolPath: string): Promise<string | null> {
+    // Primary: read version from the .store directory (works for all versions, even old ones without --version)
+    try {
+        const storeDir = path.join(os.homedir(), '.dotnet', 'tools', '.store', 'binloginsights.mcp');
+        if (fs.existsSync(storeDir)) {
+            const versions = fs.readdirSync(storeDir).filter(d => /^\d+\.\d+\.\d+$/.test(d));
+            if (versions.length > 0) {
+                // Sort and pick the highest (there should only be one for a global tool)
+                versions.sort(compareVersions);
+                return versions[versions.length - 1];
+            }
+        }
+    } catch { /* fall through */ }
+
+    // Fallback: try --version (added in v0.3.x)
+    const cp = require('child_process');
+    return new Promise<string | null>((resolve) => {
+        cp.execFile(toolPath, ['--version'], { timeout: 10000, encoding: 'utf8' },
+            (error: any, stdout: string) => {
+                if (error) { resolve(null); return; }
+                const match = stdout.trim().match(/^(\d+\.\d+\.\d+)/);
+                resolve(match ? match[1] : null);
+            }
+        );
+    });
+}
+
+async function getLatestNuGetVersion(): Promise<string | null> {
+    const cp = require('child_process');
+
+    return new Promise<string | null>((resolve) => {
+        // Use dotnet CLI which respects all configured NuGet sources (including local feeds)
+        cp.execFile('dotnet', ['package', 'search', NUGET_PACKAGE_ID, '--exact-match', '--format', 'json'],
+            { timeout: 30000, encoding: 'utf8' },
+            (error: any, stdout: string) => {
+                if (error) {
+                    resolve(null);
+                    return;
+                }
+                try {
+                    const parsed = JSON.parse(stdout);
+                    const results: Array<{ packages: Array<{ id: string; version: string }> }> = parsed.searchResult || [];
+                    // Collect all versions across all sources
+                    const allVersions: string[] = [];
+                    for (const source of results) {
+                        for (const pkg of source.packages || []) {
+                            if (pkg.id.toLowerCase() === NUGET_PACKAGE_ID.toLowerCase() && pkg.version) {
+                                allVersions.push(pkg.version);
+                            }
+                        }
+                    }
+                    // Filter out prereleases and find the highest version
+                    const stable = allVersions.filter(v => !v.includes('-'));
+                    if (stable.length === 0) { resolve(null); return; }
+                    stable.sort(compareVersions);
+                    resolve(stable[stable.length - 1]);
+                } catch {
+                    resolve(null);
+                }
+            }
+        );
+    });
+}
+
+/** Compare two semver strings. Returns >0 if a > b, <0 if a < b, 0 if equal. */
+function compareVersions(a: string, b: string): number {
+    const pa = a.split('.').map(Number);
+    const pb = b.split('.').map(Number);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+        const na = pa[i] || 0;
+        const nb = pb[i] || 0;
+        if (na !== nb) { return na - nb; }
+    }
+    return 0;
+}
+
+async function updateMcpServer() {
+    if (allBinlogPaths.length === 0) {
+        // No binlog loaded — no MCP server running from our extension, try direct update
+        const cp = require('child_process');
+        const result = await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: 'Updating BinlogInsights MCP server...' },
+            () => new Promise<{ success: boolean; output: string }>((resolve) => {
+                cp.execFile('dotnet', ['tool', 'update', '-g', 'BinlogInsights.Mcp'], { timeout: 60000 }, (err: Error | null, stdout: string, stderr: string) => {
+                    resolve({ success: !err, output: (stderr || stdout || '').toString() });
+                });
+            })
+        );
+        cachedInsightsExePath = undefined;
+        if (result.success) {
+            vscode.window.showInformationMessage('BinlogInsights MCP server updated successfully.');
+            await fetchAboutInfo('silent');
+        } else {
+            vscode.window.showErrorMessage(`Failed to update: ${result.output.substring(0, 200)}`);
+        }
+        return;
+    }
+
+    // Binlog loaded — MCP server likely running, defer update to next activation
+    extensionContext?.globalState.update('binlog.pendingToolUpdate', true);
+    const action = await vscode.window.showInformationMessage(
+        'The update will be applied on next reload (before the MCP server starts).',
+        'Reload Now'
+    );
+    if (action === 'Reload Now') {
+        vscode.commands.executeCommand('workbench.action.reloadWindow');
+    }
+}
+
+/** Runs a pending tool update if one was scheduled. Must be called early in activate(), before any MCP server is started. */
+async function applyPendingToolUpdate(): Promise<void> {
+    if (!extensionContext?.globalState.get<boolean>('binlog.pendingToolUpdate')) {
+        return;
+    }
+    // Clear the flag first so a failed update doesn't loop on every reload
+    await extensionContext.globalState.update('binlog.pendingToolUpdate', undefined);
+
+    // binlog.updatingMcp context is already set in activate() above
+
+    const cp = require('child_process');
+    const result = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: 'Updating BinlogInsights MCP server...' },
+        () => new Promise<{ success: boolean; output: string }>((resolve) => {
+            cp.execFile('dotnet', ['tool', 'update', '-g', 'BinlogInsights.Mcp'], { timeout: 60000 }, (err: Error | null, stdout: string, stderr: string) => {
+                resolve({ success: !err, output: (stderr || stdout || '').toString() });
+            });
+        })
+    );
+
+    // Don't clear binlog.updatingMcp here — the auto-restore will clear it after loading binlogs,
+    // or we clear it below if there are no binlogs to restore.
+    cachedInsightsExePath = undefined;
+    if (result.success) {
+        vscode.window.showInformationMessage('BinlogInsights MCP server updated successfully.');
+    } else {
+        vscode.window.showErrorMessage(`Failed to update BinlogInsights.Mcp: ${result.output.substring(0, 200)}`);
+    }
+}
+
 function findBinlogInsightsTool(): string | null {
     if (cachedInsightsExePath !== undefined) { return cachedInsightsExePath; }
 
@@ -1488,9 +1771,9 @@ async function installBinlogInsightsTool(): Promise<string | null> {
     const result = await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: 'Installing BinlogInsights MCP server (dotnet tool)...' },
         () => new Promise<string | null>((resolve) => {
-            cp.exec('dotnet tool install -g BinlogInsights.Mcp', { timeout: 60000 }, (err: Error | null) => {
+            cp.execFile('dotnet', ['tool', 'install', '-g', 'BinlogInsights.Mcp'], { timeout: 60000 }, (err: Error | null) => {
                 if (err) {
-                    cp.exec('dotnet tool update -g BinlogInsights.Mcp', { timeout: 60000 }, () => {
+                    cp.execFile('dotnet', ['tool', 'update', '-g', 'BinlogInsights.Mcp'], { timeout: 60000 }, () => {
                         const exe = findBinlogInsightsTool();
                         telemetry.trackToolInstall(!!exe);
                         resolve(exe);
