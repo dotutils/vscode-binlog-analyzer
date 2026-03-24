@@ -574,9 +574,32 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
     }
 
     /** When no binlog is loaded, return empty to show viewsWelcome buttons. */
-    /** When no binlog is loaded, return empty to show viewsWelcome buttons. */
+    /** When no binlog is loaded, show welcome actions + About. */
     private getAboutOnlyRoot(): BinlogTreeItem[] {
-        return [];
+        const items: BinlogTreeItem[] = [];
+
+        const loadItem = new BinlogTreeItem('Load Binlog File', vscode.TreeItemCollapsibleState.None);
+        loadItem.nodeKind = 'action-item';
+        loadItem.iconPath = new vscode.ThemeIcon('folder-opened');
+        loadItem.command = { command: 'binlog.loadFile', title: 'Load Binlog File' };
+        items.push(loadItem);
+
+        const buildItem = new BinlogTreeItem('Build & Collect Binlog', vscode.TreeItemCollapsibleState.None);
+        buildItem.nodeKind = 'action-item';
+        buildItem.iconPath = new vscode.ThemeIcon('tools');
+        buildItem.command = { command: 'binlog.buildAndCollect', title: 'Build & Collect Binlog' };
+        items.push(buildItem);
+
+        const aboutNode = new BinlogTreeItem('About', vscode.TreeItemCollapsibleState.Collapsed);
+        aboutNode.nodeKind = 'root-about';
+        aboutNode.iconPath = new vscode.ThemeIcon('info');
+        aboutNode.contextValue = 'aboutRoot';
+        const extVer = this.aboutInfo.extensionVersion ? `v${this.aboutInfo.extensionVersion}` : '';
+        const mcpVer = this.aboutInfo.mcpVersion ? `MCP v${this.aboutInfo.mcpVersion}` : '';
+        aboutNode.description = [extVer, mcpVer].filter(Boolean).join(' · ') || undefined;
+        items.push(aboutNode);
+
+        return items;
     }
 
     private async getNodeChildren(element: BinlogTreeItem): Promise<BinlogTreeItem[]> {

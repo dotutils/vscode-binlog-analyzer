@@ -65,11 +65,6 @@
     "viewsWelcome": [
       {
         "view": "binlogExplorer",
-        "contents": "No binlog loaded.\n[Load Binlog File](command:binlog.loadFile)\n[Build & Collect Binlog](command:binlog.buildAndCollect)\n",
-        "when": "!binlog.hasLoadedBinlogs && !binlog.updatingMcp"
-      },
-      {
-        "view": "binlogExplorer",
         "contents": "$(sync~spin) Updating MCP server…\n\nThe binlog will be restored automatically after the update completes.",
         "when": "binlog.updatingMcp"
       }
