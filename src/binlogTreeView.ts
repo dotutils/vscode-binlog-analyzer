@@ -82,6 +82,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
     private mcpClient: McpClient | null = null;
     private searchResults: TreeNodeData[] | null = null;
     private searchQuery: string = '';
+    private searchResultsHasMore: boolean = false;
     private _isLoading = false;
     private _isRestoring = false;
 
@@ -352,11 +353,13 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         this.evaluationsCache = null;
         this.searchResults = null;
         this.searchQuery = '';
+        this.searchResultsHasMore = false;
     }
 
     /** Set search results to display in tree */
-    public setSearchResults(query: string, results: any[]): void {
+    public setSearchResults(query: string, results: any[], hasMore: boolean = false): void {
         this.searchQuery = query;
+        this.searchResultsHasMore = hasMore;
         this.searchResults = results.map((item: any) => {
             const msg = item.message || item.Message || '';
             const proj = item.projectFile || item.ProjectFile || '';
@@ -381,7 +384,13 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
     public clearSearchResults(): void {
         this.searchResults = null;
         this.searchQuery = '';
+        this.searchResultsHasMore = false;
         this._onDidChangeTreeData.fire(undefined);
+    }
+
+    /** Get the current search query */
+    public getSearchQuery(): string {
+        return this.searchQuery;
     }
 
     getTreeItem(element: BinlogTreeItem): vscode.TreeItem {
@@ -634,15 +643,25 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                 return this.fetchEvalProperties(element);
             case 'eval-global-props':
                 return this.fetchEvalGlobalProps(element);
-            case 'root-search':
+            case 'root-search': {
                 if (!this.searchResults || this.searchResults.length === 0) {
                     return [this.makeInfoItem('No results', 'info')];
                 }
-                const clearItem = new BinlogTreeItem('✕ Clear search results', vscode.TreeItemCollapsibleState.None);
+                const clearItem = new BinlogTreeItem('Clear search results', vscode.TreeItemCollapsibleState.None);
                 clearItem.nodeKind = 'action';
                 clearItem.command = { command: 'binlog.clearSearch', title: 'Clear' };
                 clearItem.iconPath = new vscode.ThemeIcon('close');
-                return [clearItem, ...this.searchResults.map(d => this.dataToItem(d))];
+                const resultItems = this.searchResults.map(d => this.dataToItem(d));
+                // If we hit the limit, offer to load all
+                if (this.searchResultsHasMore) {
+                    const loadMore = new BinlogTreeItem('Load all results...', vscode.TreeItemCollapsibleState.None);
+                    loadMore.nodeKind = 'action';
+                    loadMore.command = { command: 'binlog.searchLoadAll', title: 'Load All' };
+                    loadMore.iconPath = new vscode.ThemeIcon('ellipsis');
+                    return [clearItem, ...resultItems, loadMore];
+                }
+                return [clearItem, ...resultItems];
+            }
             case 'root-actions':
                 return this.getActionChildren();
             case 'root-about':
@@ -1535,6 +1554,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             : data.kind === 'perf-item' ? 'copyable-perf'
             : data.kind === 'project' ? 'copyable-project'
             : data.kind === 'binlog-file' ? 'copyable-file'
+            : data.kind === 'search-result' ? 'copyable-search'
             : undefined;
         return item;
     }

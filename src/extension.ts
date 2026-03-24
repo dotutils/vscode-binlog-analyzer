@@ -759,9 +759,11 @@ export async function activate(context: vscode.ExtensionContext) {
                             return;
                         }
 
-                        treeDataProvider?.setSearchResults(query, results);
+                        treeDataProvider?.setSearchResults(query, results, results.length >= 200);
                         vscode.commands.executeCommand('binlogExplorer.focus');
-                        vscode.window.showInformationMessage(`Found ${results.length} results for "${query}".`);
+                        if (results.length >= 200) {
+                            vscode.window.showInformationMessage(`Found ${results.length}+ results for "${query}". Click "Load all results..." to fetch everything.`);
+                        }
                     } catch (err) {
                         const msg = err instanceof Error ? err.message : String(err);
                         vscode.window.showErrorMessage(`Search failed: ${msg}`);
@@ -775,6 +777,42 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.clearSearch', () => {
             treeDataProvider?.clearSearchResults();
+        })
+    );
+
+    // Command: Load All Search Results (paginate beyond initial 200)
+    context.subscriptions.push(
+        vscode.commands.registerCommand('binlog.searchLoadAll', async () => {
+            if (!mcpClient || !treeDataProvider) { return; }
+            const query = treeDataProvider.getSearchQuery();
+            if (!query) { return; }
+
+            await vscode.window.withProgress(
+                { location: vscode.ProgressLocation.Notification, title: `Loading all results for "${query}"...` },
+                async () => {
+                    const allResults: any[] = [];
+                    let offset = 0;
+                    const pageSize = 500;
+                    const maxTotal = 10000;
+                    while (offset < maxTotal) {
+                        const result = await mcpClient!.callTool('binlog_search', {
+                            query: query.trim(),
+                            limit: pageSize,
+                            offset,
+                        });
+                        let page: any[] = [];
+                        try {
+                            const data = JSON.parse(result.text);
+                            page = Array.isArray(data) ? data : [];
+                        } catch { break; }
+                        allResults.push(...page);
+                        if (page.length < pageSize) { break; }
+                        offset += pageSize;
+                    }
+                    treeDataProvider!.setSearchResults(query, allResults, false);
+                    vscode.commands.executeCommand('binlogExplorer.focus');
+                }
+            );
         })
     );
 

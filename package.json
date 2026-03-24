@@ -181,6 +181,10 @@
         "title": "Binlog: Clear Search Results"
       },
       {
+        "command": "binlog.searchLoadAll",
+        "title": "Binlog: Load All Search Results"
+      },
+      {
         "command": "binlog.exportTextLog",
         "title": "Binlog: Export as Text Log",
         "icon": "$(output)"
@@ -370,7 +374,7 @@
         },
         {
           "command": "binlog.analyzeInChat",
-          "when": "view == binlogExplorer && viewItem =~ /^copyable-(perf|target|task)/",
+          "when": "view == binlogExplorer && viewItem =~ /^copyable-(perf|target|task|search)/",
           "group": "0_analyze"
         },
         {
