@@ -196,7 +196,7 @@
       },
       {
         "command": "binlog.refreshMcpInfo",
-        "title": "Refresh",
+        "title": "Binlog: Refresh MCP Info",
         "icon": "$(refresh)"
       }
     ],

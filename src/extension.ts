@@ -1600,7 +1600,7 @@ async function getInstalledMcpVersion(toolPath: string): Promise<string | null> 
     try {
         const storeDir = path.join(os.homedir(), '.dotnet', 'tools', '.store', 'binloginsights.mcp');
         if (fs.existsSync(storeDir)) {
-            const versions = fs.readdirSync(storeDir).filter(d => /^\d+\.\d+/.test(d));
+            const versions = fs.readdirSync(storeDir).filter(d => /^\d+\.\d+\.\d+$/.test(d));
             if (versions.length > 0) {
                 // Sort and pick the highest (there should only be one for a global tool)
                 versions.sort(compareVersions);
@@ -1612,7 +1612,7 @@ async function getInstalledMcpVersion(toolPath: string): Promise<string | null> 
     // Fallback: try --version (added in v0.3.x)
     const cp = require('child_process');
     return new Promise<string | null>((resolve) => {
-        cp.exec(`"${toolPath}" --version`, { timeout: 10000, encoding: 'utf8' },
+        cp.execFile(toolPath, ['--version'], { timeout: 10000, encoding: 'utf8' },
             (error: any, stdout: string) => {
                 if (error) { resolve(null); return; }
                 const match = stdout.trim().match(/^(\d+\.\d+\.\d+)/);
@@ -1627,8 +1627,7 @@ async function getLatestNuGetVersion(): Promise<string | null> {
 
     return new Promise<string | null>((resolve) => {
         // Use dotnet CLI which respects all configured NuGet sources (including local feeds)
-        cp.exec(
-            `dotnet package search ${NUGET_PACKAGE_ID} --exact-match --format json`,
+        cp.execFile('dotnet', ['package', 'search', NUGET_PACKAGE_ID, '--exact-match', '--format', 'json'],
             { timeout: 30000, encoding: 'utf8' },
             (error: any, stdout: string) => {
                 if (error) {
@@ -1679,7 +1678,7 @@ async function updateMcpServer() {
         const result = await vscode.window.withProgress(
             { location: vscode.ProgressLocation.Notification, title: 'Updating BinlogInsights MCP server...' },
             () => new Promise<{ success: boolean; output: string }>((resolve) => {
-                cp.exec('dotnet tool update -g BinlogInsights.Mcp', { timeout: 60000 }, (err: Error | null, stdout: string, stderr: string) => {
+                cp.execFile('dotnet', ['tool', 'update', '-g', 'BinlogInsights.Mcp'], { timeout: 60000 }, (err: Error | null, stdout: string, stderr: string) => {
                     resolve({ success: !err, output: (stderr || stdout || '').toString() });
                 });
             })
@@ -1719,7 +1718,7 @@ async function applyPendingToolUpdate(): Promise<void> {
     const result = await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: 'Updating BinlogInsights MCP server...' },
         () => new Promise<{ success: boolean; output: string }>((resolve) => {
-            cp.exec('dotnet tool update -g BinlogInsights.Mcp', { timeout: 60000 }, (err: Error | null, stdout: string, stderr: string) => {
+            cp.execFile('dotnet', ['tool', 'update', '-g', 'BinlogInsights.Mcp'], { timeout: 60000 }, (err: Error | null, stdout: string, stderr: string) => {
                 resolve({ success: !err, output: (stderr || stdout || '').toString() });
             });
         })
@@ -1772,9 +1771,9 @@ async function installBinlogInsightsTool(): Promise<string | null> {
     const result = await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: 'Installing BinlogInsights MCP server (dotnet tool)...' },
         () => new Promise<string | null>((resolve) => {
-            cp.exec('dotnet tool install -g BinlogInsights.Mcp', { timeout: 60000 }, (err: Error | null) => {
+            cp.execFile('dotnet', ['tool', 'install', '-g', 'BinlogInsights.Mcp'], { timeout: 60000 }, (err: Error | null) => {
                 if (err) {
-                    cp.exec('dotnet tool update -g BinlogInsights.Mcp', { timeout: 60000 }, () => {
+                    cp.execFile('dotnet', ['tool', 'update', '-g', 'BinlogInsights.Mcp'], { timeout: 60000 }, () => {
                         const exe = findBinlogInsightsTool();
                         telemetry.trackToolInstall(!!exe);
                         resolve(exe);
