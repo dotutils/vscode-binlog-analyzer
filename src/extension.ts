@@ -663,43 +663,44 @@ export async function activate(context: vscode.ExtensionContext) {
             // Build a context-specific prompt based on what was clicked
             let prompt: string;
             const itemCtx = `"${name}" (${detail || ''}${count && count > 1 ? `, ×${count}` : ''})`;
+            const binlogPath = currentBinlogPath ? ` The binlog_file is "${currentBinlogPath}".` : '';
 
             if (category === 'perf-item' && name.toLowerCase().includes('analyzer')) {
                 prompt = `@binlog The Roslyn analyzer ${itemCtx} is consuming build time. ` +
                     `What diagnostics does it produce? Is it worth keeping? ` +
-                    `Show how to disable it conditionally (e.g. only in CI) or replace it with a lighter alternative.`;
+                    `Show how to disable it conditionally (e.g. only in CI) or replace it with a lighter alternative.${binlogPath}`;
             } else if (category === 'perf-item' || category === 'target') {
-                // Target or perf target
+                // These are MSBuild TARGETS from the performance timeline
                 const isKnown = /^(ResolveAssemblyReferences|CoreCompile|Csc|Copy|RAR|Restore|ResolvePackageAssets|GenerateNuspec)/i.test(name);
                 if (isKnown) {
-                    prompt = `@binlog The MSBuild target/task ${itemCtx} is a known bottleneck. ` +
-                        `What specific MSBuild properties can reduce its time? ` +
-                        `Show the exact XML to add to Directory.Build.props and any trade-offs.`;
+                    prompt = `@binlog The MSBuild target ${itemCtx} is a known build bottleneck. ` +
+                        `First use binlog_expensive_targets to confirm its timing, then explain what specific MSBuild properties ` +
+                        `can reduce its time. Show the exact XML to add to Directory.Build.props and any trade-offs.${binlogPath}`;
                 } else {
-                    prompt = `@binlog Investigate the MSBuild target/task ${itemCtx}. ` +
-                        `Use binlog_search_targets or binlog_tasks_in_target to find what it does. ` +
-                        `Is it running too many times? Can it be skipped with proper Inputs/Outputs?`;
+                    prompt = `@binlog Investigate the MSBuild target ${itemCtx}. ` +
+                        `Use binlog_search_targets to find where it runs and which projects invoke it. ` +
+                        `Is it running too many times? Can it be skipped with proper Inputs/Outputs?${binlogPath}`;
                 }
             } else if (category === 'task') {
                 prompt = `@binlog Investigate the MSBuild task ${itemCtx}. ` +
-                    `What parameters does it receive? What output does it produce? ` +
-                    `Use binlog_task_details to show its inputs and messages.`;
+                    `Use binlog_search_tasks to find it, then binlog_task_details for its parameters and output. ` +
+                    `What does it do and can it be optimized?${binlogPath}`;
             } else if (category === 'property-item') {
                 prompt = `@binlog Explain the MSBuild property ${name} = "${detail}". ` +
                     `What does it control? Is this value typical? ` +
-                    `What happens if I change it?`;
+                    `What happens if I change it?${binlogPath}`;
             } else if (category === 'item-entry') {
                 prompt = `@binlog Explain the MSBuild item ${itemCtx}. ` +
                     `Which project references it? Is it needed? ` +
-                    `Are there any version conflicts or redundancies?`;
+                    `Are there any version conflicts or redundancies?${binlogPath}`;
             } else if (category === 'project') {
                 prompt = `@binlog Analyze the project ${itemCtx}. ` +
-                    `What are its slowest targets? Does it have unnecessary dependencies? ` +
-                    `Use binlog_project_targets to show the target breakdown.`;
+                    `Use binlog_project_targets to show target breakdown and timing. ` +
+                    `What are its slowest targets? Does it have unnecessary dependencies?${binlogPath}`;
             } else {
-                prompt = `@binlog Analyze the MSBuild target/task ${itemCtx}. ` +
+                prompt = `@binlog Analyze the MSBuild target ${itemCtx}. ` +
                     `Use binlog_search_targets to find where it runs and binlog_expensive_targets for timing. ` +
-                    `What does it do and how does it affect the build?`;
+                    `What does it do and how does it affect the build?${binlogPath}`;
             }
 
             vscode.commands.executeCommand('workbench.action.chat.open', prompt);
