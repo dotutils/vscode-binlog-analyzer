@@ -65,7 +65,8 @@
     "viewsWelcome": [
       {
         "view": "binlogExplorer",
-        "contents": "No binlog loaded.\n\nLoad a binlog file to get started with build analysis.\n\n[Load Binlog File](command:binlog.loadFile)\n\n[$(tools) Build & Collect Binlog](command:binlog.buildAndCollect)\n\nOr open a .binlog from Structured Log Viewer using ✨ Open in VS Code."
+        "contents": "$(sync~spin) Updating MCP server…\n\nThe binlog will be restored automatically after the update completes.",
+        "when": "binlog.updatingMcp"
       }
     ],
     "keybindings": [
@@ -184,6 +185,19 @@
         "command": "binlog.analyzeInChat",
         "title": "Analyze in Copilot Chat",
         "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "binlog.checkForUpdates",
+        "title": "Binlog: Check for MCP Server Updates"
+      },
+      {
+        "command": "binlog.updateMcpServer",
+        "title": "Binlog: Update MCP Server"
+      },
+      {
+        "command": "binlog.refreshMcpInfo",
+        "title": "Refresh",
+        "icon": "$(refresh)"
       }
     ],
     "configuration": {
@@ -349,6 +363,16 @@
           "command": "binlog.analyzeInChat",
           "when": "view == binlogExplorer && viewItem =~ /^copyable-(perf|target|task)/",
           "group": "0_analyze"
+        },
+        {
+          "command": "binlog.refreshMcpInfo",
+          "when": "view == binlogExplorer && viewItem =~ /aboutRoot|mcpRoot/",
+          "group": "1_refresh"
+        },
+        {
+          "command": "binlog.checkForUpdates",
+          "when": "view == binlogExplorer && viewItem =~ /aboutRoot|mcpRoot/",
+          "group": "2_update"
         }
       ]
     }
