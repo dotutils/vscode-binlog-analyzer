@@ -322,6 +322,11 @@
     "menus": {
       "view/title": [
         {
+          "command": "binlog.searchBinlog",
+          "when": "view == binlogExplorer && binlog.hasLoadedBinlogs",
+          "group": "navigation"
+        },
+        {
           "command": "binlog.refreshTree",
           "when": "view == binlogExplorer",
           "group": "navigation"
