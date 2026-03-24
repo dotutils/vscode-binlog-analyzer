@@ -177,6 +177,10 @@
         "icon": "$(search)"
       },
       {
+        "command": "binlog.clearSearch",
+        "title": "Binlog: Clear Search Results"
+      },
+      {
         "command": "binlog.exportTextLog",
         "title": "Binlog: Export as Text Log",
         "icon": "$(output)"

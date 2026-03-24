@@ -720,7 +720,7 @@ export async function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    // Command: Search Build Events — search across binlog using Quick Pick
+    // Command: Search Build Events — search across binlog and show in tree
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.searchBinlog', async () => {
             telemetry.trackCommand('searchBinlog');
@@ -735,7 +735,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 title: 'Search Binlog',
             });
 
-            if (!query?.trim()) { return; }
+            if (!query) { return; }
 
             await vscode.window.withProgress(
                 { location: vscode.ProgressLocation.Notification, title: `Searching binlog for "${query}"...` },
@@ -746,42 +746,35 @@ export async function activate(context: vscode.ExtensionContext) {
                             limit: 200,
                         });
 
-                        // Show results in a virtual document
-                        const header = `🔍 Search Results for "${query}"\n${'═'.repeat(60)}\n\n`;
-                        let body = 'No results found.';
+                        let results: any[] = [];
                         try {
                             const data = JSON.parse(result.text);
-                            if (Array.isArray(data) && data.length > 0) {
-                                body = data.map((item: any, i: number) => {
-                                    const msg = item.message || item.Message || '';
-                                    const proj = item.projectFile || item.ProjectFile || '';
-                                    const projName = proj.split(/[/\\]/).pop() || proj;
-                                    const nodeType = item.nodeType || item.NodeType || '';
-                                    const target = item.targetName || item.TargetName || '';
-                                    const task = item.taskName || item.TaskName || '';
-                                    const ctx = [projName, target, task].filter(Boolean).join(' → ');
-                                    return `[${i + 1}] ${nodeType ? `(${nodeType}) ` : ''}${ctx ? `${ctx}\n    ` : ''}${msg}`;
-                                }).join('\n\n');
-                                body = `Found ${data.length} results:\n\n${body}`;
-                            } else if (Array.isArray(data)) {
-                                body = 'No results found.';
-                            }
+                            results = Array.isArray(data) ? data : [];
                         } catch {
-                            body = result.text || 'No results found.';
+                            results = [];
                         }
-                        const content = header + body;
 
-                        const doc = await vscode.workspace.openTextDocument({
-                            content,
-                            language: 'log',
-                        });
-                        await vscode.window.showTextDocument(doc, { preview: true });
+                        if (results.length === 0) {
+                            vscode.window.showInformationMessage(`No results found for "${query}".`);
+                            return;
+                        }
+
+                        treeDataProvider?.setSearchResults(query, results);
+                        vscode.commands.executeCommand('binlogExplorer.focus');
+                        vscode.window.showInformationMessage(`Found ${results.length} results for "${query}".`);
                     } catch (err) {
                         const msg = err instanceof Error ? err.message : String(err);
                         vscode.window.showErrorMessage(`Search failed: ${msg}`);
                     }
                 }
             );
+        })
+    );
+
+    // Command: Clear Search Results
+    context.subscriptions.push(
+        vscode.commands.registerCommand('binlog.clearSearch', () => {
+            treeDataProvider?.clearSearchResults();
         })
     );
 

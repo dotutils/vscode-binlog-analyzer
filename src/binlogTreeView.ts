@@ -37,6 +37,8 @@ type NodeKind =
     | 'eval-properties'   // "Properties" sub-node under an evaluation
     | 'eval-global-props' // "Global Properties" sub-node under an evaluation
     | 'eval-property'     // individual property value
+    | 'root-search'   // "Search Results" section
+    | 'search-result' // individual search result
     | 'action-item'   // standalone action (e.g. Load Binlog when no binlog loaded)
     | 'loading'       // loading placeholder
     | 'error'         // error placeholder
@@ -78,6 +80,8 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
 
     private binlogPaths: string[] = [];
     private mcpClient: McpClient | null = null;
+    private searchResults: TreeNodeData[] | null = null;
+    private searchQuery: string = '';
     private _isLoading = false;
     private _isRestoring = false;
 
@@ -346,6 +350,38 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         this.tasksCache = null;
         this.analyzersCache = null;
         this.evaluationsCache = null;
+        this.searchResults = null;
+        this.searchQuery = '';
+    }
+
+    /** Set search results to display in tree */
+    public setSearchResults(query: string, results: any[]): void {
+        this.searchQuery = query;
+        this.searchResults = results.map((item: any) => {
+            const msg = item.message || item.Message || '';
+            const proj = item.projectFile || item.ProjectFile || '';
+            const projName = this.extractFileName(proj);
+            const target = item.targetName || item.TargetName || '';
+            const task = item.taskName || item.TaskName || '';
+            const nodeType = item.nodeType || item.NodeType || '';
+            const ctx = [projName, target, task].filter(Boolean).join(' → ');
+            return {
+                kind: 'search-result' as NodeKind,
+                label: msg,
+                description: ctx,
+                tooltip: `[${nodeType}] ${ctx}\n\n${msg}`,
+                icon: nodeType === 'Error' ? 'error' : nodeType === 'Warning' ? 'warning' : 'note',
+                projectFile: proj,
+            };
+        });
+        this._onDidChangeTreeData.fire(undefined);
+    }
+
+    /** Clear search results */
+    public clearSearchResults(): void {
+        this.searchResults = null;
+        this.searchQuery = '';
+        this._onDidChangeTreeData.fire(undefined);
     }
 
     getTreeItem(element: BinlogTreeItem): vscode.TreeItem {
@@ -387,6 +423,18 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             loading.iconPath = new vscode.ThemeIcon('sync~spin');
             items.push(loading);
             return items;
+        }
+
+        // Search results section (shown at top when results exist)
+        if (this.searchResults !== null) {
+            const searchNode = new BinlogTreeItem(
+                `Search Results`,
+                vscode.TreeItemCollapsibleState.Expanded
+            );
+            searchNode.nodeKind = 'root-search';
+            searchNode.iconPath = new vscode.ThemeIcon('search');
+            searchNode.description = `"${this.searchQuery}" (${this.searchResults.length} results)`;
+            items.unshift(searchNode);
         }
 
         // Loaded binlogs section
@@ -586,6 +634,15 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                 return this.fetchEvalProperties(element);
             case 'eval-global-props':
                 return this.fetchEvalGlobalProps(element);
+            case 'root-search':
+                if (!this.searchResults || this.searchResults.length === 0) {
+                    return [this.makeInfoItem('No results', 'info')];
+                }
+                const clearItem = new BinlogTreeItem('✕ Clear search results', vscode.TreeItemCollapsibleState.None);
+                clearItem.nodeKind = 'action';
+                clearItem.command = { command: 'binlog.clearSearch', title: 'Clear' };
+                clearItem.iconPath = new vscode.ThemeIcon('close');
+                return [clearItem, ...this.searchResults.map(d => this.dataToItem(d))];
             case 'root-actions':
                 return this.getActionChildren();
             case 'root-about':
@@ -1125,12 +1182,6 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         chat.command = { command: 'workbench.action.chat.open', title: 'Chat', arguments: ['@binlog '] };
         chat.iconPath = new vscode.ThemeIcon('comment-discussion');
         actions.push(chat);
-
-        const search = new BinlogTreeItem('Search build events...', vscode.TreeItemCollapsibleState.None);
-        search.nodeKind = 'action';
-        search.command = { command: 'binlog.searchBinlog', title: 'Search' };
-        search.iconPath = new vscode.ThemeIcon('search');
-        actions.push(search);
 
         const add = new BinlogTreeItem('Add more binlogs...', vscode.TreeItemCollapsibleState.None);
         add.nodeKind = 'action';
