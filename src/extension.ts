@@ -899,7 +899,7 @@ export async function activate(context: vscode.ExtensionContext) {
                             } catch { /* non-fatal */ }
 
                             try {
-                                const analyzers = await mcpClient!.callTool('binlog_expensive_analyzers', { top_number: 20 });
+                                const analyzers = await mcpClient!.callTool('binlog_expensive_analyzers', { limit: 20 });
                                 sections.push('ANALYZERS (by duration)');
                                 sections.push('─'.repeat(40));
                                 sections.push(analyzers.text);
@@ -951,15 +951,18 @@ export async function activate(context: vscode.ExtensionContext) {
     // About / update commands
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.checkForUpdates', async () => {
+            telemetry.trackCommand('checkForUpdates');
             await vscode.window.withProgress(
                 { location: vscode.ProgressLocation.Window, title: 'Checking for MCP updates...' },
                 () => fetchAboutInfo('interactive')
             );
         }),
         vscode.commands.registerCommand('binlog.updateMcpServer', async () => {
+            telemetry.trackCommand('updateMcpServer');
             await updateMcpServer();
         }),
         vscode.commands.registerCommand('binlog.refreshMcpInfo', async () => {
+            telemetry.trackCommand('refreshMcpInfo');
             await vscode.window.withProgress(
                 { location: vscode.ProgressLocation.Window, title: 'Refreshing MCP info...' },
                 () => fetchAboutInfo('silent')

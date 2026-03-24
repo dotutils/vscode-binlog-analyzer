@@ -263,7 +263,7 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
 
         // Analyzers
         try {
-            const analyzersResult = await this.mcpClient!.callTool('binlog_expensive_analyzers', { top_number: 10 });
+            const analyzersResult = await this.mcpClient!.callTool('binlog_expensive_analyzers', { limit: 10 });
             const analyzersData = JSON.parse(analyzersResult.text);
             const entries = this.parsePerfEntries(analyzersData);
             if (entries.length > 0) {
