@@ -179,6 +179,7 @@ export async function activate(context: vscode.ExtensionContext) {
     // Command: Manage Binlogs — quick pick showing all loaded binlogs with actions
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.manageBinlogs', async () => {
+            telemetry.trackCommand('manageBinlogs');
             if (allBinlogPaths.length === 0) {
                 // No binlogs — offer to load
                 const action = await vscode.window.showQuickPick(
@@ -221,6 +222,7 @@ export async function activate(context: vscode.ExtensionContext) {
     // Command: Open Project Folder — for cross-machine binlogs
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.openProjectFolder', async () => {
+            telemetry.trackCommand('openProjectFolder');
             const uris = await vscode.window.showOpenDialog({
                 canSelectFiles: false,
                 canSelectFolders: true,
@@ -238,6 +240,7 @@ export async function activate(context: vscode.ExtensionContext) {
     // Command: Show Build Summary — opens binlog content in editor
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.showBuildSummary', async () => {
+            telemetry.trackCommand('showBuildSummary');
             if (!currentBinlogPath) {
                 vscode.window.showWarningMessage('No binlog loaded. Use "Binlog: Load File" first.');
                 return;
@@ -249,6 +252,7 @@ export async function activate(context: vscode.ExtensionContext) {
     // Command: Open binlog section in editor
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.openInEditor', async (section: string, label: string) => {
+            telemetry.trackCommand('openInEditor');
             await openBinlogDocument(section, label);
         })
     );
@@ -256,6 +260,7 @@ export async function activate(context: vscode.ExtensionContext) {
     // Command: Open project details in editor
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.openProjectDetails', async (_projectId: string, projectFile: string, _targets: unknown) => {
+            telemetry.trackCommand('openProjectDetails');
             const projectName = projectFile.split(/[/\\]/).pop() || projectFile;
             const section = `/project/${encodeURIComponent(projectName)}`;
             await openBinlogDocument(section, projectFile);
@@ -265,6 +270,7 @@ export async function activate(context: vscode.ExtensionContext) {
     // Command: Reload Binlog — re-reads the binlog from disk (like F5 in Structured Log Viewer)
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.refreshTree', async () => {
+            telemetry.trackCommand('refreshTree');
             if (allBinlogPaths.length > 0 && extensionContext) {
                 await handleBinlogOpen(allBinlogPaths, extensionContext, false);
                 vscode.window.setStatusBarMessage('$(check) Binlog reloaded', 3000);
@@ -277,6 +283,8 @@ export async function activate(context: vscode.ExtensionContext) {
     // Command: Set Workspace Folder — pick from binlog project paths or browse
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.setWorkspaceFolder', async () => {
+            telemetry.trackCommand('setWorkspaceFolder');
+            telemetry.trackWorkspaceChange();
             try {
                 // Try to find candidate folders from binlog project paths
                 const candidates = treeDataProvider?.getProjectRootCandidates() || [];
@@ -419,6 +427,7 @@ export async function activate(context: vscode.ExtensionContext) {
     // Command: Show Errors
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.showErrors', async () => {
+            telemetry.trackCommand('showErrors');
             if (!currentBinlogPath) {
                 vscode.window.showWarningMessage('No binlog loaded. Use "Binlog: Load File" first.');
                 return;
@@ -600,6 +609,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.copyItem', async (treeItem?: BinlogTreeItem) => {
+            telemetry.trackCommand('copyItem');
             // Context menu passes treeItem; keybinding doesn't — fall back to selection
             const item = treeItem || binlogTreeView?.selection?.[0];
             if (!item) { return; }
@@ -612,6 +622,7 @@ export async function activate(context: vscode.ExtensionContext) {
             }
         }),
         vscode.commands.registerCommand('binlog.copyAllErrors', async () => {
+            telemetry.trackCommand('copyAllErrors');
             const items = treeDataProvider?.getCachedDiagnostics('error') || [];
             if (items.length === 0) {
                 vscode.window.showInformationMessage('No errors to copy.');
@@ -622,6 +633,7 @@ export async function activate(context: vscode.ExtensionContext) {
             vscode.window.setStatusBarMessage(`$(clippy) Copied ${items.length} errors`, 2000);
         }),
         vscode.commands.registerCommand('binlog.copyAllWarnings', async () => {
+            telemetry.trackCommand('copyAllWarnings');
             const items = treeDataProvider?.getCachedDiagnostics('warning') || [];
             if (items.length === 0) {
                 vscode.window.showInformationMessage('No warnings to copy.');
@@ -636,6 +648,7 @@ export async function activate(context: vscode.ExtensionContext) {
     // Command: Analyze in Chat — opens @binlog chat with context-specific prompt
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.analyzeInChat', async (name?: string, detail?: string, count?: number, category?: string) => {
+            telemetry.trackCommand('analyzeInChat');
             if (!name) {
                 const selected = binlogTreeView?.selection?.[0];
                 if (selected) {
@@ -645,6 +658,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 }
             }
             if (!name) { return; }
+            telemetry.trackAnalyzeInChat(category || 'unknown');
 
             // Build a context-specific prompt based on what was clicked
             let prompt: string;

@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { McpClient } from './mcpClient';
+import * as telemetry from './telemetry';
 
 /** Node types for the tree */
 type NodeKind =
@@ -533,8 +534,10 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             case 'root-files':
                 return this.getFileChildren();
             case 'root-projects':
+                telemetry.trackTreeExpand('root-projects');
                 return this.fetchProjects();
             case 'project':
+                telemetry.trackTreeExpand('project');
                 return this.fetchProjectTargets(element);
             case 'target':
                 return this.fetchTargetTasks(element);
@@ -545,6 +548,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             case 'root-warnings':
                 return this.fetchDiagnostics('Warning');
             case 'root-perf':
+                telemetry.trackTreeExpand('root-perf');
                 return this.getPerfChildren();
             case 'perf-targets':
                 return this.fetchExpensiveTargets();

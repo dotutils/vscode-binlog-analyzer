@@ -82,6 +82,26 @@ export function trackCrossMachine(): void {
     reporter?.sendTelemetryEvent('crossMachineBinlog');
 }
 
+/** Track tree node expansion */
+export function trackTreeExpand(nodeKind: string): void {
+    reporter?.sendTelemetryEvent('treeExpand', { nodeKind });
+}
+
+/** Track click-to-analyze usage */
+export function trackAnalyzeInChat(category: string): void {
+    reporter?.sendTelemetryEvent('analyzeInChat', { category });
+}
+
+/** Track timeline interaction */
+export function trackTimelineClick(itemName: string): void {
+    reporter?.sendTelemetryEvent('timelineClick', { item: itemName.substring(0, 50) });
+}
+
+/** Track workspace folder change */
+export function trackWorkspaceChange(): void {
+    reporter?.sendTelemetryEvent('workspaceChange');
+}
+
 /** Track generic errors with context */
 export function trackError(context: string, error: unknown): void {
     const msg = error instanceof Error ? error.message : String(error);
