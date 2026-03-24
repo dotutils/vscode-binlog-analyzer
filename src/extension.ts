@@ -647,12 +647,25 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Command: Analyze in Chat — opens @binlog chat with context-specific prompt
     context.subscriptions.push(
-        vscode.commands.registerCommand('binlog.analyzeInChat', async (name?: string, detail?: string, count?: number, category?: string) => {
+        vscode.commands.registerCommand('binlog.analyzeInChat', async (nameOrItem?: string | BinlogTreeItem, detail?: string, count?: number, category?: string) => {
             telemetry.trackCommand('analyzeInChat');
+            let name: string | undefined;
+
+            // Context menu passes the TreeItem as first arg
+            if (nameOrItem && typeof nameOrItem === 'object' && 'nodeKind' in nameOrItem) {
+                const item = nameOrItem as BinlogTreeItem;
+                name = typeof item.label === 'string' ? item.label : (item.label as any)?.label || '';
+                detail = typeof item.description === 'string' ? item.description : '';
+                category = item.nodeKind;
+            } else if (typeof nameOrItem === 'string') {
+                name = nameOrItem;
+            }
+
+            // Fallback to selected tree item
             if (!name) {
                 const selected = binlogTreeView?.selection?.[0];
                 if (selected) {
-                    name = typeof selected.label === 'string' ? selected.label : '';
+                    name = typeof selected.label === 'string' ? selected.label : (selected.label as any)?.label || '';
                     detail = typeof selected.description === 'string' ? selected.description : '';
                     category = selected.nodeKind;
                 }
