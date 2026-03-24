@@ -32,6 +32,11 @@ type NodeKind =
     | 'about-item'    // individual about info item
     | 'about-mcp'     // "MCP Server" sub-section under About
     | 'mcp-item'      // individual MCP server info item
+    | 'root-evaluations'  // "Evaluations" section header
+    | 'evaluation'        // individual evaluation entry
+    | 'eval-properties'   // "Properties" sub-node under an evaluation
+    | 'eval-global-props' // "Global Properties" sub-node under an evaluation
+    | 'eval-property'     // individual property value
     | 'action-item'   // standalone action (e.g. Load Binlog when no binlog loaded)
     | 'loading'       // loading placeholder
     | 'error'         // error placeholder
@@ -63,6 +68,8 @@ interface TreeNodeData {
     targetName?: string;
     /** For item type nodes: the item type name */
     itemType?: string;
+    /** For evaluation nodes: evaluation id from MCP */
+    evaluationId?: number;
 }
 
 export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTreeItem> {
@@ -81,6 +88,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
     private targetsCache: TreeNodeData[] | null = null;
     private tasksCache: TreeNodeData[] | null = null;
     private analyzersCache: TreeNodeData[] | null = null;
+    private evaluationsCache: TreeNodeData[] | null = null;
 
     private loadingSet = new Set<NodeKind>();
 
@@ -337,6 +345,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         this.targetsCache = null;
         this.tasksCache = null;
         this.analyzersCache = null;
+        this.evaluationsCache = null;
     }
 
     getTreeItem(element: BinlogTreeItem): vscode.TreeItem {
@@ -392,7 +401,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         if (this.mcpClient) {
             // Content sections — these lazy-load from MCP
             const projectsNode = new BinlogTreeItem(
-                'Projects',
+                'Projects (Build)',
                 vscode.TreeItemCollapsibleState.Collapsed
             );
             projectsNode.nodeKind = 'root-projects';
@@ -452,6 +461,17 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                 : '';
             warningsNode.contextValue = 'warningsRoot';
             items.push(warningsNode);
+
+            const evalNode = new BinlogTreeItem(
+                'Evaluations',
+                vscode.TreeItemCollapsibleState.Collapsed
+            );
+            evalNode.nodeKind = 'root-evaluations';
+            evalNode.iconPath = new vscode.ThemeIcon('library');
+            if (this.evaluationsCache) {
+                evalNode.description = `(${this.evaluationsCache.length})`;
+            }
+            items.push(evalNode);
 
             const perfNode = new BinlogTreeItem(
                 'Performance',
@@ -557,6 +577,15 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             case 'perf-analyzers':
                 return this.fetchExpensiveAnalyzers();
 
+            case 'root-evaluations':
+                telemetry.trackTreeExpand('root-evaluations');
+                return this.fetchEvaluations();
+            case 'evaluation':
+                return this.getEvaluationChildren(element);
+            case 'eval-properties':
+                return this.fetchEvalProperties(element);
+            case 'eval-global-props':
+                return this.fetchEvalGlobalProps(element);
             case 'root-actions':
                 return this.getActionChildren();
             case 'root-about':
@@ -1097,6 +1126,12 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         chat.iconPath = new vscode.ThemeIcon('comment-discussion');
         actions.push(chat);
 
+        const search = new BinlogTreeItem('Search build events...', vscode.TreeItemCollapsibleState.None);
+        search.nodeKind = 'action';
+        search.command = { command: 'binlog.searchBinlog', title: 'Search' };
+        search.iconPath = new vscode.ThemeIcon('search');
+        actions.push(search);
+
         const add = new BinlogTreeItem('Add more binlogs...', vscode.TreeItemCollapsibleState.None);
         add.nodeKind = 'action';
         add.command = { command: 'binlog.addFile', title: 'Add' };
@@ -1241,6 +1276,154 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         return items;
     }
 
+    // --- Evaluation methods ---
+
+    private async fetchEvaluations(): Promise<BinlogTreeItem[]> {
+        if (this.evaluationsCache) {
+            return this.evaluationsCache.map(d => this.dataToItem(d));
+        }
+        if (!this.mcpClient) {
+            return [this.makeInfoItem('MCP server not connected', 'info')];
+        }
+        try {
+            const result = await this.mcpClient.callTool('binlog_evaluations');
+            const data = this.tryParseJson(result.text);
+            const entries = Array.isArray(data) ? data : [];
+
+            const items: TreeNodeData[] = entries.map((e: any) => {
+                const file = e.projectFile || e.ProjectFile || '';
+                const durMs = e.durationMs || e.DurationMs || 0;
+                const durStr = durMs >= 1000 ? `${(durMs / 1000).toFixed(1)}s` : `${durMs}ms`;
+                const evalId = e.id || e.Id || 0;
+                return {
+                    kind: 'evaluation' as NodeKind,
+                    label: this.extractFileName(file),
+                    description: durStr,
+                    tooltip: `Evaluation #${evalId}\n${file}\nDuration: ${durStr}\n\nExpand to see evaluated properties`,
+                    icon: 'library',
+                    children: [],
+                    evaluationId: evalId,
+                    projectFile: file,
+                };
+            });
+
+            this.evaluationsCache = items;
+            this._onDidChangeTreeData.fire(undefined);
+            return items.length > 0
+                ? items.map(d => this.dataToItem(d))
+                : [this.makeInfoItem('No evaluations found', 'info')];
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return [this.makeInfoItem(`Error: ${msg.substring(0, 80)}`, 'error')];
+        }
+    }
+
+    private getEvaluationChildren(element: BinlogTreeItem): BinlogTreeItem[] {
+        const propsNode = new BinlogTreeItem('Properties', vscode.TreeItemCollapsibleState.Collapsed);
+        propsNode.nodeKind = 'eval-properties';
+        propsNode.iconPath = new vscode.ThemeIcon('symbol-property');
+        propsNode.evaluationId = element.evaluationId;
+
+        const globalNode = new BinlogTreeItem('Global Properties', vscode.TreeItemCollapsibleState.Collapsed);
+        globalNode.nodeKind = 'eval-global-props';
+        globalNode.iconPath = new vscode.ThemeIcon('globe');
+        globalNode.evaluationId = element.evaluationId;
+
+        return [propsNode, globalNode];
+    }
+
+    private async fetchEvalProperties(element: BinlogTreeItem): Promise<BinlogTreeItem[]> {
+        if (!this.mcpClient || element.evaluationId === undefined) {
+            return [this.makeInfoItem('No evaluation ID', 'info')];
+        }
+        try {
+            const result = await this.mcpClient.callTool('binlog_evaluation_properties', {
+                evaluation_id: element.evaluationId,
+            });
+            const data = this.tryParseJson(result.text);
+            const items: BinlogTreeItem[] = [];
+            if (data && typeof data === 'object' && !Array.isArray(data)) {
+                for (const [k, v] of Object.entries(data as Record<string, unknown>)) {
+                    const item = new BinlogTreeItem(
+                        `${k} = ${String(v)}`,
+                        vscode.TreeItemCollapsibleState.None
+                    );
+                    item.nodeKind = 'eval-property';
+                    item.iconPath = new vscode.ThemeIcon('symbol-property');
+                    item.tooltip = `${k} = ${String(v)}`;
+                    item.fullText = `${k} = ${String(v)}`;
+                    item.contextValue = 'copyable-message';
+                    items.push(item);
+                }
+            } else if (Array.isArray(data)) {
+                for (const entry of data) {
+                    const name = entry.name || entry.Name || entry.propertyName || '';
+                    const value = entry.value || entry.Value || '';
+                    const item = new BinlogTreeItem(
+                        `${name} = ${String(value)}`,
+                        vscode.TreeItemCollapsibleState.None
+                    );
+                    item.nodeKind = 'eval-property';
+                    item.iconPath = new vscode.ThemeIcon('symbol-property');
+                    item.tooltip = `${name} = ${String(value)}`;
+                    item.fullText = `${name} = ${String(value)}`;
+                    item.contextValue = 'copyable-message';
+                    items.push(item);
+                }
+            }
+            return items.length > 0 ? items : [this.makeInfoItem('No properties', 'info')];
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return [this.makeInfoItem(`Error: ${msg.substring(0, 80)}`, 'error')];
+        }
+    }
+
+    private async fetchEvalGlobalProps(element: BinlogTreeItem): Promise<BinlogTreeItem[]> {
+        if (!this.mcpClient || element.evaluationId === undefined) {
+            return [this.makeInfoItem('No evaluation ID', 'info')];
+        }
+        try {
+            const result = await this.mcpClient.callTool('binlog_evaluation_global_properties', {
+                evaluation_id: element.evaluationId,
+            });
+            const data = this.tryParseJson(result.text);
+            const items: BinlogTreeItem[] = [];
+            if (data && typeof data === 'object' && !Array.isArray(data)) {
+                for (const [k, v] of Object.entries(data as Record<string, unknown>)) {
+                    const item = new BinlogTreeItem(
+                        `${k} = ${String(v)}`,
+                        vscode.TreeItemCollapsibleState.None
+                    );
+                    item.nodeKind = 'eval-property';
+                    item.iconPath = new vscode.ThemeIcon('globe');
+                    item.tooltip = `${k} = ${String(v)}`;
+                    item.fullText = `${k} = ${String(v)}`;
+                    item.contextValue = 'copyable-message';
+                    items.push(item);
+                }
+            } else if (Array.isArray(data)) {
+                for (const entry of data) {
+                    const name = entry.name || entry.Name || entry.propertyName || '';
+                    const value = entry.value || entry.Value || '';
+                    const item = new BinlogTreeItem(
+                        `${name} = ${String(value)}`,
+                        vscode.TreeItemCollapsibleState.None
+                    );
+                    item.nodeKind = 'eval-property';
+                    item.iconPath = new vscode.ThemeIcon('globe');
+                    item.tooltip = `${name} = ${String(value)}`;
+                    item.fullText = `${name} = ${String(value)}`;
+                    item.contextValue = 'copyable-message';
+                    items.push(item);
+                }
+            }
+            return items.length > 0 ? items : [this.makeInfoItem('No global properties', 'info')];
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return [this.makeInfoItem(`Error: ${msg.substring(0, 80)}`, 'error')];
+        }
+    }
+
     // --- MCP tool helper ---
 
     private async callMcpTool(
@@ -1289,7 +1472,8 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         if (data.projectId) { /* stored in command args */ }
         if (data.targetName) { item.targetName = data.targetName; }
         if (data.itemType) { item.itemType = data.itemType; }
-        // Build full text for clipboard and set context for menus
+        if (data.evaluationId !== undefined) { item.evaluationId = data.evaluationId; }
+        // Build full text for clipboardand set context for menus
         const parts = [data.label];
         if (data.description) { parts.push(data.description); }
         item.fullText = parts.join(' — ');
@@ -1434,6 +1618,8 @@ export class BinlogTreeItem extends vscode.TreeItem {
     taskName?: string;
     /** For item type nodes: the item type name */
     itemType?: string;
+    /** For evaluation nodes: evaluation id from MCP */
+    evaluationId?: number;
     constructor(label: string, collapsibleState: vscode.TreeItemCollapsibleState) {
         super(label, collapsibleState);
     }
