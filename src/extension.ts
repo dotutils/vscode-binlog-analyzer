@@ -2193,7 +2193,7 @@ async function showTimelineWebview(context: vscode.ExtensionContext) {
         return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
     }
 
-    function renderBars(items: { name: string; durationMs: number; count?: number; skipped?: number }[], maxMs: number, color: string): string {
+    function renderBars(items: { name: string; durationMs: number; count?: number; skipped?: number }[], maxMs: number, color: string, section: string): string {
         return items.map(item => {
             const pct = Math.max(2, (item.durationMs / maxMs) * 100);
             const meta = item.count && item.count > 1 ? ` <span class="count">×${item.count}</span>` : '';
@@ -2201,7 +2201,7 @@ async function showTimelineWebview(context: vscode.ExtensionContext) {
                 ? ` <span class="skip-badge">⏭ ${item.skipped} skipped</span>` : '';
             const escapedName = item.name.replace(/'/g, "\\'").replace(/"/g, '&quot;');
             const durStr = formatDuration(item.durationMs);
-            return `<div class="bar-row clickable" onclick="analyze('${escapedName}', '${durStr}', ${item.count || 1})" title="Click to analyze in Copilot Chat">
+            return `<div class="bar-row clickable" onclick="analyze('${escapedName}', '${durStr}', ${item.count || 1}, '${section}')" title="Click to analyze in Copilot Chat">
                 <div class="bar-label" title="${item.name}">${item.name}${meta}${skipBadge}</div>
                 <div class="bar-track">
                     <div class="bar-fill" style="width:${pct}%;background:${color}"></div>
@@ -2275,18 +2275,18 @@ async function showTimelineWebview(context: vscode.ExtensionContext) {
     </div>
 
     <h2><span class="section-icon">🔥</span>Slowest Targets</h2>
-    ${targetBars.length > 0 ? renderBars(targetBars, maxTargetMs, 'var(--vscode-charts-red, #f14c4c)') : '<p style="color:var(--vscode-descriptionForeground)">No target data</p>'}
+    ${targetBars.length > 0 ? renderBars(targetBars, maxTargetMs, 'var(--vscode-charts-red, #f14c4c)', 'target') : '<p style="color:var(--vscode-descriptionForeground)">No target data</p>'}
 
     <h2><span class="section-icon">🔧</span>Slowest Tasks</h2>
-    ${taskBars.length > 0 ? renderBars(taskBars, maxTaskMs, 'var(--vscode-charts-blue, #3794ff)') : '<p style="color:var(--vscode-descriptionForeground)">No task data</p>'}
+    ${taskBars.length > 0 ? renderBars(taskBars, maxTaskMs, 'var(--vscode-charts-blue, #3794ff)', 'task') : '<p style="color:var(--vscode-descriptionForeground)">No task data</p>'}
 
     ${uniqueProjectBars.length > 0 ? `<h2><span class="section-icon">📁</span>Project Build Times</h2>
-    ${renderBars(uniqueProjectBars, maxProjectMs, 'var(--vscode-charts-green, #89d185)')}` : ''}
+    ${renderBars(uniqueProjectBars, maxProjectMs, 'var(--vscode-charts-green, #89d185)', 'project')}` : ''}
 
     <script>
         const vscode = acquireVsCodeApi();
-        function analyze(name, duration, count) {
-            vscode.postMessage({ command: 'analyze', name, duration, count });
+        function analyze(name, duration, count, section) {
+            vscode.postMessage({ command: 'analyze', name, duration, count, section });
         }
     </script>
 </body>
@@ -2295,7 +2295,10 @@ async function showTimelineWebview(context: vscode.ExtensionContext) {
     // Handle messages from the webview (click-to-analyze)
     panel.webview.onDidReceiveMessage(message => {
         if (message.command === 'analyze') {
-            vscode.commands.executeCommand('binlog.analyzeInChat', message.name, message.duration, message.count, 'perf-item');
+            const category = message.section === 'task' ? 'task'
+                : message.section === 'project' ? 'project'
+                : 'perf-item'; // targets
+            vscode.commands.executeCommand('binlog.analyzeInChat', message.name, message.duration, message.count, category);
         }
     });
 }
