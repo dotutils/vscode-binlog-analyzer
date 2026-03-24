@@ -697,7 +697,9 @@ export async function activate(context: vscode.ExtensionContext) {
                     `What are its slowest targets? Does it have unnecessary dependencies? ` +
                     `Use binlog_project_targets to show the target breakdown.`;
             } else {
-                prompt = `@binlog Analyze ${itemCtx}. What is it and how does it affect the build?`;
+                prompt = `@binlog Analyze the MSBuild target/task ${itemCtx}. ` +
+                    `Use binlog_search_targets to find where it runs and binlog_expensive_targets for timing. ` +
+                    `What does it do and how does it affect the build?`;
             }
 
             vscode.commands.executeCommand('workbench.action.chat.open', prompt);
@@ -2292,7 +2294,7 @@ async function showTimelineWebview(context: vscode.ExtensionContext) {
     // Handle messages from the webview (click-to-analyze)
     panel.webview.onDidReceiveMessage(message => {
         if (message.command === 'analyze') {
-            vscode.commands.executeCommand('binlog.analyzeInChat', message.name, message.duration, message.count);
+            vscode.commands.executeCommand('binlog.analyzeInChat', message.name, message.duration, message.count, 'perf-item');
         }
     });
 }
