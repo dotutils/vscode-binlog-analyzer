@@ -19,7 +19,7 @@ type NodeKind =
     | 'root-perf'     // "Performance" section
     | 'perf-targets'  // "Slowest Targets" sub-section
     | 'perf-tasks'    // "Slowest Tasks" sub-section
-    | 'perf-analyzers' // "Slowest Analyzers" sub-section
+    | 'perf-analyzers' // "Executed Analyzers" sub-section
     | 'perf-item'     // individual target/task
     | 'root-properties' // "Properties" section
     | 'property-item'   // individual property
@@ -734,7 +734,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         tasks.iconPath = new vscode.ThemeIcon('tools');
 
         const analyzers = new BinlogTreeItem(
-            'Slowest Analyzers',
+            'Executed Analyzers',
             vscode.TreeItemCollapsibleState.Collapsed
         );
         analyzers.nodeKind = 'perf-analyzers' as NodeKind;
