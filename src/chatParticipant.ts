@@ -248,7 +248,7 @@ export class BinlogChatParticipant {
             commandPrompt,
             request.prompt,
             binlogContext
-        ].filter(Boolean).join('\n\n');
+        ].filter(Boolean).join('\n\n') || 'Analyze the binlog.';
 
         // Find available MCP tools from the binlog MCP server
         const tools = vscode.lm.tools.filter(tool =>
@@ -409,12 +409,14 @@ export class BinlogChatParticipant {
             }
 
             // Add assistant tool calls and results to messages
-            messages.push(
-                vscode.LanguageModelChatMessage.Assistant(toolCalls.map(tc => tc)),
-            );
-            messages.push(
-                vscode.LanguageModelChatMessage.User(toolResults.map(tr => tr)),
-            );
+            if (toolCalls.length > 0) {
+                messages.push(
+                    vscode.LanguageModelChatMessage.Assistant(toolCalls.map(tc => tc)),
+                );
+                messages.push(
+                    vscode.LanguageModelChatMessage.User(toolResults.map(tr => tr)),
+                );
+            }
 
             // Continue conversation with tool results
             try {
