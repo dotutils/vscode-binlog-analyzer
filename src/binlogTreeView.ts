@@ -151,61 +151,55 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
     /** Fires with raw MCP diagnostics data after prefetch — avoids duplicate MCP calls */
     readonly onDiagnosticsRaw = this._onDiagnosticsRaw.event;
 
-    /** Pre-fetch all data so tree expansion is instant */
+    /** Pre-fetch all data so tree expansion is instant (runs silently in background) */
     private async prefetch() {
         if (!this.mcpClient) { return; }
         const client = this.mcpClient;
 
-        await vscode.window.withProgress(
-            { location: { viewId: 'binlogExplorer' }, },
-            async () => {
-                const calls = [
-                    { tool: 'binlog_projects', args: {}, cache: 'projects' as const },
-                    { tool: 'binlog_errors', args: {}, cache: 'errors' as const },
-                    { tool: 'binlog_warnings', args: {}, cache: 'warnings' as const },
-                    { tool: 'binlog_expensive_targets', args: { top_number: 10 }, cache: 'targets' as const },
-                    { tool: 'binlog_expensive_tasks', args: { top_number: 10 }, cache: 'tasks' as const },
-                    { tool: 'binlog_expensive_analyzers', args: { limit: 10 }, cache: 'analyzers' as const },
-                ];
+        const calls = [
+            { tool: 'binlog_projects', args: {}, cache: 'projects' as const },
+            { tool: 'binlog_errors', args: {}, cache: 'errors' as const },
+            { tool: 'binlog_warnings', args: {}, cache: 'warnings' as const },
+            { tool: 'binlog_expensive_targets', args: { top_number: 10 }, cache: 'targets' as const },
+            { tool: 'binlog_expensive_tasks', args: { top_number: 10 }, cache: 'tasks' as const },
+            { tool: 'binlog_expensive_analyzers', args: { limit: 10 }, cache: 'analyzers' as const },
+        ];
 
-                await Promise.allSettled(calls.map(async (c) => {
-                    try {
-                        const result = await client.callTool(c.tool, c.args);
-                        const data = this.tryParseJson(result.text);
+        await Promise.allSettled(calls.map(async (c) => {
+            try {
+                const result = await client.callTool(c.tool, c.args);
+                const data = this.tryParseJson(result.text);
 
-                        if (c.cache === 'projects') {
-                            this.projectsCache = this.parseProjectData(data, result.text);
-                        } else if (c.cache === 'errors') {
-                            this.parseDiagnosticsItems(data, 'error');
-                        } else if (c.cache === 'warnings') {
-                            this.parseDiagnosticsItems(data, 'warning');
-                        } else if (c.cache === 'targets') {
-                            this.targetsCache = this.parsePerfItems(result.text, 'flame');
-                        } else if (c.cache === 'tasks') {
-                            this.tasksCache = this.parsePerfItems(result.text, 'tools');
-                        } else if (c.cache === 'analyzers') {
-                            const parsed = this.parsePerfItems(result.text, 'microscope');
-                            // Only cache non-empty results; let fetchExpensiveAnalyzers try its fallback parser
-                            if (parsed.length > 0) {
-                                this.analyzersCache = parsed;
-                            }
-                        }
-                    } catch (err) {
-                        console.warn(`prefetch ${c.tool} FAILED: ${err}`);
+                if (c.cache === 'projects') {
+                    this.projectsCache = this.parseProjectData(data, result.text);
+                } else if (c.cache === 'errors') {
+                    this.parseDiagnosticsItems(data, 'error');
+                } else if (c.cache === 'warnings') {
+                    this.parseDiagnosticsItems(data, 'warning');
+                } else if (c.cache === 'targets') {
+                    this.targetsCache = this.parsePerfItems(result.text, 'flame');
+                } else if (c.cache === 'tasks') {
+                    this.tasksCache = this.parsePerfItems(result.text, 'tools');
+                } else if (c.cache === 'analyzers') {
+                    const parsed = this.parsePerfItems(result.text, 'microscope');
+                    if (parsed.length > 0) {
+                        this.analyzersCache = parsed;
                     }
-                }));
-
-                // Fire diagnostics event after both errors and warnings are loaded
-                this._onDiagnosticsRaw.fire({
-                    diagnostics: [
-                        ...(this.errorsCache || []).map(d => ({ ...d, severity: 'Error' })),
-                        ...(this.warningsCache || []).map(d => ({ ...d, severity: 'Warning' })),
-                    ]
-                });
-
-                this._onDidChangeTreeData.fire(undefined);
+                }
+            } catch (err) {
+                console.warn(`prefetch ${c.tool} FAILED: ${err}`);
             }
-        );
+        }));
+
+        // Fire diagnostics event after both errors and warnings are loaded
+        this._onDiagnosticsRaw.fire({
+            diagnostics: [
+                ...(this.errorsCache || []).map(d => ({ ...d, severity: 'Error' })),
+                ...(this.warningsCache || []).map(d => ({ ...d, severity: 'Warning' })),
+            ]
+        });
+
+        this._onDidChangeTreeData.fire(undefined);
     }
 
     private parseProjectData(data: unknown, text: string): TreeNodeData[] {
