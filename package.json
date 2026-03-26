@@ -344,6 +344,11 @@
           "command": "binlog.showTimeline",
           "when": "view == binlogExplorer && binlog.hasLoadedBinlogs",
           "group": "navigation"
+        },
+        {
+          "command": "binlog.compareTimelines",
+          "when": "view == binlogExplorer && binlog.hasMultipleBinlogs",
+          "group": "navigation"
         }
       ],
       "view/item/context": [

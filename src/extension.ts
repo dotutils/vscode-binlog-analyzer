@@ -1290,6 +1290,7 @@ function updateStatusBar() {
 
     // Update context for menu visibility
     vscode.commands.executeCommand('setContext', 'binlog.hasLoadedBinlogs', allBinlogPaths.length > 0);
+    vscode.commands.executeCommand('setContext', 'binlog.hasMultipleBinlogs', allBinlogPaths.length >= 2);
 
     if (allBinlogPaths.length === 0) {
         statusBarItem.hide();
