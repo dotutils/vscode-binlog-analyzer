@@ -304,7 +304,22 @@ function extractBuildId(input: string): string | null {
 
 // ─── Main Command ────────────────────────────────────────────────────────────
 
+let ciDownloadInProgress = false;
+
 export async function downloadCiBinlog(): Promise<string[] | undefined> {
+    if (ciDownloadInProgress) {
+        vscode.window.showInformationMessage('CI download already in progress...');
+        return;
+    }
+    ciDownloadInProgress = true;
+    try {
+        return await doDownloadCiBinlog();
+    } finally {
+        ciDownloadInProgress = false;
+    }
+}
+
+async function doDownloadCiBinlog(): Promise<string[] | undefined> {
     const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     const remoteUrl = await getGitRemoteUrl(cwd);
 
