@@ -486,6 +486,36 @@ function extractBuildId(input: string): string | null {
 // ─── Main Command ────────────────────────────────────────────────────────────
 
 let ciDownloadInProgress = false;
+let extensionContext: vscode.ExtensionContext | undefined;
+
+/** Set the extension context for persistent storage (call from activate) */
+export function setCiContext(ctx: vscode.ExtensionContext) {
+    extensionContext = ctx;
+}
+
+function getRecentAzdoOrgs(): string[] {
+    const wsKey = vscode.workspace.workspaceFolders?.[0]?.uri.toString() || 'default';
+    return extensionContext?.workspaceState.get<string[]>(`ci.recentAzdoOrgs.${wsKey}`, []) || [];
+}
+
+function saveRecentAzdoOrg(orgProject: string) {
+    const wsKey = vscode.workspace.workspaceFolders?.[0]?.uri.toString() || 'default';
+    const recent = getRecentAzdoOrgs().filter(o => o !== orgProject);
+    recent.unshift(orgProject);
+    extensionContext?.workspaceState.update(`ci.recentAzdoOrgs.${wsKey}`, recent.slice(0, 5));
+}
+
+function getRecentGhRepos(): string[] {
+    const wsKey = vscode.workspace.workspaceFolders?.[0]?.uri.toString() || 'default';
+    return extensionContext?.workspaceState.get<string[]>(`ci.recentGhRepos.${wsKey}`, []) || [];
+}
+
+function saveRecentGhRepo(ownerRepo: string) {
+    const wsKey = vscode.workspace.workspaceFolders?.[0]?.uri.toString() || 'default';
+    const recent = getRecentGhRepos().filter(o => o !== ownerRepo);
+    recent.unshift(ownerRepo);
+    extensionContext?.workspaceState.update(`ci.recentGhRepos.${wsKey}`, recent.slice(0, 5));
+}
 
 export async function downloadCiBinlog(): Promise<string[] | undefined> {
     if (ciDownloadInProgress) {
@@ -531,18 +561,35 @@ async function doDownloadCiBinlog(): Promise<string[] | undefined> {
     let effectiveGhInfo = ghInfo;
 
     if (source === 'azdo' && !effectiveAzdoInfo) {
-        const orgProject = await vscode.window.showInputBox({
-            prompt: 'Enter Azure DevOps org/project (or paste a build URL)',
-            placeHolder: 'e.g. dnceng-public/public or https://dev.azure.com/dnceng-public/public/_build/...',
-            validateInput: (v) => {
-                const trimmed = v.trim();
-                if (trimmed.includes('dev.azure.com') || trimmed.includes('visualstudio.com')) { return null; }
-                if (/^[^/]+\/[^/]+$/.test(trimmed)) { return null; }
-                return 'Enter as org/project or paste an Azure DevOps URL';
-            },
-        });
-        if (!orgProject) { return; }
-        const trimmed = orgProject.trim();
+        const recentOrgs = getRecentAzdoOrgs();
+        let orgProjectInput: string | undefined;
+
+        if (recentOrgs.length > 0) {
+            // Show quick pick with recent orgs + manual entry
+            const pick = await vscode.window.showQuickPick([
+                ...recentOrgs.map(o => ({ label: o, description: '$(history) recent', value: o })),
+                { label: '', kind: vscode.QuickPickItemKind.Separator } as any,
+                { label: '$(edit) Enter org/project or paste URL...', value: '__manual__' },
+            ], { placeHolder: 'Select Azure DevOps org/project' });
+            if (!pick) { return; }
+            orgProjectInput = pick.value === '__manual__' ? undefined : pick.value;
+        }
+
+        if (!orgProjectInput) {
+            orgProjectInput = await vscode.window.showInputBox({
+                prompt: 'Enter Azure DevOps org/project (or paste a build URL)',
+                placeHolder: 'e.g. dnceng-public/public or https://dev.azure.com/dnceng-public/public/_build/...',
+                validateInput: (v) => {
+                    const trimmed = v.trim();
+                    if (trimmed.includes('dev.azure.com') || trimmed.includes('visualstudio.com')) { return null; }
+                    if (/^[^/]+\/[^/]+$/.test(trimmed)) { return null; }
+                    return 'Enter as org/project or paste an Azure DevOps URL';
+                },
+            });
+        }
+        if (!orgProjectInput) { return; }
+
+        const trimmed = orgProjectInput.trim();
         const parsed = parseAzdoRemote(trimmed);
         if (parsed) {
             effectiveAzdoInfo = parsed;
@@ -550,6 +597,7 @@ async function doDownloadCiBinlog(): Promise<string[] | undefined> {
             const parts = trimmed.split('/');
             effectiveAzdoInfo = { org: parts[0], project: parts[1] };
         }
+        saveRecentAzdoOrg(`${effectiveAzdoInfo.org}/${effectiveAzdoInfo.project}`);
         // If URL contains buildId, skip straight to artifact selection
         const directBuildId = extractBuildId(trimmed);
         if (directBuildId && trimmed.includes('buildId')) {
@@ -558,19 +606,34 @@ async function doDownloadCiBinlog(): Promise<string[] | undefined> {
     }
 
     if (source === 'github' && !effectiveGhInfo) {
-        const ownerRepo = await vscode.window.showInputBox({
-            prompt: 'Enter GitHub owner/repo (or paste a GitHub Actions run URL)',
-            placeHolder: 'e.g. dotnet/templating or https://github.com/dotnet/templating/actions/runs/12345',
-            validateInput: (v) => {
-                const trimmed = v.trim();
-                if (trimmed.includes('github.com')) { return null; }
-                if (/^[^/]+\/[^/]+$/.test(trimmed)) { return null; }
-                return 'Enter as owner/repo or paste a GitHub Actions URL';
-            },
-        });
-        if (!ownerRepo) { return; }
-        const trimmed = ownerRepo.trim();
-        // Try parsing as GitHub URL
+        const recentRepos = getRecentGhRepos();
+        let ghInput: string | undefined;
+
+        if (recentRepos.length > 0) {
+            const pick = await vscode.window.showQuickPick([
+                ...recentRepos.map(o => ({ label: o, description: '$(history) recent', value: o })),
+                { label: '', kind: vscode.QuickPickItemKind.Separator } as any,
+                { label: '$(edit) Enter owner/repo or paste URL...', value: '__manual__' },
+            ], { placeHolder: 'Select GitHub repo' });
+            if (!pick) { return; }
+            ghInput = pick.value === '__manual__' ? undefined : pick.value;
+        }
+
+        if (!ghInput) {
+            ghInput = await vscode.window.showInputBox({
+                prompt: 'Enter GitHub owner/repo (or paste a GitHub Actions run URL)',
+                placeHolder: 'e.g. dotnet/templating or https://github.com/dotnet/templating/actions/runs/12345',
+                validateInput: (v) => {
+                    const trimmed = v.trim();
+                    if (trimmed.includes('github.com')) { return null; }
+                    if (/^[^/]+\/[^/]+$/.test(trimmed)) { return null; }
+                    return 'Enter as owner/repo or paste a GitHub Actions URL';
+                },
+            });
+        }
+        if (!ghInput) { return; }
+
+        const trimmed = ghInput.trim();
         const parsed = parseGitHubRemote(trimmed);
         if (parsed) {
             effectiveGhInfo = parsed;
@@ -578,6 +641,7 @@ async function doDownloadCiBinlog(): Promise<string[] | undefined> {
             const parts = trimmed.split('/');
             effectiveGhInfo = { owner: parts[0], repo: parts[1] };
         }
+        saveRecentGhRepo(`${effectiveGhInfo.owner}/${effectiveGhInfo.repo}`);
         // If URL contains /actions/runs/{id}, skip straight to artifact selection
         const runMatch = trimmed.match(/\/actions\/runs\/(\d+)/);
         if (runMatch) {

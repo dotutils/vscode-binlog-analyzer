@@ -4,7 +4,7 @@ import { BinlogChatParticipant } from './chatParticipant';
 import { BinlogTreeDataProvider, BinlogTreeItem, AboutInfo } from './binlogTreeView';
 import { McpClient, buildMcpArgs } from './mcpClient';
 import { BinlogDocumentProvider, BINLOG_SCHEME, openBinlogDocument } from './binlogDocumentProvider';
-import { downloadCiBinlog } from './ciIntegration';
+import { downloadCiBinlog, setCiContext } from './ciIntegration';
 import * as telemetry from './telemetry';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -35,6 +35,7 @@ export async function activate(context: vscode.ExtensionContext) {
     extensionContext = context;
     telemetry.initTelemetry(context);
     telemetry.trackActivation();
+    setCiContext(context);
 
     // Set updating context immediately so the welcome view never flickers to "No binlog loaded"
     const hasPendingUpdate = !!context.globalState.get<boolean>('binlog.pendingToolUpdate');
