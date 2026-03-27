@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as cp from 'child_process';
+import * as https from 'https';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -158,15 +159,12 @@ async function listAzdoArtifacts(org: string, project: string, runId: string): P
         } catch { /* fall through */ }
     }
 
-    // Fallback: try unauthenticated fetch (works for public projects)
+    // Fallback: unauthenticated HTTPS fetch (works for public projects)
     if (artifacts.length === 0) {
-        const curlResult = await execCommand('curl', ['-s', '-f', apiUrl]);
-        if (curlResult.code === 0) {
-            try {
-                const data = JSON.parse(curlResult.stdout);
-                artifacts = data.value || [];
-            } catch { /* fall through */ }
-        }
+        try {
+            const json = await httpsGetJson(apiUrl);
+            artifacts = json?.value || [];
+        } catch { /* fall through */ }
     }
 
     // Last fallback: az pipelines runs artifact list
@@ -279,6 +277,29 @@ function getDownloadDir(): string {
         fs.mkdirSync(dir, { recursive: true });
     }
     return dir;
+}
+
+/** Simple HTTPS GET that returns parsed JSON. Works without auth for public APIs. */
+function httpsGetJson(url: string): Promise<any> {
+    return new Promise((resolve, reject) => {
+        https.get(url, { headers: { 'Accept': 'application/json' } }, (res) => {
+            if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                // Follow redirect
+                httpsGetJson(res.headers.location).then(resolve, reject);
+                return;
+            }
+            if (res.statusCode && res.statusCode >= 400) {
+                reject(new Error(`HTTP ${res.statusCode}`));
+                return;
+            }
+            let data = '';
+            res.on('data', (chunk: string) => { data += chunk; });
+            res.on('end', () => {
+                try { resolve(JSON.parse(data)); }
+                catch (e) { reject(e); }
+            });
+        }).on('error', reject);
+    });
 }
 
 /** Extract numeric build/run ID from a raw string (URL or plain number) */
