@@ -28,7 +28,10 @@ interface CiArtifact {
 
 async function execCommand(cmd: string, args: string[], cwd?: string, timeoutMs: number = 30000): Promise<{ stdout: string; stderr: string; code: number }> {
     return new Promise((resolve) => {
-        cp.execFile(cmd, args, { cwd, timeout: timeoutMs, maxBuffer: 5 * 1024 * 1024, shell: true }, (err, stdout, stderr) => {
+        // Strip GITHUB_TOKEN from env to avoid interfering with gh CLI keyring auth
+        const env = { ...process.env };
+        if (cmd === 'gh') { delete env.GITHUB_TOKEN; }
+        cp.execFile(cmd, args, { cwd, timeout: timeoutMs, maxBuffer: 5 * 1024 * 1024, shell: true, env }, (err, stdout, stderr) => {
             resolve({ stdout: stdout || '', stderr: stderr || '', code: err ? (err as any).code ?? 1 : 0 });
         });
     });
@@ -271,45 +274,49 @@ async function listGitHubRuns(owner: string, repo: string, top: number = 20): Pr
         '--json', 'databaseId,displayTitle,status,conclusion,headBranch,createdAt,workflowName',
     ]);
     if (result.code !== 0) {
-        throw new Error(`gh run list failed: ${result.stderr}`);
+        throw new Error(`gh run list failed: ${result.stderr.substring(0, 300)}`);
     }
 
-    const runs = JSON.parse(result.stdout);
+    let runs: any[];
+    try {
+        runs = JSON.parse(result.stdout);
+    } catch {
+        throw new Error('gh CLI returned invalid JSON');
+    }
+
     return runs.map((run: any) => ({
         id: String(run.databaseId),
         label: `#${run.databaseId} — ${run.workflowName || 'Workflow'}`,
-        description: `${run.conclusion || run.status} · ${run.headBranch}`,
-        detail: `${run.displayTitle} · ${new Date(run.createdAt).toLocaleString()}`,
+        description: `${run.conclusion || run.status} · ${run.headBranch || ''}`,
+        detail: `${run.displayTitle || ''} · ${run.createdAt ? new Date(run.createdAt).toLocaleString() : ''}`,
         source: 'github' as const,
         artifactDownloadArgs: [owner, repo, String(run.databaseId)],
     }));
 }
 
 async function listGitHubArtifacts(owner: string, repo: string, runId: string): Promise<CiArtifact[]> {
+    // Use full JSON output instead of jq for robustness
     const result = await execCommand('gh', [
         'api', `repos/${owner}/${repo}/actions/runs/${runId}/artifacts`,
-        '--jq', '.artifacts[] | {name: .name}',
     ]);
+
     if (result.code !== 0) {
-        // Fallback: try gh run view
-        const viewResult = await execCommand('gh', [
-            'run', 'view', runId,
-            '--repo', `${owner}/${repo}`,
-            '--json', 'jobs',
-        ]);
-        return [];
+        throw new Error(`Failed to list artifacts: ${result.stderr.substring(0, 300)}`);
     }
 
-    // Parse newline-separated JSON objects
-    const artifacts: CiArtifact[] = [];
-    for (const line of result.stdout.trim().split('\n')) {
-        if (!line.trim()) { continue; }
-        try {
-            const obj = JSON.parse(line);
-            artifacts.push({ name: obj.name, source: 'github' });
-        } catch { /* skip malformed lines */ }
+    let data: any;
+    try {
+        data = JSON.parse(result.stdout);
+    } catch {
+        throw new Error('gh api returned invalid JSON');
     }
-    return artifacts;
+
+    const artifacts = data.artifacts || [];
+    return artifacts.map((a: any) => ({
+        name: a.name,
+        size: a.size_in_bytes,
+        source: 'github' as const,
+    }));
 }
 
 async function downloadGitHubArtifact(owner: string, repo: string, runId: string, artifactName: string, destDir: string): Promise<string[]> {
@@ -320,7 +327,9 @@ async function downloadGitHubArtifact(owner: string, repo: string, runId: string
         '--dir', destDir,
     ], undefined, 120000);
     if (result.code !== 0) {
-        throw new Error(`Failed to download artifact: ${result.stderr}`);
+        // Clean up empty directory on failure
+        try { fs.rmdirSync(destDir); } catch { /* ignore */ }
+        throw new Error(`Failed to download artifact: ${result.stderr.substring(0, 300)}`);
     }
 
     return findBinlogFiles(destDir);
@@ -518,13 +527,30 @@ async function doDownloadCiBinlog(): Promise<string[] | undefined> {
 
     if (source === 'github' && !effectiveGhInfo) {
         const ownerRepo = await vscode.window.showInputBox({
-            prompt: 'Enter GitHub owner/repo',
-            placeHolder: 'e.g. dotnet/templating',
-            validateInput: (v) => /^[^/]+\/[^/]+$/.test(v.trim()) ? null : 'Enter as owner/repo',
+            prompt: 'Enter GitHub owner/repo (or paste a GitHub Actions run URL)',
+            placeHolder: 'e.g. dotnet/templating or https://github.com/dotnet/templating/actions/runs/12345',
+            validateInput: (v) => {
+                const trimmed = v.trim();
+                if (trimmed.includes('github.com')) { return null; }
+                if (/^[^/]+\/[^/]+$/.test(trimmed)) { return null; }
+                return 'Enter as owner/repo or paste a GitHub Actions URL';
+            },
         });
         if (!ownerRepo) { return; }
-        const parts = ownerRepo.trim().split('/');
-        effectiveGhInfo = { owner: parts[0], repo: parts[1] };
+        const trimmed = ownerRepo.trim();
+        // Try parsing as GitHub URL
+        const parsed = parseGitHubRemote(trimmed);
+        if (parsed) {
+            effectiveGhInfo = parsed;
+        } else {
+            const parts = trimmed.split('/');
+            effectiveGhInfo = { owner: parts[0], repo: parts[1] };
+        }
+        // If URL contains /actions/runs/{id}, skip straight to artifact selection
+        const runMatch = trimmed.match(/\/actions\/runs\/(\d+)/);
+        if (runMatch) {
+            return await downloadGitHubArtifactFlow(effectiveGhInfo, runMatch[1]);
+        }
     }
 
     // Verify CLI availability — only required for GitHub (AzDO uses REST API for public projects)
@@ -690,6 +716,33 @@ async function downloadAzdoArtifactFlow(
     }
 
     return pickAndDownloadArtifact(artifacts, 'azdo', [azdoInfo.org, azdoInfo.project, buildId], `build #${buildId}`);
+}
+
+/** Direct GitHub artifact flow — skips run selection, goes straight to artifacts */
+async function downloadGitHubArtifactFlow(
+    ghInfo: { owner: string; repo: string },
+    runId: string
+): Promise<string[] | undefined> {
+    // Verify gh CLI first
+    if (!(await isGhCliAvailable())) {
+        vscode.window.showErrorMessage(
+            'GitHub CLI (`gh`) is required. Install it from https://cli.github.com'
+        );
+        return;
+    }
+
+    let artifacts: CiArtifact[];
+    try {
+        artifacts = await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: `Fetching artifacts for run #${runId}...` },
+            () => listGitHubArtifacts(ghInfo.owner, ghInfo.repo, runId)
+        );
+    } catch (err) {
+        vscode.window.showErrorMessage(`Failed to list artifacts: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+    }
+
+    return pickAndDownloadArtifact(artifacts, 'github', [ghInfo.owner, ghInfo.repo, runId], `run #${runId}`);
 }
 
 /** Shared artifact picker and download logic */
