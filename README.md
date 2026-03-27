@@ -37,6 +37,7 @@ The [BinlogInsights.Mcp](https://www.nuget.org/packages/BinlogInsights.Mcp) serv
 | **Multi-Binlog** | Load and compare multiple binlogs |
 | **Search** | Search across all build events — targets, tasks, messages, properties |
 | **Export Text Log** | Generate text logs at Minimal/Normal/Detailed/Diagnostic verbosity |
+| **CI/CD Integration** | Download binlogs from Azure DevOps Pipelines and GitHub Actions artifacts |
 | **MCP Auto-Restart** | Automatic recovery with exponential backoff when MCP server crashes |
 
 ## Configuration

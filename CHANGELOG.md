@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.10.8 (Preview)
+
+### New
+- **CI/CD integration** — download binlogs directly from Azure DevOps Pipelines and GitHub Actions:
+  - Browse pipelines and runs, or paste a build URL to skip straight to artifacts
+  - Filter builds by current branch, branch name, or PR number
+  - Auto-detects platform from git remote; supports manual org/project entry
+  - Remembers recent org/project per workspace for quick access
+  - Works without `az` CLI for public Azure DevOps projects (direct REST API)
+  - Supports both pipeline artifacts and build artifacts with size display
+- **Configurable chat tools** — two new settings control which tools the `@binlog` chat participant can use:
+  - `binlogAnalyzer.chat.includeAllTools` — expose all available tools to the model
+  - `binlogAnalyzer.chat.additionalToolPatterns` — selectively include extra tools by name pattern
+- **Configurable MCP server args** — `binlogAnalyzer.mcpServerArgs` setting with `${binlog}` placeholder for alternative MCP servers
+- **Compare button in tree view** — diff icon in title bar when 2+ binlogs are loaded
+
+### Fixed
+- **Persistent loading bar removed** — tree view prefetch runs silently in background
+
 ## 0.10.6 (Preview)
 
 ### New
