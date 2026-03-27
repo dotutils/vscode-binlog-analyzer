@@ -224,6 +224,11 @@
           "default": "",
           "description": "Custom path to the MCP server dotnet tool (BinlogInsights.Mcp or baronfel.binlog.mcp). Leave empty to use the globally installed tool."
         },
+        "binlogAnalyzer.mcpServerArgs": {
+          "type": "string",
+          "default": "--binlog ${binlog}",
+          "markdownDescription": "Argument template for the MCP server. Use `${binlog}` as a placeholder for each binlog path. Repeated for each loaded binlog. Examples:\n- BinlogInsights: `--binlog ${binlog}` (default)\n- baronfel: `--binlog ${binlog}`\n- Custom: `--file ${binlog}`"
+        },
         "binlogAnalyzer.autoLoad": {
           "type": "boolean",
           "default": true,

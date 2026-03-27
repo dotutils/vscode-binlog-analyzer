@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { BinlogDiagnosticsProvider } from './diagnostics';
 import { BinlogChatParticipant } from './chatParticipant';
 import { BinlogTreeDataProvider, BinlogTreeItem, AboutInfo } from './binlogTreeView';
-import { McpClient } from './mcpClient';
+import { McpClient, buildMcpArgs } from './mcpClient';
 import { BinlogDocumentProvider, BINLOG_SCHEME, openBinlogDocument } from './binlogDocumentProvider';
 import * as telemetry from './telemetry';
 import * as path from 'path';
@@ -1420,14 +1420,17 @@ async function startMcpClientForTree(binlogPaths: string[]) {
         binlogDocProvider?.setMcpClient(null);
     }
 
-    let toolExe = findBinlogInsightsTool();
+    const config = vscode.workspace.getConfiguration('binlogAnalyzer');
+    const customPath = config.get<string>('mcpServerPath', '');
+    let toolExe = customPath || findBinlogInsightsTool();
     if (!toolExe) {
         // Don't block tree loading with install — configureMcpServer handles install
         return;
     }
 
     try {
-        const client = new McpClient(toolExe, binlogPaths);
+        const argTemplate = config.get<string>('mcpServerArgs', '--binlog ${binlog}');
+        const client = new McpClient(toolExe, binlogPaths, argTemplate);
         await client.start();
         mcpClient = client;
         mcpRestartAttempts = 0; // Reset on successful start
@@ -1476,16 +1479,17 @@ async function startMcpClientForTree(binlogPaths: string[]) {
 
 async function configureMcpServer(binlogPaths: string[], config: vscode.WorkspaceConfiguration) {
     const customPath = config.get<string>('mcpServerPath', '');
+    const argTemplate = config.get<string>('mcpServerArgs', '--binlog ${binlog}');
     const workspaceCwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
-    // Configure BinlogInsights.Mcp for Copilot Chat (primary)
+    // Configure MCP server for Copilot Chat
     let insightsConfig: Record<string, unknown>;
 
     if (customPath) {
         insightsConfig = {
             type: 'stdio',
             command: customPath,
-            args: binlogPaths.flatMap(p => ['--binlog', p]),
+            args: buildMcpArgs(argTemplate, binlogPaths),
             ...(workspaceCwd && { cwd: workspaceCwd }),
         };
     } else {
@@ -1505,7 +1509,7 @@ async function configureMcpServer(binlogPaths: string[], config: vscode.Workspac
             }
         }
 
-        const binlogArgs = binlogPaths.flatMap(p => ['--binlog', p]);
+        const binlogArgs = buildMcpArgs(argTemplate, binlogPaths);
         if (insightsExe) {
             insightsConfig = {
                 type: 'stdio',

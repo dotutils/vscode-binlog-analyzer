@@ -12,6 +12,18 @@ function log(msg: string) {
 }
 
 /**
+ * Builds CLI args from a template string and binlog paths.
+ * Template uses `${binlog}` as placeholder. The template is expanded
+ * once per binlog path. E.g. `--binlog ${binlog}` with 2 paths produces
+ * `['--binlog', 'a.binlog', '--binlog', 'b.binlog']`.
+ */
+export function buildMcpArgs(template: string, binlogPaths: string[]): string[] {
+    return binlogPaths.flatMap(p =>
+        template.replace(/\$\{binlog\}/g, p).split(/\s+/).filter(Boolean)
+    );
+}
+
+/**
  * Minimal MCP (Model Context Protocol) client that communicates with
  * BinlogInsights.Mcp over stdio using JSON-RPC 2.0 with newline-delimited JSON.
  *
@@ -28,7 +40,8 @@ export class McpClient extends EventEmitter {
 
     constructor(
         private readonly exePath: string,
-        private readonly binlogPaths: string[]
+        private readonly binlogPaths: string[],
+        private readonly argTemplate: string = '--binlog ${binlog}'
     ) {
         super();
     }
@@ -41,7 +54,7 @@ export class McpClient extends EventEmitter {
 
     async start(): Promise<void> {
         this.disposed = false;
-        const args = this.binlogPaths.flatMap(p => ['--binlog', p]);
+        const args = buildMcpArgs(this.argTemplate, this.binlogPaths);
         this.proc = spawn(this.exePath, args, {
             stdio: ['pipe', 'pipe', 'pipe'],
             windowsHide: true,

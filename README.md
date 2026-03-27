@@ -44,6 +44,7 @@ The [BinlogInsights.Mcp](https://www.nuget.org/packages/BinlogInsights.Mcp) serv
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `binlogAnalyzer.mcpServerPath` | `""` | Custom path to the MCP server executable |
+| `binlogAnalyzer.mcpServerArgs` | `"--binlog ${binlog}"` | Argument template for the MCP server. `${binlog}` is replaced with each binlog path |
 | `binlogAnalyzer.autoLoad` | `true` | Auto-load binlog diagnostics on activation |
 | `binlogAnalyzer.diagnosticsSeverityFilter` | `"Warning"` | Min severity for Problems panel |
 | `binlogAnalyzer.inlineDecorations` | `true` | Show build errors as inline decorations in source files |
