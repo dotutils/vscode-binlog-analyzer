@@ -584,6 +584,12 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         buildItem.command = { command: 'binlog.buildAndCollect', title: 'Build & Collect Binlog' };
         items.push(buildItem);
 
+        const ciItem = new BinlogTreeItem('Download from CI/CD...', vscode.TreeItemCollapsibleState.None);
+        ciItem.nodeKind = 'action-item';
+        ciItem.iconPath = new vscode.ThemeIcon('cloud-download');
+        ciItem.command = { command: 'binlog.downloadFromCi', title: 'Download from CI/CD' };
+        items.push(ciItem);
+
         const aboutNode = new BinlogTreeItem('About', vscode.TreeItemCollapsibleState.Collapsed);
         aboutNode.nodeKind = 'root-about';
         aboutNode.iconPath = new vscode.ThemeIcon('info');
@@ -1197,6 +1203,12 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         add.command = { command: 'binlog.addFile', title: 'Add' };
         add.iconPath = new vscode.ThemeIcon('add');
         actions.push(add);
+
+        const ci = new BinlogTreeItem('Download from CI/CD...', vscode.TreeItemCollapsibleState.None);
+        ci.nodeKind = 'action';
+        ci.command = { command: 'binlog.downloadFromCi', title: 'Download' };
+        ci.iconPath = new vscode.ThemeIcon('cloud-download');
+        actions.push(ci);
 
         const refresh = new BinlogTreeItem('Reload', vscode.TreeItemCollapsibleState.None);
         refresh.nodeKind = 'action';

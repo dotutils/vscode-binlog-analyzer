@@ -206,6 +206,11 @@
         "command": "binlog.refreshMcpInfo",
         "title": "Binlog: Refresh MCP Info",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "binlog.downloadFromCi",
+        "title": "Binlog: Download Binlog from CI/CD",
+        "icon": "$(cloud-download)"
       }
     ],
     "configuration": {

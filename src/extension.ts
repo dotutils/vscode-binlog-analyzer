@@ -4,6 +4,7 @@ import { BinlogChatParticipant } from './chatParticipant';
 import { BinlogTreeDataProvider, BinlogTreeItem, AboutInfo } from './binlogTreeView';
 import { McpClient, buildMcpArgs } from './mcpClient';
 import { BinlogDocumentProvider, BINLOG_SCHEME, openBinlogDocument } from './binlogDocumentProvider';
+import { downloadCiBinlog } from './ciIntegration';
 import * as telemetry from './telemetry';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -134,6 +135,31 @@ export async function activate(context: vscode.ExtensionContext) {
             if (uris && uris.length > 0) {
                 const newPaths = uris.map(u => u.fsPath);
                 await addBinlogs(newPaths);
+            }
+        })
+    );
+
+    // Command: Download Binlog from CI — fetch from Azure DevOps or GitHub Actions
+    context.subscriptions.push(
+        vscode.commands.registerCommand('binlog.downloadFromCi', async () => {
+            telemetry.trackCommand('downloadFromCi');
+            const binlogFiles = await downloadCiBinlog();
+            if (binlogFiles && binlogFiles.length > 0) {
+                // Ask user whether to load or add to existing
+                if (allBinlogPaths.length > 0) {
+                    const action = await vscode.window.showQuickPick([
+                        { label: '$(add) Add to current session', value: 'add' },
+                        { label: '$(replace-all) Replace current binlogs', value: 'replace' },
+                    ], { placeHolder: 'How to load the CI binlog?' });
+                    if (!action) { return; }
+                    if (action.value === 'add') {
+                        await addBinlogs(binlogFiles);
+                    } else {
+                        await handleBinlogOpen(binlogFiles, context);
+                    }
+                } else {
+                    await handleBinlogOpen(binlogFiles, context);
+                }
             }
         })
     );
