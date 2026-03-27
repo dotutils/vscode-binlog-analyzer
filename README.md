@@ -51,6 +51,51 @@ The [BinlogInsights.Mcp](https://www.nuget.org/packages/BinlogInsights.Mcp) serv
 | `binlogAnalyzer.chat.includeAllTools` | `false` | Expose all available tools (file editing, terminal, other MCPs) to the `@binlog` chat participant |
 | `binlogAnalyzer.chat.additionalToolPatterns` | `[]` | Additional tool name patterns to include alongside binlog tools (e.g. `["copilot_codebase", "terminal"]`) |
 
+## Troubleshooting: MCP Server Installation
+
+The extension auto-installs [BinlogInsights.Mcp](https://www.nuget.org/packages/BinlogInsights.Mcp) via `dotnet tool install -g`. In corporate environments with restricted NuGet feeds, this may fail. Here are the workarounds:
+
+### 1. Install with explicit NuGet source
+
+```bash
+dotnet tool install -g BinlogInsights.Mcp --add-source https://api.nuget.org/v3/index.json
+```
+
+### 2. Manual download fallback
+
+If all `dotnet tool install` attempts fail (e.g., nuget.org is blocked):
+
+1. Download the `.nupkg` directly from [nuget.org](https://www.nuget.org/packages/BinlogInsights.Mcp)
+2. Install from the local file:
+
+```bash
+# Download (replace {version} with latest, e.g. 0.2.0)
+Invoke-WebRequest -Uri "https://www.nuget.org/api/v2/package/BinlogInsights.Mcp/{version}" -OutFile "BinlogInsights.Mcp.nupkg"
+
+# Install from local file
+dotnet tool install -g BinlogInsights.Mcp --add-source .
+```
+
+### 3. Diagnose NuGet issues
+
+```bash
+dotnet nuget list source
+```
+
+Common problems:
+- **nuget.org not listed or disabled** — the tool is published on nuget.org
+- **Authenticated feed requires credentials** — may block fallthrough to nuget.org
+- **Package source mapping** excludes nuget.org for this package
+
+### 4. Verify installation
+
+```bash
+dotnet tool list -g | Select-String BinlogInsights
+binlog-insights-mcp --help
+```
+
+> For the full troubleshooting guide, see [BinlogInsights repo setup instructions](https://github.com/SergeyTeplyakov/BinlogInsights/blob/main/samples/repo-setup/.github/skills/build-tool-setup/SKILL.md).
+
 ## Related Projects
 
 - [MSBuild Structured Log Viewer](https://github.com/KirillOsenkov/MSBuildStructuredLog) — WPF viewer with secrets redaction
