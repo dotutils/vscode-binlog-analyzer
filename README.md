@@ -25,20 +25,14 @@ The [BinlogInsights.Mcp](https://www.nuget.org/packages/BinlogInsights.Mcp) serv
 
 | Feature | Description |
 |---------|-------------|
-| **@binlog Chat** | Ask Copilot about errors, performance, targets, imports, NuGet issues |
-| **Slash Commands** | `/errors` `/summary` `/perf` `/timeline` `/targets` `/incremental` `/compare` `/search` `/properties` `/items` |
-| **Build & Collect** | Build a project and capture a `.binlog` in one step (with optional `--no-restore`) |
-| **Binlog Explorer** | Sidebar tree with expandable project → target → task hierarchy, errors, warnings, performance |
-| **Build Timeline** | Visual bar charts of target/task durations and project build times |
-| **Click-to-Analyze** | Click any target/task in the tree to open Copilot Chat with optimization suggestions |
-| **Optimize Build** | Multi-step wizard: pick optimizations, Copilot applies changes, verify with A/B comparison |
+| **@binlog Chat** | Ask Copilot about errors, performance, targets, imports, NuGet issues — with slash commands like `/errors`, `/perf`, `/timeline`, `/compare` |
+| **Build & Collect** | Build a project and capture a `.binlog` in one step |
+| **Binlog Explorer** | Sidebar tree with project → target → task hierarchy, errors, warnings, performance |
+| **Build Timeline** | Visual bar charts of target/task durations with click-to-analyze in Copilot |
+| **Optimize Build** | Pick optimizations, Copilot applies changes, verify with A/B comparison |
+| **CI/CD Integration** | Download binlogs from Azure DevOps Pipelines and GitHub Actions — filter by branch or PR |
 | **Problems Panel** | Build diagnostics as native VS Code errors/warnings with per-project CodeLens |
-| **Fix All Issues** | One-click Copilot agent to fix all build warnings/errors |
-| **Multi-Binlog** | Load and compare multiple binlogs |
 | **Search** | Search across all build events — targets, tasks, messages, properties |
-| **Export Text Log** | Generate text logs at Minimal/Normal/Detailed/Diagnostic verbosity |
-| **CI/CD Integration** | Download binlogs from Azure DevOps Pipelines and GitHub Actions artifacts |
-| **MCP Auto-Restart** | Automatic recovery with exponential backoff when MCP server crashes |
 
 ## Configuration
 
