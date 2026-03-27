@@ -71,14 +71,43 @@ async function getGitRemoteUrl(cwd?: string): Promise<string> {
     return result.stdout.trim();
 }
 
-async function listAzdoBuilds(org: string, project: string, top: number = 20): Promise<CiBuild[]> {
+interface AzdoPipeline {
+    id: number;
+    name: string;
+    folder: string;
+}
+
+async function listAzdoPipelines(org: string, project: string): Promise<AzdoPipeline[]> {
     const result = await execCommand('az', [
+        'pipelines', 'list',
+        '--org', `https://dev.azure.com/${org}`,
+        '--project', project,
+        '--output', 'json',
+    ]);
+    if (result.code !== 0) {
+        throw new Error(`az pipelines list failed: ${result.stderr}`);
+    }
+
+    const pipelines = JSON.parse(result.stdout);
+    return pipelines.map((p: any) => ({
+        id: p.id,
+        name: p.name,
+        folder: p.folder || '',
+    }));
+}
+
+async function listAzdoBuilds(org: string, project: string, pipelineId?: number, top: number = 20): Promise<CiBuild[]> {
+    const args = [
         'pipelines', 'runs', 'list',
         '--org', `https://dev.azure.com/${org}`,
         '--project', project,
         '--top', String(top),
         '--output', 'json',
-    ]);
+    ];
+    if (pipelineId !== undefined) {
+        args.push('--pipeline-ids', String(pipelineId));
+    }
+    const result = await execCommand('az', args);
     if (result.code !== 0) {
         throw new Error(`az pipelines runs list failed: ${result.stderr}`);
     }
@@ -111,6 +140,28 @@ async function downloadAzdoArtifact(org: string, project: string, runId: string,
 }
 
 async function listAzdoArtifacts(org: string, project: string, runId: string): Promise<CiArtifact[]> {
+    // Try pipeline artifacts first (PublishPipelineArtifact)
+    const pipelineResult = await execCommand('az', [
+        'rest',
+        '--method', 'get',
+        '--uri', `https://dev.azure.com/${org}/${project}/_apis/build/builds/${runId}/artifacts?api-version=7.0`,
+        '--output', 'json',
+    ]);
+
+    if (pipelineResult.code === 0) {
+        try {
+            const data = JSON.parse(pipelineResult.stdout);
+            const artifacts = data.value || data;
+            if (Array.isArray(artifacts) && artifacts.length > 0) {
+                return artifacts.map((a: any) => ({
+                    name: a.name,
+                    source: 'azdo' as const,
+                }));
+            }
+        } catch { /* fall through */ }
+    }
+
+    // Fallback: try az pipelines runs artifact list (older build artifacts)
     const result = await execCommand('az', [
         'pipelines', 'runs', 'artifact', 'list',
         '--org', `https://dev.azure.com/${org}`,
@@ -119,7 +170,7 @@ async function listAzdoArtifacts(org: string, project: string, runId: string): P
         '--output', 'json',
     ]);
     if (result.code !== 0) {
-        throw new Error(`Failed to list artifacts: ${result.stderr}`);
+        return [];
     }
 
     const artifacts = JSON.parse(result.stdout);
@@ -319,6 +370,35 @@ export async function downloadCiBinlog(): Promise<string[] | undefined> {
         }
     }
 
+    // For Azure DevOps: let user pick a pipeline first
+    let azdoPipelineId: number | undefined;
+    if (source === 'azdo') {
+        try {
+            const pipelines = await vscode.window.withProgress(
+                { location: vscode.ProgressLocation.Notification, title: 'Fetching pipelines...' },
+                () => listAzdoPipelines(azdoInfo!.org, azdoInfo!.project)
+            );
+            if (pipelines.length > 0) {
+                const pipelinePick = await vscode.window.showQuickPick(
+                    [
+                        { label: '$(list-flat) All pipelines', pipeline: undefined as AzdoPipeline | undefined },
+                        { label: '', kind: vscode.QuickPickItemKind.Separator } as any,
+                        ...pipelines.map(p => ({
+                            label: p.name,
+                            description: p.folder !== '\\' ? p.folder : '',
+                            pipeline: p as AzdoPipeline | undefined,
+                        })),
+                    ],
+                    { placeHolder: `Select a pipeline from ${azdoInfo!.org}/${azdoInfo!.project}` }
+                );
+                if (!pipelinePick) { return; }
+                azdoPipelineId = pipelinePick.pipeline?.id;
+            }
+        } catch {
+            // Non-fatal — fall through to list all runs
+        }
+    }
+
     // List builds
     let builds: CiBuild[];
     try {
@@ -326,7 +406,7 @@ export async function downloadCiBinlog(): Promise<string[] | undefined> {
             { location: vscode.ProgressLocation.Notification, title: 'Fetching CI builds...' },
             async () => {
                 if (source === 'azdo') {
-                    return listAzdoBuilds(azdoInfo!.org, azdoInfo!.project);
+                    return listAzdoBuilds(azdoInfo!.org, azdoInfo!.project, azdoPipelineId);
                 } else {
                     return listGitHubRuns(ghInfo!.owner, ghInfo!.repo);
                 }
