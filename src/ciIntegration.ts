@@ -27,7 +27,7 @@ interface CiArtifact {
 
 async function execCommand(cmd: string, args: string[], cwd?: string, timeoutMs: number = 30000): Promise<{ stdout: string; stderr: string; code: number }> {
     return new Promise((resolve) => {
-        cp.execFile(cmd, args, { cwd, timeout: timeoutMs, maxBuffer: 5 * 1024 * 1024 }, (err, stdout, stderr) => {
+        cp.execFile(cmd, args, { cwd, timeout: timeoutMs, maxBuffer: 5 * 1024 * 1024, shell: true }, (err, stdout, stderr) => {
             resolve({ stdout: stdout || '', stderr: stderr || '', code: err ? (err as any).code ?? 1 : 0 });
         });
     });
