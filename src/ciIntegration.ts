@@ -462,13 +462,17 @@ async function doDownloadCiBinlog(): Promise<string[] | undefined> {
         });
         if (!orgProject) { return; }
         const trimmed = orgProject.trim();
-        // Try parsing as URL
         const parsed = parseAzdoRemote(trimmed);
         if (parsed) {
             effectiveAzdoInfo = parsed;
         } else {
             const parts = trimmed.split('/');
             effectiveAzdoInfo = { org: parts[0], project: parts[1] };
+        }
+        // If URL contains buildId, skip straight to artifact selection
+        const directBuildId = extractBuildId(trimmed);
+        if (directBuildId && trimmed.includes('buildId')) {
+            return await downloadAzdoArtifactFlow(effectiveAzdoInfo, directBuildId);
         }
     }
 
@@ -700,5 +704,80 @@ async function doDownloadCiBinlog(): Promise<string[] | undefined> {
         `✅ Downloaded ${binlogFiles.length} binlog(s) from CI: ${fileNames}`
     );
 
+    return binlogFiles;
+}
+
+/** Direct AzDO artifact flow — skips pipeline/build selection, goes straight to artifacts */
+async function downloadAzdoArtifactFlow(
+    azdoInfo: { org: string; project: string },
+    buildId: string
+): Promise<string[] | undefined> {
+    let artifacts: CiArtifact[];
+    try {
+        artifacts = await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: `Fetching artifacts for build #${buildId}...` },
+            () => listAzdoArtifacts(azdoInfo.org, azdoInfo.project, buildId)
+        );
+    } catch (err) {
+        vscode.window.showErrorMessage(`Failed to list artifacts: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+    }
+
+    const binlogArtifacts = artifacts.filter(a =>
+        a.name.toLowerCase().includes('binlog') ||
+        a.name.toLowerCase().includes('binary-log') ||
+        a.name.toLowerCase().includes('msbuild-log') ||
+        a.name.toLowerCase().includes('build_debug') ||
+        a.name.toLowerCase().includes('build_release')
+    );
+    const artifactList = binlogArtifacts.length > 0 ? binlogArtifacts : artifacts;
+
+    if (artifactList.length === 0) {
+        vscode.window.showWarningMessage('No artifacts found for this build.');
+        return;
+    }
+
+    const formatSize = (bytes?: number) => {
+        if (!bytes) { return ''; }
+        if (bytes > 1024 * 1024) { return `${(bytes / 1024 / 1024).toFixed(1)} MB`; }
+        if (bytes > 1024) { return `${(bytes / 1024).toFixed(0)} KB`; }
+        return `${bytes} B`;
+    };
+
+    const artifactPick = await vscode.window.showQuickPick(
+        artifactList.map(a => ({
+            label: a.name,
+            description: [
+                formatSize(a.size),
+                binlogArtifacts.includes(a) ? '$(file-binary) likely binlog' : '',
+            ].filter(Boolean).join(' · '),
+            artifact: a,
+        })),
+        { placeHolder: `Select artifact from build #${buildId}` }
+    );
+    if (!artifactPick) { return; }
+
+    const destDir = path.join(getDownloadDir(), `azdo-${buildId}-${artifactPick.artifact.name}`);
+    fs.mkdirSync(destDir, { recursive: true });
+
+    let binlogFiles: string[];
+    try {
+        binlogFiles = await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: `Downloading ${artifactPick.artifact.name}...` },
+            () => downloadAzdoArtifact(azdoInfo.org, azdoInfo.project, buildId, artifactPick.artifact.name, destDir)
+        );
+    } catch (err) {
+        vscode.window.showErrorMessage(`Download failed: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+    }
+
+    if (binlogFiles.length === 0) {
+        vscode.window.showWarningMessage('No .binlog files found in the downloaded artifact.');
+        return;
+    }
+
+    vscode.window.showInformationMessage(
+        `✅ Downloaded ${binlogFiles.length} binlog(s) from build #${buildId}`
+    );
     return binlogFiles;
 }
