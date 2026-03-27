@@ -321,18 +321,57 @@ export async function downloadCiBinlog(): Promise<string[] | undefined> {
         return;
     }
 
-    // Pick a build
-    const buildPick = await vscode.window.showQuickPick(
-        builds.map(b => ({
+    // Pick a build — include option to enter run ID manually
+    interface BuildPickItem extends vscode.QuickPickItem {
+        build?: CiBuild;
+        isManual?: boolean;
+    }
+
+    const pickItems: BuildPickItem[] = [
+        {
+            label: '$(edit) Enter run/build ID manually...',
+            description: '',
+            isManual: true,
+        },
+        { label: '', kind: vscode.QuickPickItemKind.Separator },
+        ...builds.map(b => ({
             label: b.label,
             description: b.description,
             detail: b.detail,
             build: b,
         })),
-        { placeHolder: 'Select a build to download binlog from', matchOnDescription: true, matchOnDetail: true }
-    );
+    ];
+
+    const buildPick = await vscode.window.showQuickPick(pickItems, {
+        placeHolder: 'Select a build to download binlog from',
+        matchOnDescription: true,
+        matchOnDetail: true,
+    });
     if (!buildPick) { return; }
-    const selectedBuild = buildPick.build;
+
+    let selectedBuild: CiBuild;
+    if (buildPick.isManual) {
+        const runId = await vscode.window.showInputBox({
+            prompt: `Enter the ${source === 'azdo' ? 'Azure DevOps build' : 'GitHub Actions run'} ID`,
+            placeHolder: 'e.g. 23634010652',
+            validateInput: (v) => /^\d+$/.test(v.trim()) ? null : 'Please enter a numeric ID',
+        });
+        if (!runId) { return; }
+        const id = runId.trim();
+        if (source === 'azdo') {
+            selectedBuild = {
+                id, label: `#${id}`, description: 'manual', source: 'azdo',
+                artifactDownloadArgs: [azdoInfo!.org, azdoInfo!.project, id],
+            };
+        } else {
+            selectedBuild = {
+                id, label: `#${id}`, description: 'manual', source: 'github',
+                artifactDownloadArgs: [ghInfo!.owner, ghInfo!.repo, id],
+            };
+        }
+    } else {
+        selectedBuild = buildPick.build!;
+    }
 
     // List artifacts
     let artifacts: CiArtifact[];
