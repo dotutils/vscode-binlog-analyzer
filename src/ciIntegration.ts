@@ -344,36 +344,64 @@ async function doDownloadCiBinlog(): Promise<string[] | undefined> {
     const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     const remoteUrl = await getGitRemoteUrl(cwd);
 
-    if (!remoteUrl) {
-        vscode.window.showErrorMessage('No git remote found. Open a project with a git remote to use CI/CD integration.');
-        return;
+    const azdoInfo = remoteUrl ? parseAzdoRemote(remoteUrl) : null;
+    const ghInfo = remoteUrl ? parseGitHubRemote(remoteUrl) : null;
+
+    // Always let user choose platform — repos often have CI on a different platform
+    const platformPick = await vscode.window.showQuickPick(
+        [
+            {
+                label: '$(github) GitHub Actions',
+                value: 'github' as const,
+                description: ghInfo ? `${ghInfo.owner}/${ghInfo.repo}` : '',
+            },
+            {
+                label: '$(cloud) Azure DevOps',
+                value: 'azdo' as const,
+                description: azdoInfo ? `${azdoInfo.org}/${azdoInfo.project}` : '',
+            },
+        ],
+        { placeHolder: 'Select CI/CD platform' }
+    );
+    if (!platformPick) { return; }
+    const source = platformPick.value;
+
+    // For AzDO: if not detected from remote, ask user for org/project
+    let effectiveAzdoInfo = azdoInfo;
+    let effectiveGhInfo = ghInfo;
+
+    if (source === 'azdo' && !effectiveAzdoInfo) {
+        const orgProject = await vscode.window.showInputBox({
+            prompt: 'Enter Azure DevOps org/project (or paste a build URL)',
+            placeHolder: 'e.g. dnceng-public/public or https://dev.azure.com/dnceng-public/public/_build/...',
+            validateInput: (v) => {
+                const trimmed = v.trim();
+                if (trimmed.includes('dev.azure.com') || trimmed.includes('visualstudio.com')) { return null; }
+                if (/^[^/]+\/[^/]+$/.test(trimmed)) { return null; }
+                return 'Enter as org/project or paste an Azure DevOps URL';
+            },
+        });
+        if (!orgProject) { return; }
+        const trimmed = orgProject.trim();
+        // Try parsing as URL
+        const parsed = parseAzdoRemote(trimmed);
+        if (parsed) {
+            effectiveAzdoInfo = parsed;
+        } else {
+            const parts = trimmed.split('/');
+            effectiveAzdoInfo = { org: parts[0], project: parts[1] };
+        }
     }
 
-    const azdoInfo = parseAzdoRemote(remoteUrl);
-    const ghInfo = parseGitHubRemote(remoteUrl);
-
-    if (!azdoInfo && !ghInfo) {
-        vscode.window.showErrorMessage(
-            'Could not detect Azure DevOps or GitHub remote from git origin URL.\n' +
-            `Remote: ${remoteUrl}`
-        );
-        return;
-    }
-
-    // Determine source and check CLI availability
-    let source: 'azdo' | 'github';
-    if (azdoInfo && ghInfo) {
-        const pick = await vscode.window.showQuickPick(
-            [
-                { label: '$(azure) Azure DevOps', value: 'azdo' as const },
-                { label: '$(github) GitHub Actions', value: 'github' as const },
-            ],
-            { placeHolder: 'Select CI/CD platform' }
-        );
-        if (!pick) { return; }
-        source = pick.value;
-    } else {
-        source = azdoInfo ? 'azdo' : 'github';
+    if (source === 'github' && !effectiveGhInfo) {
+        const ownerRepo = await vscode.window.showInputBox({
+            prompt: 'Enter GitHub owner/repo',
+            placeHolder: 'e.g. dotnet/templating',
+            validateInput: (v) => /^[^/]+\/[^/]+$/.test(v.trim()) ? null : 'Enter as owner/repo',
+        });
+        if (!ownerRepo) { return; }
+        const parts = ownerRepo.trim().split('/');
+        effectiveGhInfo = { owner: parts[0], repo: parts[1] };
     }
 
     // Verify CLI
@@ -422,7 +450,7 @@ async function doDownloadCiBinlog(): Promise<string[] | undefined> {
         try {
             const pipelines = await vscode.window.withProgress(
                 { location: vscode.ProgressLocation.Notification, title: 'Fetching pipelines...' },
-                () => listAzdoPipelines(azdoInfo!.org, azdoInfo!.project)
+                () => listAzdoPipelines(effectiveAzdoInfo!.org, effectiveAzdoInfo!.project)
             );
             if (pipelines.length > 0) {
                 const pipelinePick = await vscode.window.showQuickPick(
@@ -435,7 +463,7 @@ async function doDownloadCiBinlog(): Promise<string[] | undefined> {
                             pipeline: p as AzdoPipeline | undefined,
                         })),
                     ],
-                    { placeHolder: `Select a pipeline from ${azdoInfo!.org}/${azdoInfo!.project}` }
+                    { placeHolder: `Select a pipeline from ${effectiveAzdoInfo!.org}/${effectiveAzdoInfo!.project}` }
                 );
                 if (!pipelinePick) { return; }
                 azdoPipelineId = pipelinePick.pipeline?.id;
@@ -452,9 +480,9 @@ async function doDownloadCiBinlog(): Promise<string[] | undefined> {
             { location: vscode.ProgressLocation.Notification, title: 'Fetching CI builds...' },
             async () => {
                 if (source === 'azdo') {
-                    return listAzdoBuilds(azdoInfo!.org, azdoInfo!.project, azdoPipelineId);
+                    return listAzdoBuilds(effectiveAzdoInfo!.org, effectiveAzdoInfo!.project, azdoPipelineId);
                 } else {
-                    return listGitHubRuns(ghInfo!.owner, ghInfo!.repo);
+                    return listGitHubRuns(effectiveGhInfo!.owner, effectiveGhInfo!.repo);
                 }
             }
         );
@@ -475,8 +503,8 @@ async function doDownloadCiBinlog(): Promise<string[] | undefined> {
     }
 
     const repoLabel = source === 'azdo'
-        ? `${azdoInfo!.org}/${azdoInfo!.project}`
-        : `${ghInfo!.owner}/${ghInfo!.repo}`;
+        ? `${effectiveAzdoInfo!.org}/${effectiveAzdoInfo!.project}`
+        : `${effectiveGhInfo!.owner}/${effectiveGhInfo!.repo}`;
 
     const pickItems: BuildPickItem[] = [
         {
@@ -515,12 +543,12 @@ async function doDownloadCiBinlog(): Promise<string[] | undefined> {
         if (source === 'azdo') {
             selectedBuild = {
                 id, label: `#${id}`, description: 'manual', source: 'azdo',
-                artifactDownloadArgs: [azdoInfo!.org, azdoInfo!.project, id],
+                artifactDownloadArgs: [effectiveAzdoInfo!.org, effectiveAzdoInfo!.project, id],
             };
         } else {
             selectedBuild = {
                 id, label: `#${id}`, description: 'manual', source: 'github',
-                artifactDownloadArgs: [ghInfo!.owner, ghInfo!.repo, id],
+                artifactDownloadArgs: [effectiveGhInfo!.owner, effectiveGhInfo!.repo, id],
             };
         }
     } else {
