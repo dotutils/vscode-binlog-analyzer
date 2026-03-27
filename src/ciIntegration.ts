@@ -43,10 +43,14 @@ async function isGhCliAvailable(): Promise<boolean> {
     return result.code === 0;
 }
 
-/** Detect Azure DevOps org/project from git remote URL */
+/** Detect Azure DevOps org/project from any Azure DevOps URL */
 function parseAzdoRemote(remoteUrl: string): { org: string; project: string } | null {
     // HTTPS: https://dev.azure.com/{org}/{project}/_git/{repo}
     let m = remoteUrl.match(/dev\.azure\.com\/([^/]+)\/([^/]+)\/_git/);
+    if (m) { return { org: m[1], project: m[2] }; }
+
+    // General AzDO URL: https://dev.azure.com/{org}/{project}/...
+    m = remoteUrl.match(/dev\.azure\.com\/([^/]+)\/([^/?]+)/);
     if (m) { return { org: m[1], project: m[2] }; }
 
     // SSH: git@ssh.dev.azure.com:v3/{org}/{project}/{repo}
@@ -55,6 +59,10 @@ function parseAzdoRemote(remoteUrl: string): { org: string; project: string } | 
 
     // Old VSTS: https://{org}.visualstudio.com/{project}/_git/{repo}
     m = remoteUrl.match(/([^/.]+)\.visualstudio\.com\/([^/]+)\/_git/);
+    if (m) { return { org: m[1], project: m[2] }; }
+
+    // Old VSTS general: https://{org}.visualstudio.com/{project}/...
+    m = remoteUrl.match(/([^/.]+)\.visualstudio\.com\/([^/?]+)/);
     if (m) { return { org: m[1], project: m[2] }; }
 
     return null;
@@ -113,7 +121,7 @@ async function listAzdoBuilds(org: string, project: string, pipelineId?: number,
     try {
         const data = await httpsGetJson(apiUrl);
         runs = data.value || [];
-    } catch {
+    } catch (restErr) {
         // Fallback to az CLI
         const args = [
             'pipelines', 'runs', 'list',
@@ -126,7 +134,10 @@ async function listAzdoBuilds(org: string, project: string, pipelineId?: number,
             args.push('--pipeline-ids', String(pipelineId));
         }
         const result = await execCommand('az', args);
-        if (result.code !== 0) { throw new Error(`Failed to list builds: ${result.stderr}`); }
+        if (result.code !== 0) {
+            const restMsg = restErr instanceof Error ? restErr.message : String(restErr);
+            throw new Error(`REST API: ${restMsg}. az CLI: ${result.stderr || 'not available'}`);
+        }
         runs = JSON.parse(result.stdout);
     }
 
