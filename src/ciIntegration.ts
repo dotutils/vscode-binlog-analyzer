@@ -31,6 +31,9 @@ async function execCommand(cmd: string, args: string[], cwd?: string, timeoutMs:
         // Strip GITHUB_TOKEN from env to avoid interfering with gh CLI keyring auth
         const env = { ...process.env };
         if (cmd === 'gh') { delete env.GITHUB_TOKEN; }
+        // shell: true is needed on Windows for .cmd shims (az, gh, dotnet).
+        // execFile with shell: true still passes args as an array — Node.js
+        // handles proper escaping per-platform, so this is NOT a shell-injection risk.
         cp.execFile(cmd, args, { cwd, timeout: timeoutMs, maxBuffer: 5 * 1024 * 1024, shell: true, env }, (err, stdout, stderr) => {
             resolve({ stdout: stdout || '', stderr: stderr || '', code: err ? (err as any).code ?? 1 : 0 });
         });
@@ -117,6 +120,7 @@ async function listAzdoPipelines(org: string, project: string): Promise<AzdoPipe
             ]);
             if (result.code !== 0) { return []; }
             const pipelines = JSON.parse(result.stdout);
+            if (!Array.isArray(pipelines)) { return []; }
             return pipelines.map((p: any) => ({ id: p.id, name: p.name, folder: p.folder || '' }));
         } catch { return []; }
     }
@@ -394,20 +398,27 @@ function getDownloadDir(): string {
 }
 
 /** Simple HTTPS GET that returns parsed JSON. Works without auth for public APIs. */
-function httpsGetJson(url: string): Promise<any> {
+function httpsGetJson(url: string, redirectCount: number = 0): Promise<any> {
     return new Promise((resolve, reject) => {
+        if (redirectCount > 5) {
+            reject(new Error('Too many redirects'));
+            return;
+        }
         const proto = url.startsWith('http://') ? http : https;
         proto.get(url, { headers: { 'Accept': 'application/json' } }, (res) => {
             if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
                 // Reject sign-in redirects (Azure DevOps private projects redirect to login)
                 if (res.headers.location.includes('_signin') || res.headers.location.includes('login')) {
+                    res.resume();
                     reject(new Error('Authentication required (redirected to sign-in page)'));
                     return;
                 }
-                httpsGetJson(res.headers.location).then(resolve, reject);
+                res.resume();
+                httpsGetJson(res.headers.location, redirectCount + 1).then(resolve, reject);
                 return;
             }
             if (res.statusCode && res.statusCode >= 400) {
+                res.resume();
                 reject(new Error(`HTTP ${res.statusCode}`));
                 return;
             }
@@ -433,19 +444,23 @@ function httpsDownloadFile(url: string, destPath: string): Promise<void> {
             proto.get(reqUrl, (res) => {
                 if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
                     if (res.headers.location.includes('_signin') || res.headers.location.includes('login')) {
+                        res.resume();
                         reject(new Error('Authentication required (redirected to sign-in page)'));
                         return;
                     }
+                    res.resume();
                     doRequest(res.headers.location, redirectCount + 1);
                     return;
                 }
                 if (res.statusCode && res.statusCode >= 400) {
+                    res.resume();
                     reject(new Error(`HTTP ${res.statusCode}`));
                     return;
                 }
                 // Verify we're getting binary data, not an HTML error page
                 const contentType = res.headers['content-type'] || '';
                 if (contentType.includes('text/html')) {
+                    res.resume();
                     reject(new Error('Received HTML instead of file — likely an auth page'));
                     return;
                 }
@@ -475,6 +490,9 @@ function extractBuildId(input: string): string | null {
     // GitHub Actions: .../actions/runs/23634010652
     m = input.match(/\/actions\/runs\/(\d+)/);
     if (m) { return m[1]; }
+
+    // Skip definition URLs — they contain a numeric ID that isn't a build ID
+    if (input.includes('definitionId=')) { return null; }
 
     // Last resort: find any number sequence >= 4 digits
     m = input.match(/(\d{4,})/);

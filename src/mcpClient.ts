@@ -144,6 +144,9 @@ export class McpClient extends EventEmitter {
             this.proc = null;
         }
         this.initialized = false;
+        for (const [, p] of this.pending) {
+            p.reject(new Error('MCP client disposed'));
+        }
         this.pending.clear();
     }
 

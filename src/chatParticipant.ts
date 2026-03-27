@@ -298,7 +298,7 @@ export class BinlogChatParticipant {
             : SYSTEM_PROMPT;
         const includeHistory = !useMinimalPrompt;
         const messages = [
-            vscode.LanguageModelChatMessage.User(systemPrompt),
+            vscode.LanguageModelChatMessage.User(systemPrompt || ' '),
             // Include conversation history — only text-based turns (skip for /compare)
             ...(includeHistory ? context.history.flatMap(turn => {
                 if (turn instanceof vscode.ChatResponseTurn) {
@@ -311,11 +311,11 @@ export class BinlogChatParticipant {
                     return [vscode.LanguageModelChatMessage.Assistant(text)];
                 } else {
                     const prompt = (turn as vscode.ChatRequestTurn).prompt;
-                    if (!prompt.trim()) { return []; }
+                    if (!prompt || !prompt.trim()) { return []; }
                     return [vscode.LanguageModelChatMessage.User(prompt)];
                 }
             }) : []),
-            vscode.LanguageModelChatMessage.User(userMessage),
+            vscode.LanguageModelChatMessage.User(userMessage || 'Analyze the binlog.'),
         ];
 
         // Send request with tools
@@ -339,8 +339,8 @@ export class BinlogChatParticipant {
             // Handle corrupted tool history — retry without conversation history
             if (errMsg.includes('invalid_request_body') || errMsg.includes('tool_calls') || errMsg.includes("role 'tool'")) {
                 const freshMessages = [
-                    vscode.LanguageModelChatMessage.User(SYSTEM_PROMPT),
-                    vscode.LanguageModelChatMessage.User(userMessage),
+                    vscode.LanguageModelChatMessage.User(SYSTEM_PROMPT || ' '),
+                    vscode.LanguageModelChatMessage.User(userMessage || 'Analyze the binlog.'),
                 ];
                 try {
                     const retryRequest = await model.sendRequest(

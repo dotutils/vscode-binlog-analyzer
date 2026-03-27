@@ -25,6 +25,10 @@ let optimizeInProgress = false;
 let cachedInsightsExePath: string | null | undefined; // undefined = not searched yet
 let codeLensRegistered = false;
 
+function escapeHtml(s: string): string {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 /** Returns a globalState key scoped to the current workspace folder, or a fallback for no-workspace. */
 function binlogStateKey(): string {
     const ws = vscode.workspace.workspaceFolders?.[0]?.uri.toString();
@@ -478,8 +482,8 @@ export async function activate(context: vscode.ExtensionContext) {
                 return;
             }
             // Launch with OS default app (Structured Log Viewer registers .binlog)
-            const { exec } = require('child_process');
-            exec(`start "" "${targetPath}"`, (err: Error | null) => {
+            const { execFile } = require('child_process');
+            execFile('cmd', ['/c', 'start', '', targetPath], { shell: false }, (err: Error | null) => {
                 if (err) {
                     // No app registered for .binlog — offer to reveal in Explorer or install SLV
                     vscode.window.showWarningMessage(
@@ -490,7 +494,7 @@ export async function activate(context: vscode.ExtensionContext) {
                         if (choice === 'Download Viewer') {
                             vscode.env.openExternal(vscode.Uri.parse('https://msbuildlog.com/'));
                         } else if (choice === 'Reveal in Explorer') {
-                            exec(`explorer /select,"${targetPath}"`);
+                            execFile('explorer', ['/select,', targetPath], { shell: false });
                         }
                     });
                 }
@@ -604,21 +608,7 @@ export async function activate(context: vscode.ExtensionContext) {
             terminal.sendText(cmd);
 
             // Wait for the terminal/build to finish, then auto-load the binlog
-            const disposable = vscode.window.onDidCloseTerminal((closedTerminal) => {
-                if (closedTerminal === terminal) {
-                    disposable.dispose();
-                    setTimeout(() => {
-                        if (fs.existsSync(binlogPath)) {
-                            handleBinlogOpen([binlogPath], context);
-                        } else {
-                            vscode.window.showWarningMessage(`Binlog not found at ${binlogPath}. The build may have failed.`);
-                        }
-                    }, 500);
-                }
-            });
-
-            // Also auto-load if user doesn't close terminal — poll for build completion
-            const startTime = Date.now();
+            let loaded = false;
             const pollInterval = setInterval(() => {
                 if (Date.now() - startTime > 600000) { clearInterval(pollInterval); return; }
                 try {
@@ -627,10 +617,28 @@ export async function activate(context: vscode.ExtensionContext) {
                     if (Date.now() - stat.mtimeMs > 3000 && stat.size > 0) {
                         clearInterval(pollInterval);
                         disposable.dispose();
+                        if (loaded) { return; }
+                        loaded = true;
                         handleBinlogOpen([binlogPath], context);
                     }
                 } catch { /* file doesn't exist yet */ }
             }, 5000);
+            const startTime = Date.now();
+            const disposable = vscode.window.onDidCloseTerminal((closedTerminal) => {
+                if (closedTerminal === terminal) {
+                    disposable.dispose();
+                    clearInterval(pollInterval);
+                    setTimeout(() => {
+                        if (loaded) { return; }
+                        loaded = true;
+                        if (fs.existsSync(binlogPath)) {
+                            handleBinlogOpen([binlogPath], context);
+                        } else {
+                            vscode.window.showWarningMessage(`Binlog not found at ${binlogPath}. The build may have failed.`);
+                        }
+                    }, 500);
+                }
+            });
         })
     );
 
@@ -1279,6 +1287,15 @@ async function addBinlogs(newPaths: string[]) {
     const config = vscode.workspace.getConfiguration('binlogAnalyzer');
     await configureMcpServer(allBinlogPaths, config);
 
+    // Restart the MCP client with the updated binlog paths
+    startMcpClientForTree(allBinlogPaths).then(() => {
+        treeDataProvider?.setLoading(false);
+        updateStatusBar();
+    }).catch(() => {
+        treeDataProvider?.setLoading(false);
+        updateStatusBar();
+    });
+
     const names = added.map(getFileName).join(', ');
     vscode.window.showInformationMessage(
         `📎 Added ${added.length} binlog(s): ${names}. Total: ${allBinlogPaths.length} loaded.\n` +
@@ -1305,6 +1322,16 @@ async function removeBinlogs(toRemove: Set<string | undefined>) {
     if (allBinlogPaths.length > 0) {
         const config = vscode.workspace.getConfiguration('binlogAnalyzer');
         await configureMcpServer(allBinlogPaths, config);
+    } else {
+        // Dispose MCP client when all binlogs are removed
+        mcpClient?.dispose();
+        mcpClient = undefined;
+        treeDataProvider?.setMcpClient(null);
+        binlogDocProvider?.setMcpClient(null);
+        chatParticipant?.setMcpClient(null);
+        // Clean up MCP server config
+        const config = vscode.workspace.getConfiguration('binlogAnalyzer');
+        await configureMcpServer([], config);
     }
 
     vscode.window.showInformationMessage(
@@ -1863,6 +1890,7 @@ function findBinlogInsightsTool(): string | null {
 }
 
 async function installBinlogInsightsTool(): Promise<string | null> {
+    cachedInsightsExePath = undefined; // Reset cache so findBinlogInsightsTool re-scans after install
     const cp = require('child_process');
     const result = await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: 'Installing BinlogInsights MCP server (dotnet tool)...' },
@@ -2278,10 +2306,10 @@ async function showTimelineWebview(context: vscode.ExtensionContext) {
             const meta = item.count && item.count > 1 ? ` <span class="count">×${item.count}</span>` : '';
             const skipBadge = item.skipped !== undefined && item.skipped > 0
                 ? ` <span class="skip-badge">⏭ ${item.skipped} skipped</span>` : '';
-            const escapedName = item.name.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+            const escapedName = escapeHtml(item.name).replace(/'/g, "\\'");
             const durStr = formatDuration(item.durationMs);
             return `<div class="bar-row clickable" onclick="analyze('${escapedName}', '${durStr}', ${item.count || 1}, '${section}')" title="Click to analyze in Copilot Chat">
-                <div class="bar-label" title="${item.name}">${item.name}${meta}${skipBadge}</div>
+                <div class="bar-label" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}${meta}${skipBadge}</div>
                 <div class="bar-track">
                     <div class="bar-fill" style="width:${pct}%;background:${color}"></div>
                 </div>
@@ -2456,11 +2484,11 @@ async function showComparisonTimelineWebview(context: vscode.ExtensionContext) {
 
     // Sort by max duration across both builds
     allTargetNames.sort((a, b) =>
-        Math.max(targetsB.get(b) || 0, targetsA.get(b) || 0) -
+        Math.max(targetsA.get(b) || 0, targetsB.get(b) || 0) -
         Math.max(targetsA.get(a) || 0, targetsB.get(a) || 0)
     );
     allTaskNames.sort((a, b) =>
-        Math.max(tasksB.get(b) || 0, tasksA.get(b) || 0) -
+        Math.max(tasksA.get(b) || 0, tasksB.get(b) || 0) -
         Math.max(tasksA.get(a) || 0, tasksB.get(a) || 0)
     );
 
@@ -2486,7 +2514,7 @@ async function showComparisonTimelineWebview(context: vscode.ExtensionContext) {
                 : msA > 0 && msB === 0 ? '<span class="badge-removed">REMOVED</span>' : '';
 
             return `<div class="cmp-row">
-                <div class="cmp-label" title="${name}">${name} ${badge}</div>
+                <div class="cmp-label" title="${escapeHtml(name)}">${escapeHtml(name)} ${badge}</div>
                 <div class="cmp-bars">
                     <div class="cmp-bar-pair">
                         <div class="cmp-bar-track">
