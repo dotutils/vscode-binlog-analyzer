@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as cp from 'child_process';
 import * as https from 'https';
+import * as http from 'http';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -99,15 +100,17 @@ async function listAzdoPipelines(org: string, project: string): Promise<AzdoPipe
         }));
     } catch {
         // Fallback to az CLI if REST fails (private projects)
-        const result = await execCommand('az', [
-            'pipelines', 'list',
-            '--org', `https://dev.azure.com/${org}`,
-            '--project', project,
-            '--output', 'json',
-        ]);
-        if (result.code !== 0) { return []; }
-        const pipelines = JSON.parse(result.stdout);
-        return pipelines.map((p: any) => ({ id: p.id, name: p.name, folder: p.folder || '' }));
+        try {
+            const result = await execCommand('az', [
+                'pipelines', 'list',
+                '--org', `https://dev.azure.com/${org}`,
+                '--project', project,
+                '--output', 'json',
+            ]);
+            if (result.code !== 0) { return []; }
+            const pipelines = JSON.parse(result.stdout);
+            return pipelines.map((p: any) => ({ id: p.id, name: p.name, folder: p.folder || '' }));
+        } catch { return []; }
     }
 }
 
@@ -136,9 +139,16 @@ async function listAzdoBuilds(org: string, project: string, pipelineId?: number,
         const result = await execCommand('az', args);
         if (result.code !== 0) {
             const restMsg = restErr instanceof Error ? restErr.message : String(restErr);
-            throw new Error(`REST API: ${restMsg}. az CLI: ${result.stderr || 'not available'}`);
+            throw new Error(
+                `Could not list builds. REST API: ${restMsg}` +
+                (result.stderr ? `. az CLI: ${result.stderr.substring(0, 200)}` : '. az CLI not available or failed.')
+            );
         }
-        runs = JSON.parse(result.stdout);
+        try {
+            runs = JSON.parse(result.stdout);
+        } catch {
+            throw new Error('az CLI returned invalid JSON');
+        }
     }
 
     return runs.map((run: any) => {
@@ -167,21 +177,24 @@ async function downloadAzdoArtifact(org: string, project: string, runId: string,
 
     try {
         await httpsDownloadFile(zipUrl, zipPath);
-        // Extract ZIP
         const extractDir = path.join(destDir, artifactName);
         fs.mkdirSync(extractDir, { recursive: true });
-        // Use PowerShell to extract (available on all Windows)
         const extractResult = await execCommand('powershell', [
             '-NoProfile', '-Command',
             `Expand-Archive -Path '${zipPath}' -DestinationPath '${extractDir}' -Force`,
         ], undefined, 120000);
         if (extractResult.code === 0) {
-            fs.unlinkSync(zipPath);
+            try { fs.unlinkSync(zipPath); } catch { /* ignore */ }
             return findBinlogFiles(extractDir);
         }
-    } catch { /* fall through to az CLI */ }
+        // Extraction failed — clean up bad zip
+        try { fs.unlinkSync(zipPath); } catch { /* ignore */ }
+    } catch {
+        // Clean up any partial download
+        try { fs.unlinkSync(zipPath); } catch { /* ignore */ }
+    }
 
-    // Fallback: az CLI download
+    // Fallback: az CLI download (handles auth for private projects)
     const result = await execCommand('az', [
         'pipelines', 'runs', 'artifact', 'download',
         '--org', `https://dev.azure.com/${org}`,
@@ -191,7 +204,11 @@ async function downloadAzdoArtifact(org: string, project: string, runId: string,
         '--path', destDir,
     ], undefined, 120000);
     if (result.code !== 0) {
-        throw new Error(`Failed to download artifact: ${result.stderr}`);
+        throw new Error(
+            result.stderr.includes('azure-devops')
+                ? `az CLI needs the azure-devops extension. Run: az extension add --name azure-devops`
+                : `Failed to download artifact: ${result.stderr.substring(0, 300)}`
+        );
     }
 
     return findBinlogFiles(destDir);
@@ -203,7 +220,7 @@ async function listAzdoArtifacts(org: string, project: string, runId: string): P
     // Try az rest first (works for authenticated users)
     const azResult = await execCommand('az', [
         'rest', '--method', 'get', '--uri', apiUrl,
-        '--resource', 'https://management.azure.com/',
+        '--resource', '499b84ac-1321-427f-aa17-267ca6975798',
         '--output', 'json',
     ]);
 
@@ -338,9 +355,14 @@ function getDownloadDir(): string {
 /** Simple HTTPS GET that returns parsed JSON. Works without auth for public APIs. */
 function httpsGetJson(url: string): Promise<any> {
     return new Promise((resolve, reject) => {
-        https.get(url, { headers: { 'Accept': 'application/json' } }, (res) => {
+        const proto = url.startsWith('http://') ? http : https;
+        proto.get(url, { headers: { 'Accept': 'application/json' } }, (res) => {
             if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-                // Follow redirect
+                // Reject sign-in redirects (Azure DevOps private projects redirect to login)
+                if (res.headers.location.includes('_signin') || res.headers.location.includes('login')) {
+                    reject(new Error('Authentication required (redirected to sign-in page)'));
+                    return;
+                }
                 httpsGetJson(res.headers.location).then(resolve, reject);
                 return;
             }
@@ -352,29 +374,47 @@ function httpsGetJson(url: string): Promise<any> {
             res.on('data', (chunk: string) => { data += chunk; });
             res.on('end', () => {
                 try { resolve(JSON.parse(data)); }
-                catch (e) { reject(e); }
+                catch (e) { reject(new Error(`Invalid JSON response (got ${data.substring(0, 50)}...)`)); }
             });
         }).on('error', reject);
     });
 }
 
-/** Download a file via HTTPS to a local path. Follows redirects. */
+/** Download a file via HTTPS to a local path. Follows redirects. Rejects on auth redirects. */
 function httpsDownloadFile(url: string, destPath: string): Promise<void> {
     return new Promise((resolve, reject) => {
-        const doRequest = (reqUrl: string) => {
-            https.get(reqUrl, (res) => {
+        const doRequest = (reqUrl: string, redirectCount: number = 0) => {
+            if (redirectCount > 5) {
+                reject(new Error('Too many redirects'));
+                return;
+            }
+            const proto = reqUrl.startsWith('http://') ? http : https;
+            proto.get(reqUrl, (res) => {
                 if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-                    doRequest(res.headers.location);
+                    if (res.headers.location.includes('_signin') || res.headers.location.includes('login')) {
+                        reject(new Error('Authentication required (redirected to sign-in page)'));
+                        return;
+                    }
+                    doRequest(res.headers.location, redirectCount + 1);
                     return;
                 }
                 if (res.statusCode && res.statusCode >= 400) {
                     reject(new Error(`HTTP ${res.statusCode}`));
                     return;
                 }
+                // Verify we're getting binary data, not an HTML error page
+                const contentType = res.headers['content-type'] || '';
+                if (contentType.includes('text/html')) {
+                    reject(new Error('Received HTML instead of file — likely an auth page'));
+                    return;
+                }
                 const fileStream = fs.createWriteStream(destPath);
                 res.pipe(fileStream);
                 fileStream.on('finish', () => { fileStream.close(); resolve(); });
-                fileStream.on('error', reject);
+                fileStream.on('error', (err) => {
+                    fs.unlink(destPath, () => {}); // Clean up partial file
+                    reject(err);
+                });
             }).on('error', reject);
         };
         doRequest(url);
@@ -487,7 +527,6 @@ async function doDownloadCiBinlog(): Promise<string[] | undefined> {
         effectiveGhInfo = { owner: parts[0], repo: parts[1] };
     }
 
-    // Verify CLI
     // Verify CLI availability — only required for GitHub (AzDO uses REST API for public projects)
     if (source === 'github') {
         if (!(await isGhCliAvailable())) {
@@ -631,7 +670,35 @@ async function doDownloadCiBinlog(): Promise<string[] | undefined> {
         return;
     }
 
-    // Filter to likely binlog artifacts or let user pick
+    return pickAndDownloadArtifact(artifacts, source, selectedBuild.artifactDownloadArgs, selectedBuild.label);
+}
+
+/** Direct AzDO artifact flow — skips pipeline/build selection, goes straight to artifacts */
+async function downloadAzdoArtifactFlow(
+    azdoInfo: { org: string; project: string },
+    buildId: string
+): Promise<string[] | undefined> {
+    let artifacts: CiArtifact[];
+    try {
+        artifacts = await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: `Fetching artifacts for build #${buildId}...` },
+            () => listAzdoArtifacts(azdoInfo.org, azdoInfo.project, buildId)
+        );
+    } catch (err) {
+        vscode.window.showErrorMessage(`Failed to list artifacts: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+    }
+
+    return pickAndDownloadArtifact(artifacts, 'azdo', [azdoInfo.org, azdoInfo.project, buildId], `build #${buildId}`);
+}
+
+/** Shared artifact picker and download logic */
+async function pickAndDownloadArtifact(
+    artifacts: CiArtifact[],
+    source: 'azdo' | 'github',
+    downloadArgs: string[],
+    buildLabel: string
+): Promise<string[] | undefined> {
     const binlogArtifacts = artifacts.filter(a =>
         a.name.toLowerCase().includes('binlog') ||
         a.name.toLowerCase().includes('binary-log') ||
@@ -639,7 +706,6 @@ async function doDownloadCiBinlog(): Promise<string[] | undefined> {
         a.name.toLowerCase().includes('build_debug') ||
         a.name.toLowerCase().includes('build_release')
     );
-
     const artifactList = binlogArtifacts.length > 0 ? binlogArtifacts : artifacts;
 
     if (artifactList.length === 0) {
@@ -665,15 +731,12 @@ async function doDownloadCiBinlog(): Promise<string[] | undefined> {
             ].filter(Boolean).join(' · '),
             artifact: a,
         })),
-        { placeHolder: 'Select artifact containing binlog files' }
+        { placeHolder: `Select artifact from ${buildLabel}` }
     );
     if (!artifactPick) { return; }
 
-    // Download artifact
-    const destDir = path.join(getDownloadDir(), `${source}-${selectedBuild.id}-${artifactPick.artifact.name}`);
-    if (!fs.existsSync(destDir)) {
-        fs.mkdirSync(destDir, { recursive: true });
-    }
+    const destDir = path.join(getDownloadDir(), `${source}-${downloadArgs[2]}-${artifactPick.artifact.name}`);
+    fs.mkdirSync(destDir, { recursive: true });
 
     let binlogFiles: string[];
     try {
@@ -681,10 +744,10 @@ async function doDownloadCiBinlog(): Promise<string[] | undefined> {
             { location: vscode.ProgressLocation.Notification, title: `Downloading ${artifactPick.artifact.name}...` },
             async () => {
                 if (source === 'azdo') {
-                    const [org, project, runId] = selectedBuild.artifactDownloadArgs;
+                    const [org, project, runId] = downloadArgs;
                     return downloadAzdoArtifact(org, project, runId, artifactPick.artifact.name, destDir);
                 } else {
-                    const [owner, repo, runId] = selectedBuild.artifactDownloadArgs;
+                    const [owner, repo, runId] = downloadArgs;
                     return downloadGitHubArtifact(owner, repo, runId, artifactPick.artifact.name, destDir);
                 }
             }
@@ -701,83 +764,7 @@ async function doDownloadCiBinlog(): Promise<string[] | undefined> {
 
     const fileNames = binlogFiles.map(f => path.basename(f)).join(', ');
     vscode.window.showInformationMessage(
-        `✅ Downloaded ${binlogFiles.length} binlog(s) from CI: ${fileNames}`
-    );
-
-    return binlogFiles;
-}
-
-/** Direct AzDO artifact flow — skips pipeline/build selection, goes straight to artifacts */
-async function downloadAzdoArtifactFlow(
-    azdoInfo: { org: string; project: string },
-    buildId: string
-): Promise<string[] | undefined> {
-    let artifacts: CiArtifact[];
-    try {
-        artifacts = await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: `Fetching artifacts for build #${buildId}...` },
-            () => listAzdoArtifacts(azdoInfo.org, azdoInfo.project, buildId)
-        );
-    } catch (err) {
-        vscode.window.showErrorMessage(`Failed to list artifacts: ${err instanceof Error ? err.message : String(err)}`);
-        return;
-    }
-
-    const binlogArtifacts = artifacts.filter(a =>
-        a.name.toLowerCase().includes('binlog') ||
-        a.name.toLowerCase().includes('binary-log') ||
-        a.name.toLowerCase().includes('msbuild-log') ||
-        a.name.toLowerCase().includes('build_debug') ||
-        a.name.toLowerCase().includes('build_release')
-    );
-    const artifactList = binlogArtifacts.length > 0 ? binlogArtifacts : artifacts;
-
-    if (artifactList.length === 0) {
-        vscode.window.showWarningMessage('No artifacts found for this build.');
-        return;
-    }
-
-    const formatSize = (bytes?: number) => {
-        if (!bytes) { return ''; }
-        if (bytes > 1024 * 1024) { return `${(bytes / 1024 / 1024).toFixed(1)} MB`; }
-        if (bytes > 1024) { return `${(bytes / 1024).toFixed(0)} KB`; }
-        return `${bytes} B`;
-    };
-
-    const artifactPick = await vscode.window.showQuickPick(
-        artifactList.map(a => ({
-            label: a.name,
-            description: [
-                formatSize(a.size),
-                binlogArtifacts.includes(a) ? '$(file-binary) likely binlog' : '',
-            ].filter(Boolean).join(' · '),
-            artifact: a,
-        })),
-        { placeHolder: `Select artifact from build #${buildId}` }
-    );
-    if (!artifactPick) { return; }
-
-    const destDir = path.join(getDownloadDir(), `azdo-${buildId}-${artifactPick.artifact.name}`);
-    fs.mkdirSync(destDir, { recursive: true });
-
-    let binlogFiles: string[];
-    try {
-        binlogFiles = await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: `Downloading ${artifactPick.artifact.name}...` },
-            () => downloadAzdoArtifact(azdoInfo.org, azdoInfo.project, buildId, artifactPick.artifact.name, destDir)
-        );
-    } catch (err) {
-        vscode.window.showErrorMessage(`Download failed: ${err instanceof Error ? err.message : String(err)}`);
-        return;
-    }
-
-    if (binlogFiles.length === 0) {
-        vscode.window.showWarningMessage('No .binlog files found in the downloaded artifact.');
-        return;
-    }
-
-    vscode.window.showInformationMessage(
-        `✅ Downloaded ${binlogFiles.length} binlog(s) from build #${buildId}`
+        `✅ Downloaded ${binlogFiles.length} binlog(s) from ${buildLabel}: ${fileNames}`
     );
     return binlogFiles;
 }
