@@ -250,12 +250,22 @@ export class BinlogChatParticipant {
             binlogContext
         ].filter(Boolean).join('\n\n') || 'Analyze the binlog.';
 
-        // Find available MCP tools from the binlog MCP server
-        const tools = vscode.lm.tools.filter(tool =>
-            tool.name.includes('binlog') ||
-            tool.name.includes('binlog_insights') ||
-            tool.name.startsWith('binlog_insights_mcp')
-        );
+        // Find available tools based on configuration
+        const config = vscode.workspace.getConfiguration('binlogAnalyzer');
+        const includeAllTools = config.get<boolean>('chat.includeAllTools', false);
+        const additionalPatterns = config.get<string[]>('chat.additionalToolPatterns', []);
+
+        let tools: readonly vscode.LanguageModelToolInformation[];
+        if (includeAllTools) {
+            tools = vscode.lm.tools;
+        } else {
+            tools = vscode.lm.tools.filter(tool =>
+                tool.name.includes('binlog') ||
+                tool.name.includes('binlog_insights') ||
+                tool.name.startsWith('binlog_insights_mcp') ||
+                additionalPatterns.some(pattern => tool.name.includes(pattern))
+            );
+        }
 
         if (tools.length === 0) {
             stream.markdown(

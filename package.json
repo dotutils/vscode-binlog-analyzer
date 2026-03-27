@@ -2,7 +2,7 @@
   "name": "binlog-analyzer",
   "displayName": "MSBuild Binlog Analyzer",
   "description": "Analyze MSBuild binary logs with Copilot Chat and MCP tools",
-  "version": "0.10.4",
+  "version": "0.10.5",
   "preview": true,
   "publisher": "dotutils",
   "license": "MIT",
@@ -243,6 +243,17 @@
           "type": "boolean",
           "default": true,
           "description": "Show build errors as inline decorations in source files."
+        },
+        "binlogAnalyzer.chat.includeAllTools": {
+          "type": "boolean",
+          "default": false,
+          "description": "When enabled, the @binlog chat participant exposes ALL available tools (file editing, terminal, etc.) to the model, not just binlog MCP tools."
+        },
+        "binlogAnalyzer.chat.additionalToolPatterns": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Additional tool name patterns to include in the @binlog chat participant. Each entry is matched as a substring against tool names (e.g. 'copilot_codebase', 'terminal')."
         }
       }
     },
