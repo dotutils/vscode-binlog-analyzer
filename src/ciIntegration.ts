@@ -640,15 +640,38 @@ async function doDownloadCiBinlog(): Promise<string[] | undefined> {
 
     if (filterPick.value === '__manual__') {
         const input = await vscode.window.showInputBox({
-            prompt: 'Enter branch name or PR number',
-            placeHolder: source === 'azdo' ? 'e.g. main, release/10.0.3xx, or PR 12345' : 'e.g. main, feature/my-branch',
+            prompt: 'Enter branch name, PR number, or PR URL',
+            placeHolder: source === 'azdo' ? 'e.g. main, release/10.0.3xx, or PR 12345' : 'e.g. main, feature/my-branch, or 53547',
         });
         if (!input) { return; }
         const trimmed = input.trim();
-        // Detect PR number for AzDO
+
+        // Extract PR number from URL or "PR 12345" or plain number
+        const prUrlMatch = trimmed.match(/\/pull\/(\d+)/);
         const prMatch = trimmed.match(/^(?:PR\s*)?#?(\d+)$/i);
-        if (prMatch && source === 'azdo') {
-            branchFilter = `refs/pull/${prMatch[1]}/merge`;
+        const prNumber = prUrlMatch?.[1] || prMatch?.[1];
+
+        if (prNumber) {
+            if (source === 'azdo') {
+                branchFilter = `refs/pull/${prNumber}/merge`;
+            } else {
+                // GitHub: resolve PR number to head branch name
+                try {
+                    const prResult = await execCommand('gh', [
+                        'pr', 'view', prNumber,
+                        '--repo', `${effectiveGhInfo!.owner}/${effectiveGhInfo!.repo}`,
+                        '--json', 'headRefName',
+                    ]);
+                    if (prResult.code === 0) {
+                        const prData = JSON.parse(prResult.stdout);
+                        branchFilter = prData.headRefName;
+                    } else {
+                        branchFilter = trimmed;
+                    }
+                } catch {
+                    branchFilter = trimmed;
+                }
+            }
         } else {
             branchFilter = trimmed;
         }
