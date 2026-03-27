@@ -85,6 +85,11 @@ async function getGitRemoteUrl(cwd?: string): Promise<string> {
     return result.stdout.trim();
 }
 
+async function getGitBranch(cwd?: string): Promise<string> {
+    const result = await execCommand('git', ['rev-parse', '--abbrev-ref', 'HEAD'], cwd);
+    return result.stdout.trim();
+}
+
 interface AzdoPipeline {
     id: number;
     name: string;
@@ -117,10 +122,14 @@ async function listAzdoPipelines(org: string, project: string): Promise<AzdoPipe
     }
 }
 
-async function listAzdoBuilds(org: string, project: string, pipelineId?: number, top: number = 20): Promise<CiBuild[]> {
+async function listAzdoBuilds(org: string, project: string, opts?: { pipelineId?: number; branch?: string; top?: number }): Promise<CiBuild[]> {
+    const top = opts?.top ?? 20;
     let apiUrl = `https://dev.azure.com/${org}/${project}/_apis/build/builds?api-version=7.0&%24top=${top}&queryOrder=finishTimeDescending`;
-    if (pipelineId !== undefined) {
-        apiUrl += `&definitions=${pipelineId}`;
+    if (opts?.pipelineId !== undefined) {
+        apiUrl += `&definitions=${opts.pipelineId}`;
+    }
+    if (opts?.branch) {
+        apiUrl += `&branchName=${encodeURIComponent(opts.branch.startsWith('refs/') ? opts.branch : `refs/heads/${opts.branch}`)}`;
     }
 
     let runs: any[] = [];
@@ -136,8 +145,11 @@ async function listAzdoBuilds(org: string, project: string, pipelineId?: number,
             '--top', String(top),
             '--output', 'json',
         ];
-        if (pipelineId !== undefined) {
-            args.push('--pipeline-ids', String(pipelineId));
+        if (opts?.pipelineId !== undefined) {
+            args.push('--pipeline-ids', String(opts.pipelineId));
+        }
+        if (opts?.branch) {
+            args.push('--branch', opts.branch.startsWith('refs/') ? opts.branch : `refs/heads/${opts.branch}`);
         }
         const result = await execCommand('az', args);
         if (result.code !== 0) {
@@ -266,13 +278,17 @@ async function listAzdoArtifacts(org: string, project: string, runId: string): P
 
 // ─── GitHub Actions ──────────────────────────────────────────────────────────
 
-async function listGitHubRuns(owner: string, repo: string, top: number = 20): Promise<CiBuild[]> {
-    const result = await execCommand('gh', [
+async function listGitHubRuns(owner: string, repo: string, top: number = 20, branch?: string): Promise<CiBuild[]> {
+    const args = [
         'run', 'list',
         '--repo', `${owner}/${repo}`,
         '--limit', String(top),
         '--json', 'databaseId,displayTitle,status,conclusion,headBranch,createdAt,workflowName',
-    ]);
+    ];
+    if (branch) {
+        args.push('--branch', branch);
+    }
+    const result = await execCommand('gh', args);
     if (result.code !== 0) {
         throw new Error(`gh run list failed: ${result.stderr.substring(0, 300)}`);
     }
@@ -565,8 +581,13 @@ async function doDownloadCiBinlog(): Promise<string[] | undefined> {
         }
     }
 
-    // For Azure DevOps: let user pick a pipeline first
+    // Detect current branch for quick filter
+    const currentBranch = await getGitBranch(cwd);
+
+    // For Azure DevOps: let user pick pipeline and/or branch filter
     let azdoPipelineId: number | undefined;
+    let branchFilter: string | undefined;
+
     if (source === 'azdo') {
         try {
             const pipelines = await vscode.window.withProgress(
@@ -594,6 +615,47 @@ async function doDownloadCiBinlog(): Promise<string[] | undefined> {
         }
     }
 
+    // Offer branch/PR filter
+    interface FilterPickItem extends vscode.QuickPickItem { value: string | undefined; }
+    const filterItems: FilterPickItem[] = [
+        { label: '$(list-flat) All branches', description: 'Show recent builds from all branches', value: undefined },
+    ];
+    if (currentBranch && currentBranch !== 'HEAD') {
+        filterItems.unshift({
+            label: `$(git-branch) Current branch: ${currentBranch}`,
+            description: 'Show builds for this branch',
+            value: currentBranch,
+        });
+    }
+    filterItems.push({
+        label: '$(edit) Enter branch or PR number...',
+        description: '',
+        value: '__manual__',
+    });
+
+    const filterPick = await vscode.window.showQuickPick(filterItems, {
+        placeHolder: 'Filter builds by branch?',
+    });
+    if (!filterPick) { return; }
+
+    if (filterPick.value === '__manual__') {
+        const input = await vscode.window.showInputBox({
+            prompt: 'Enter branch name or PR number',
+            placeHolder: source === 'azdo' ? 'e.g. main, release/10.0.3xx, or PR 12345' : 'e.g. main, feature/my-branch',
+        });
+        if (!input) { return; }
+        const trimmed = input.trim();
+        // Detect PR number for AzDO
+        const prMatch = trimmed.match(/^(?:PR\s*)?#?(\d+)$/i);
+        if (prMatch && source === 'azdo') {
+            branchFilter = `refs/pull/${prMatch[1]}/merge`;
+        } else {
+            branchFilter = trimmed;
+        }
+    } else {
+        branchFilter = filterPick.value;
+    }
+
     // List builds
     let builds: CiBuild[];
     try {
@@ -601,9 +663,13 @@ async function doDownloadCiBinlog(): Promise<string[] | undefined> {
             { location: vscode.ProgressLocation.Notification, title: 'Fetching CI builds...' },
             async () => {
                 if (source === 'azdo') {
-                    return listAzdoBuilds(effectiveAzdoInfo!.org, effectiveAzdoInfo!.project, azdoPipelineId);
+                    return listAzdoBuilds(effectiveAzdoInfo!.org, effectiveAzdoInfo!.project, {
+                        pipelineId: azdoPipelineId,
+                        branch: branchFilter,
+                    });
                 } else {
-                    return listGitHubRuns(effectiveGhInfo!.owner, effectiveGhInfo!.repo);
+                    // gh run list supports --branch
+                    return listGitHubRuns(effectiveGhInfo!.owner, effectiveGhInfo!.repo, 20, branchFilter);
                 }
             }
         );
