@@ -141,14 +141,23 @@ async function listAzdoBuilds(org: string, project: string, pipelineId?: number,
         runs = JSON.parse(result.stdout);
     }
 
-    return runs.map((run: any) => ({
-        id: String(run.id),
-        label: `#${run.id} — ${run.definition?.name || 'Build'}`,
-        description: `${run.result || run.status} · ${(run.sourceBranch || '').replace('refs/heads/', '')}`,
-        detail: `${new Date(run.finishTime || run.startTime || run.queueTime).toLocaleString()} · ${run.result || run.status}`,
-        source: 'azdo' as const,
-        artifactDownloadArgs: [org, project, String(run.id)],
-    }));
+    return runs.map((run: any) => {
+        const branch = (run.sourceBranch || '').replace('refs/heads/', '').replace('refs/pull/', 'PR ');
+        const prTitle = run.triggerInfo?.['pr.title'];
+        const buildNum = run.buildNumber || '';
+        const title = prTitle || buildNum;
+        return {
+            id: String(run.id),
+            label: `#${run.id} — ${run.definition?.name || 'Build'}`,
+            description: `${run.result || run.status} · ${branch}`,
+            detail: [
+                new Date(run.finishTime || run.startTime || run.queueTime).toLocaleString(),
+                title,
+            ].filter(Boolean).join(' · '),
+            source: 'azdo' as const,
+            artifactDownloadArgs: [org, project, String(run.id)],
+        };
+    });
 }
 
 async function downloadAzdoArtifact(org: string, project: string, runId: string, artifactName: string, destDir: string): Promise<string[]> {
