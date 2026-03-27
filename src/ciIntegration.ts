@@ -866,9 +866,10 @@ async function pickAndDownloadArtifact(
     const artifactList = binlogArtifacts.length > 0 ? binlogArtifacts : artifacts;
 
     if (artifactList.length === 0) {
-        vscode.window.showWarningMessage(
-            'No artifacts found for this build. Make sure your CI pipeline publishes `.binlog` files as artifacts.'
-        );
+        const hint = source === 'github'
+            ? 'No artifacts found. Build artifacts with binlogs may be on Azure DevOps — try selecting "Azure DevOps" as the platform.'
+            : 'No artifacts found for this build. Make sure your CI pipeline publishes `.binlog` files as artifacts.';
+        vscode.window.showWarningMessage(hint);
         return;
     }
 
