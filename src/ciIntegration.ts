@@ -104,7 +104,7 @@ async function listAzdoPipelines(org: string, project: string): Promise<AzdoPipe
 }
 
 async function listAzdoBuilds(org: string, project: string, pipelineId?: number, top: number = 20): Promise<CiBuild[]> {
-    let apiUrl = `https://dev.azure.com/${org}/${project}/_apis/build/builds?api-version=7.0&$top=${top}&queryOrder=finishTimeDescending`;
+    let apiUrl = `https://dev.azure.com/${org}/${project}/_apis/build/builds?api-version=7.0&%24top=${top}&queryOrder=finishTimeDescending`;
     if (pipelineId !== undefined) {
         apiUrl += `&definitions=${pipelineId}`;
     }
