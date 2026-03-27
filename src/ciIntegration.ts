@@ -220,6 +220,27 @@ function getDownloadDir(): string {
     return dir;
 }
 
+/** Extract numeric build/run ID from a raw string (URL or plain number) */
+function extractBuildId(input: string): string | null {
+    // Plain number
+    if (/^\d+$/.test(input)) { return input; }
+
+    // Azure DevOps: .../_build/results?buildId=1354651
+    let m = input.match(/buildId=(\d+)/);
+    if (m) { return m[1]; }
+
+    // Azure DevOps: .../_build?definitionId=...&_a=summary (not a run ID — skip)
+    // GitHub Actions: .../actions/runs/23634010652
+    m = input.match(/\/actions\/runs\/(\d+)/);
+    if (m) { return m[1]; }
+
+    // Last resort: find any number sequence >= 4 digits
+    m = input.match(/(\d{4,})/);
+    if (m) { return m[1]; }
+
+    return null;
+}
+
 // ─── Main Command ────────────────────────────────────────────────────────────
 
 export async function downloadCiBinlog(): Promise<string[] | undefined> {
@@ -351,13 +372,16 @@ export async function downloadCiBinlog(): Promise<string[] | undefined> {
 
     let selectedBuild: CiBuild;
     if (buildPick.isManual) {
-        const runId = await vscode.window.showInputBox({
-            prompt: `Enter the ${source === 'azdo' ? 'Azure DevOps build' : 'GitHub Actions run'} ID`,
-            placeHolder: 'e.g. 23634010652',
-            validateInput: (v) => /^\d+$/.test(v.trim()) ? null : 'Please enter a numeric ID',
+        const rawInput = await vscode.window.showInputBox({
+            prompt: `Enter the ${source === 'azdo' ? 'Azure DevOps build' : 'GitHub Actions run'} ID or paste the build URL`,
+            placeHolder: 'e.g. 1354651 or https://dev.azure.com/org/project/_build/results?buildId=1354651',
+            validateInput: (v) => {
+                const extracted = extractBuildId(v.trim());
+                return extracted ? null : 'Could not find a numeric build/run ID. Paste a URL or enter a number.';
+            },
         });
-        if (!runId) { return; }
-        const id = runId.trim();
+        if (!rawInput) { return; }
+        const id = extractBuildId(rawInput.trim())!;
         if (source === 'azdo') {
             selectedBuild = {
                 id, label: `#${id}`, description: 'manual', source: 'azdo',
