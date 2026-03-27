@@ -17,15 +17,16 @@ interface CiBuild {
 
 interface CiArtifact {
     name: string;
+    size?: number;
     downloadUrl?: string;
     source: 'azdo' | 'github';
 }
 
 // ─── Azure DevOps ────────────────────────────────────────────────────────────
 
-async function execCommand(cmd: string, args: string[], cwd?: string): Promise<{ stdout: string; stderr: string; code: number }> {
+async function execCommand(cmd: string, args: string[], cwd?: string, timeoutMs: number = 30000): Promise<{ stdout: string; stderr: string; code: number }> {
     return new Promise((resolve) => {
-        cp.execFile(cmd, args, { cwd, timeout: 30000, maxBuffer: 5 * 1024 * 1024 }, (err, stdout, stderr) => {
+        cp.execFile(cmd, args, { cwd, timeout: timeoutMs, maxBuffer: 5 * 1024 * 1024 }, (err, stdout, stderr) => {
             resolve({ stdout: stdout || '', stderr: stderr || '', code: err ? (err as any).code ?? 1 : 0 });
         });
     });
@@ -131,7 +132,7 @@ async function downloadAzdoArtifact(org: string, project: string, runId: string,
         '--run-id', runId,
         '--artifact-name', artifactName,
         '--path', destDir,
-    ]);
+    ], undefined, 120000);
     if (result.code !== 0) {
         throw new Error(`Failed to download artifact: ${result.stderr}`);
     }
@@ -140,42 +141,51 @@ async function downloadAzdoArtifact(org: string, project: string, runId: string,
 }
 
 async function listAzdoArtifacts(org: string, project: string, runId: string): Promise<CiArtifact[]> {
-    // Try pipeline artifacts first (PublishPipelineArtifact)
-    const pipelineResult = await execCommand('az', [
-        'rest',
-        '--method', 'get',
-        '--uri', `https://dev.azure.com/${org}/${project}/_apis/build/builds/${runId}/artifacts?api-version=7.0`,
+    const apiUrl = `https://dev.azure.com/${org}/${project}/_apis/build/builds/${runId}/artifacts?api-version=7.0`;
+
+    // Try az rest first (works for authenticated users)
+    const azResult = await execCommand('az', [
+        'rest', '--method', 'get', '--uri', apiUrl,
+        '--resource', 'https://management.azure.com/',
         '--output', 'json',
     ]);
 
-    if (pipelineResult.code === 0) {
+    let artifacts: any[] = [];
+    if (azResult.code === 0 && azResult.stdout.trim().startsWith('{')) {
         try {
-            const data = JSON.parse(pipelineResult.stdout);
-            const artifacts = data.value || data;
-            if (Array.isArray(artifacts) && artifacts.length > 0) {
-                return artifacts.map((a: any) => ({
-                    name: a.name,
-                    source: 'azdo' as const,
-                }));
-            }
+            const data = JSON.parse(azResult.stdout);
+            artifacts = data.value || [];
         } catch { /* fall through */ }
     }
 
-    // Fallback: try az pipelines runs artifact list (older build artifacts)
-    const result = await execCommand('az', [
-        'pipelines', 'runs', 'artifact', 'list',
-        '--org', `https://dev.azure.com/${org}`,
-        '--project', project,
-        '--run-id', runId,
-        '--output', 'json',
-    ]);
-    if (result.code !== 0) {
-        return [];
+    // Fallback: try unauthenticated fetch (works for public projects)
+    if (artifacts.length === 0) {
+        const curlResult = await execCommand('curl', ['-s', '-f', apiUrl]);
+        if (curlResult.code === 0) {
+            try {
+                const data = JSON.parse(curlResult.stdout);
+                artifacts = data.value || [];
+            } catch { /* fall through */ }
+        }
     }
 
-    const artifacts = JSON.parse(result.stdout);
+    // Last fallback: az pipelines runs artifact list
+    if (artifacts.length === 0) {
+        const cliResult = await execCommand('az', [
+            'pipelines', 'runs', 'artifact', 'list',
+            '--org', `https://dev.azure.com/${org}`,
+            '--project', project,
+            '--run-id', runId,
+            '--output', 'json',
+        ]);
+        if (cliResult.code === 0) {
+            try { artifacts = JSON.parse(cliResult.stdout); } catch { /* ignore */ }
+        }
+    }
+
     return artifacts.map((a: any) => ({
         name: a.name,
+        size: parseInt(a.resource?.properties?.artifactsize || '0', 10),
         source: 'azdo' as const,
     }));
 }
@@ -237,7 +247,7 @@ async function downloadGitHubArtifact(owner: string, repo: string, runId: string
         '--repo', `${owner}/${repo}`,
         '--name', artifactName,
         '--dir', destDir,
-    ]);
+    ], undefined, 120000);
     if (result.code !== 0) {
         throw new Error(`Failed to download artifact: ${result.stderr}`);
     }
@@ -505,7 +515,9 @@ export async function downloadCiBinlog(): Promise<string[] | undefined> {
     const binlogArtifacts = artifacts.filter(a =>
         a.name.toLowerCase().includes('binlog') ||
         a.name.toLowerCase().includes('binary-log') ||
-        a.name.toLowerCase().includes('msbuild-log')
+        a.name.toLowerCase().includes('msbuild-log') ||
+        a.name.toLowerCase().includes('build_debug') ||
+        a.name.toLowerCase().includes('build_release')
     );
 
     const artifactList = binlogArtifacts.length > 0 ? binlogArtifacts : artifacts;
@@ -517,10 +529,20 @@ export async function downloadCiBinlog(): Promise<string[] | undefined> {
         return;
     }
 
+    const formatSize = (bytes?: number) => {
+        if (!bytes) { return ''; }
+        if (bytes > 1024 * 1024) { return `${(bytes / 1024 / 1024).toFixed(1)} MB`; }
+        if (bytes > 1024) { return `${(bytes / 1024).toFixed(0)} KB`; }
+        return `${bytes} B`;
+    };
+
     const artifactPick = await vscode.window.showQuickPick(
         artifactList.map(a => ({
             label: a.name,
-            description: binlogArtifacts.includes(a) ? '$(file-binary) likely binlog' : '',
+            description: [
+                formatSize(a.size),
+                binlogArtifacts.includes(a) ? '$(file-binary) likely binlog' : '',
+            ].filter(Boolean).join(' · '),
             artifact: a,
         })),
         { placeHolder: 'Select artifact containing binlog files' }
