@@ -80,45 +80,60 @@ interface AzdoPipeline {
 }
 
 async function listAzdoPipelines(org: string, project: string): Promise<AzdoPipeline[]> {
-    const result = await execCommand('az', [
-        'pipelines', 'list',
-        '--org', `https://dev.azure.com/${org}`,
-        '--project', project,
-        '--output', 'json',
-    ]);
-    if (result.code !== 0) {
-        throw new Error(`az pipelines list failed: ${result.stderr}`);
+    const apiUrl = `https://dev.azure.com/${org}/${project}/_apis/pipelines?api-version=7.0`;
+    try {
+        const data = await httpsGetJson(apiUrl);
+        const pipelines = data.value || [];
+        return pipelines.map((p: any) => ({
+            id: p.id,
+            name: p.name,
+            folder: p.folder || '',
+        }));
+    } catch {
+        // Fallback to az CLI if REST fails (private projects)
+        const result = await execCommand('az', [
+            'pipelines', 'list',
+            '--org', `https://dev.azure.com/${org}`,
+            '--project', project,
+            '--output', 'json',
+        ]);
+        if (result.code !== 0) { return []; }
+        const pipelines = JSON.parse(result.stdout);
+        return pipelines.map((p: any) => ({ id: p.id, name: p.name, folder: p.folder || '' }));
     }
-
-    const pipelines = JSON.parse(result.stdout);
-    return pipelines.map((p: any) => ({
-        id: p.id,
-        name: p.name,
-        folder: p.folder || '',
-    }));
 }
 
 async function listAzdoBuilds(org: string, project: string, pipelineId?: number, top: number = 20): Promise<CiBuild[]> {
-    const args = [
-        'pipelines', 'runs', 'list',
-        '--org', `https://dev.azure.com/${org}`,
-        '--project', project,
-        '--top', String(top),
-        '--output', 'json',
-    ];
+    let apiUrl = `https://dev.azure.com/${org}/${project}/_apis/build/builds?api-version=7.0&$top=${top}&queryOrder=finishTimeDescending`;
     if (pipelineId !== undefined) {
-        args.push('--pipeline-ids', String(pipelineId));
-    }
-    const result = await execCommand('az', args);
-    if (result.code !== 0) {
-        throw new Error(`az pipelines runs list failed: ${result.stderr}`);
+        apiUrl += `&definitions=${pipelineId}`;
     }
 
-    const runs = JSON.parse(result.stdout);
+    let runs: any[] = [];
+    try {
+        const data = await httpsGetJson(apiUrl);
+        runs = data.value || [];
+    } catch {
+        // Fallback to az CLI
+        const args = [
+            'pipelines', 'runs', 'list',
+            '--org', `https://dev.azure.com/${org}`,
+            '--project', project,
+            '--top', String(top),
+            '--output', 'json',
+        ];
+        if (pipelineId !== undefined) {
+            args.push('--pipeline-ids', String(pipelineId));
+        }
+        const result = await execCommand('az', args);
+        if (result.code !== 0) { throw new Error(`Failed to list builds: ${result.stderr}`); }
+        runs = JSON.parse(result.stdout);
+    }
+
     return runs.map((run: any) => ({
         id: String(run.id),
         label: `#${run.id} — ${run.definition?.name || 'Build'}`,
-        description: `${run.result || run.status} · ${run.sourceBranch?.replace('refs/heads/', '')}`,
+        description: `${run.result || run.status} · ${(run.sourceBranch || '').replace('refs/heads/', '')}`,
         detail: `${new Date(run.finishTime || run.startTime || run.queueTime).toLocaleString()} · ${run.result || run.status}`,
         source: 'azdo' as const,
         artifactDownloadArgs: [org, project, String(run.id)],
@@ -126,6 +141,27 @@ async function listAzdoBuilds(org: string, project: string, pipelineId?: number,
 }
 
 async function downloadAzdoArtifact(org: string, project: string, runId: string, artifactName: string, destDir: string): Promise<string[]> {
+    // Try direct ZIP download first (works for public projects without az CLI)
+    const zipUrl = `https://dev.azure.com/${org}/${project}/_apis/build/builds/${runId}/artifacts?artifactName=${encodeURIComponent(artifactName)}&api-version=7.0&%24format=zip`;
+    const zipPath = path.join(destDir, `${artifactName}.zip`);
+
+    try {
+        await httpsDownloadFile(zipUrl, zipPath);
+        // Extract ZIP
+        const extractDir = path.join(destDir, artifactName);
+        fs.mkdirSync(extractDir, { recursive: true });
+        // Use PowerShell to extract (available on all Windows)
+        const extractResult = await execCommand('powershell', [
+            '-NoProfile', '-Command',
+            `Expand-Archive -Path '${zipPath}' -DestinationPath '${extractDir}' -Force`,
+        ], undefined, 120000);
+        if (extractResult.code === 0) {
+            fs.unlinkSync(zipPath);
+            return findBinlogFiles(extractDir);
+        }
+    } catch { /* fall through to az CLI */ }
+
+    // Fallback: az CLI download
     const result = await execCommand('az', [
         'pipelines', 'runs', 'artifact', 'download',
         '--org', `https://dev.azure.com/${org}`,
@@ -302,6 +338,29 @@ function httpsGetJson(url: string): Promise<any> {
     });
 }
 
+/** Download a file via HTTPS to a local path. Follows redirects. */
+function httpsDownloadFile(url: string, destPath: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+        const doRequest = (reqUrl: string) => {
+            https.get(reqUrl, (res) => {
+                if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                    doRequest(res.headers.location);
+                    return;
+                }
+                if (res.statusCode && res.statusCode >= 400) {
+                    reject(new Error(`HTTP ${res.statusCode}`));
+                    return;
+                }
+                const fileStream = fs.createWriteStream(destPath);
+                res.pipe(fileStream);
+                fileStream.on('finish', () => { fileStream.close(); resolve(); });
+                fileStream.on('error', reject);
+            }).on('error', reject);
+        };
+        doRequest(url);
+    });
+}
+
 /** Extract numeric build/run ID from a raw string (URL or plain number) */
 function extractBuildId(input: string): string | null {
     // Plain number
@@ -405,35 +464,8 @@ async function doDownloadCiBinlog(): Promise<string[] | undefined> {
     }
 
     // Verify CLI
-    if (source === 'azdo') {
-        if (!(await isAzCliAvailable())) {
-            const action = await vscode.window.showErrorMessage(
-                'Azure CLI (`az`) is required for Azure DevOps integration. Install it from https://aka.ms/install-az-cli',
-                'Open Install Page'
-            );
-            if (action) { vscode.env.openExternal(vscode.Uri.parse('https://aka.ms/install-az-cli')); }
-            return;
-        }
-        // Check az devops extension
-        const extCheck = await execCommand('az', ['extension', 'show', '--name', 'azure-devops', '--output', 'json']);
-        if (extCheck.code !== 0) {
-            const install = await vscode.window.showWarningMessage(
-                'The `azure-devops` extension for Azure CLI is required. Install it now?',
-                'Install', 'Cancel'
-            );
-            if (install === 'Install') {
-                await vscode.window.withProgress(
-                    { location: vscode.ProgressLocation.Notification, title: 'Installing azure-devops CLI extension...' },
-                    async () => {
-                        const r = await execCommand('az', ['extension', 'add', '--name', 'azure-devops']);
-                        if (r.code !== 0) { throw new Error(r.stderr); }
-                    }
-                );
-            } else {
-                return;
-            }
-        }
-    } else {
+    // Verify CLI availability — only required for GitHub (AzDO uses REST API for public projects)
+    if (source === 'github') {
         if (!(await isGhCliAvailable())) {
             const action = await vscode.window.showErrorMessage(
                 'GitHub CLI (`gh`) is required for GitHub Actions integration. Install it from https://cli.github.com',
