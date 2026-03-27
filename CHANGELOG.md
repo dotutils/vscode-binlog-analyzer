@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.10.9 (Preview)
+
+### Fixed
+- **Security: shell injection** in "Open in Structured Log Viewer" — replaced `exec()` with safe `execFile`
+- **Security: XSS** in build timeline webview — HTML-escape target/task names
+- **"message must be set" TypeError** — guarded all chat message creation sites against empty content
+- **MCP client dispose** — pending promises now properly rejected on shutdown (prevents silent hangs)
+- **Added binlogs invisible in tree** — `addBinlogs` now restarts MCP client so new binlogs appear immediately
+- **Remove all binlogs** — properly disposes MCP client and cleans up config
+- **Build & Collect double-load** — race condition between terminal close and file poll fixed
+- **Build & Collect poll leak** — interval timer now properly cleaned up
+- **Comparison timeline sort** — fixed wrong variable in sort comparator
+- **CI: redirect loop protection** — `httpsGetJson` now has max redirect limit
+- **CI: socket leak** — response streams drained on rejection
+- **CI: extractBuildId** — no longer matches `definitionId=` URLs as build IDs
+- **MCP tool install cache** — reset cache before install attempt so tool is found after install
+
 ## 0.10.8 (Preview)
 
 ### New
