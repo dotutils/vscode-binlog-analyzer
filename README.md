@@ -47,6 +47,8 @@ The [BinlogInsights.Mcp](https://www.nuget.org/packages/BinlogInsights.Mcp) serv
 | `binlogAnalyzer.autoLoad` | `true` | Auto-load binlog diagnostics on activation |
 | `binlogAnalyzer.diagnosticsSeverityFilter` | `"Warning"` | Min severity for Problems panel |
 | `binlogAnalyzer.inlineDecorations` | `true` | Show build errors as inline decorations in source files |
+| `binlogAnalyzer.chat.includeAllTools` | `false` | Expose all available tools (file editing, terminal, other MCPs) to the `@binlog` chat participant |
+| `binlogAnalyzer.chat.additionalToolPatterns` | `[]` | Additional tool name patterns to include alongside binlog tools (e.g. `["copilot_codebase", "terminal"]`) |
 
 ## Related Projects
 

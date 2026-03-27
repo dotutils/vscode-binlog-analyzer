@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.10.6 (Preview)
+
+### New
+- **Configurable chat tools** — two new settings control which tools the `@binlog` chat participant can use:
+  - `binlogAnalyzer.chat.includeAllTools` — expose all available tools (file editing, terminal, other MCPs) to the model
+  - `binlogAnalyzer.chat.additionalToolPatterns` — selectively include extra tools by name pattern
+- **Compare button in tree view** — a diff icon appears in the Binlog Explorer title bar when 2+ binlogs are loaded, giving quick access to the comparison timeline
+
+### Fixed
+- **Persistent loading bar removed** — the tree view no longer shows a loading indicator during background cache warming; prefetch runs silently
+
 ## 0.9.0 (Preview)
 
 ### Breaking
