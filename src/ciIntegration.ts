@@ -348,6 +348,10 @@ export async function downloadCiBinlog(): Promise<string[] | undefined> {
         isManual?: boolean;
     }
 
+    const repoLabel = source === 'azdo'
+        ? `${azdoInfo!.org}/${azdoInfo!.project}`
+        : `${ghInfo!.owner}/${ghInfo!.repo}`;
+
     const pickItems: BuildPickItem[] = [
         {
             label: '$(edit) Enter run/build ID manually...',
@@ -364,7 +368,7 @@ export async function downloadCiBinlog(): Promise<string[] | undefined> {
     ];
 
     const buildPick = await vscode.window.showQuickPick(pickItems, {
-        placeHolder: 'Select a build to download binlog from',
+        placeHolder: `Select a build from ${repoLabel}`,
         matchOnDescription: true,
         matchOnDetail: true,
     });
