@@ -231,20 +231,24 @@ async function downloadAzdoArtifact(org: string, project: string, runId: string,
 
 async function listAzdoArtifacts(org: string, project: string, runId: string): Promise<CiArtifact[]> {
     const apiUrl = `https://dev.azure.com/${org}/${project}/_apis/build/builds/${runId}/artifacts?api-version=7.0`;
+    const errors: string[] = [];
 
     // Try az rest first (works for authenticated users)
-    const azResult = await execCommand('az', [
-        'rest', '--method', 'get', '--uri', apiUrl,
-        '--resource', '499b84ac-1321-427f-aa17-267ca6975798',
-        '--output', 'json',
-    ]);
-
     let artifacts: any[] = [];
-    if (azResult.code === 0 && azResult.stdout.trim().startsWith('{')) {
-        try {
+    try {
+        const azResult = await execCommand('az', [
+            'rest', '--method', 'get', '--uri', apiUrl,
+            '--resource', '499b84ac-1321-427f-aa17-267ca6975798',
+            '--output', 'json',
+        ]);
+        if (azResult.code === 0 && azResult.stdout.trim().startsWith('{')) {
             const data = JSON.parse(azResult.stdout);
             artifacts = data.value || [];
-        } catch { /* fall through */ }
+        } else {
+            errors.push(`az rest: code=${azResult.code}, stderr=${(azResult.stderr || '').substring(0, 100)}`);
+        }
+    } catch (e) {
+        errors.push(`az rest: ${e instanceof Error ? e.message : String(e)}`);
     }
 
     // Fallback: unauthenticated HTTPS fetch (works for public projects)
@@ -252,26 +256,38 @@ async function listAzdoArtifacts(org: string, project: string, runId: string): P
         try {
             const json = await httpsGetJson(apiUrl);
             artifacts = json?.value || [];
-        } catch { /* fall through */ }
+        } catch (e) {
+            errors.push(`HTTPS: ${e instanceof Error ? e.message : String(e)}`);
+        }
     }
 
     // Last fallback: az pipelines runs artifact list
     if (artifacts.length === 0) {
-        const cliResult = await execCommand('az', [
-            'pipelines', 'runs', 'artifact', 'list',
-            '--org', `https://dev.azure.com/${org}`,
-            '--project', project,
-            '--run-id', runId,
-            '--output', 'json',
-        ]);
-        if (cliResult.code === 0) {
-            try { artifacts = JSON.parse(cliResult.stdout); } catch { /* ignore */ }
+        try {
+            const cliResult = await execCommand('az', [
+                'pipelines', 'runs', 'artifact', 'list',
+                '--org', `https://dev.azure.com/${org}`,
+                '--project', project,
+                '--run-id', runId,
+                '--output', 'json',
+            ]);
+            if (cliResult.code === 0 && cliResult.stdout.trim()) {
+                artifacts = JSON.parse(cliResult.stdout);
+            } else {
+                errors.push(`az pipelines: code=${cliResult.code}, stderr=${(cliResult.stderr || '').substring(0, 100)}`);
+            }
+        } catch (e) {
+            errors.push(`az pipelines: ${e instanceof Error ? e.message : String(e)}`);
         }
+    }
+
+    if (artifacts.length === 0 && errors.length > 0) {
+        throw new Error(`All artifact listing strategies failed:\n${errors.join('\n')}`);
     }
 
     return artifacts.map((a: any) => ({
         name: a.name,
-        size: parseInt(a.resource?.properties?.artifactsize || '0', 10),
+        size: parseInt(a.resource?.properties?.artifactsize || a.size_in_bytes || '0', 10),
         source: 'azdo' as const,
     }));
 }
@@ -841,13 +857,12 @@ async function pickAndDownloadArtifact(
     downloadArgs: string[],
     buildLabel: string
 ): Promise<string[] | undefined> {
-    const binlogArtifacts = artifacts.filter(a =>
-        a.name.toLowerCase().includes('binlog') ||
-        a.name.toLowerCase().includes('binary-log') ||
-        a.name.toLowerCase().includes('msbuild-log') ||
-        a.name.toLowerCase().includes('build_debug') ||
-        a.name.toLowerCase().includes('build_release')
-    );
+    const binlogArtifacts = artifacts.filter(a => {
+        const n = a.name.toLowerCase();
+        return n.includes('binlog') || n.includes('binary-log') || n.includes('msbuild-log') ||
+               n.includes('build_debug') || n.includes('build_release') ||
+               n.includes('buildlogs') || n === 'logs';
+    });
     const artifactList = binlogArtifacts.length > 0 ? binlogArtifacts : artifacts;
 
     if (artifactList.length === 0) {
