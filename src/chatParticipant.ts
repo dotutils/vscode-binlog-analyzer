@@ -423,20 +423,19 @@ export class BinlogChatParticipant {
                 }
             }
 
-            // Add assistant tool calls and results to messages
-            if (toolCalls.length > 0) {
-                messages.push(
-                    vscode.LanguageModelChatMessage.Assistant([
-                        new vscode.LanguageModelTextPart(''),
-                        ...toolCalls,
-                    ]),
-                );
-                messages.push(
-                    vscode.LanguageModelChatMessage.User([
-                        new vscode.LanguageModelTextPart('Tool results:'),
-                        ...toolResults,
-                    ]),
-                );
+            // Build follow-up messages with tool results
+            // Use separate messages per tool call/result pair to match API expectations
+            for (let i = 0; i < toolCalls.length; i++) {
+                try {
+                    messages.push(
+                        vscode.LanguageModelChatMessage.Assistant([toolCalls[i]]),
+                    );
+                    messages.push(
+                        vscode.LanguageModelChatMessage.User([toolResults[i]]),
+                    );
+                } catch {
+                    // If message creation fails, skip this pair
+                }
             }
 
             // Continue conversation with tool results

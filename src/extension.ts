@@ -1199,7 +1199,12 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
     if (interactive) {
         const chatMessage = `@binlog Binlog "${fileName}"${multi} is loaded. What would you like to analyze?`;
         setTimeout(() => {
-            vscode.commands.executeCommand('workbench.action.chat.open', chatMessage);
+            // Use chat.new to avoid reusing a previous chat session with stale tool-call history
+            vscode.commands.executeCommand('workbench.action.chat.new', chatMessage)
+                .then(undefined, () => {
+                    // Fallback: older VS Code versions may not support chat.new
+                    vscode.commands.executeCommand('workbench.action.chat.open', chatMessage);
+                });
         }, 1500);
     }
 
