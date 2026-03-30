@@ -404,7 +404,7 @@ export class BinlogChatParticipant {
             }
 
             // Execute tool calls
-            const toolResults: vscode.LanguageModelToolResultPart[] = [];
+            const toolResultTexts: string[] = [];
             for (const call of toolCalls) {
                 try {
                     const result = await vscode.lm.invokeTool(
@@ -412,31 +412,28 @@ export class BinlogChatParticipant {
                         { input: call.input, toolInvocationToken: undefined },
                         token
                     );
-                    toolResults.push(new vscode.LanguageModelToolResultPart(call.callId, result.content));
+                    // Extract text content from tool result
+                    const textContent = result.content
+                        .filter((p): p is vscode.LanguageModelTextPart => p instanceof vscode.LanguageModelTextPart)
+                        .map(p => p.value)
+                        .join('\n');
+                    toolResultTexts.push(`[${call.name}]: ${textContent || '(no output)'}`);
                 } catch (err) {
                     const errorMsg = err instanceof Error ? err.message : String(err);
-                    toolResults.push(
-                        new vscode.LanguageModelToolResultPart(call.callId, [
-                            new vscode.LanguageModelTextPart(`Error: ${errorMsg}`)
-                        ])
-                    );
+                    toolResultTexts.push(`[${call.name}]: Error: ${errorMsg}`);
                 }
             }
 
-            // Build follow-up messages with tool results
-            // Use separate messages per tool call/result pair to match API expectations
-            for (let i = 0; i < toolCalls.length; i++) {
-                try {
-                    messages.push(
-                        vscode.LanguageModelChatMessage.Assistant([toolCalls[i]]),
-                    );
-                    messages.push(
-                        vscode.LanguageModelChatMessage.User([toolResults[i]]),
-                    );
-                } catch {
-                    // If message creation fails, skip this pair
-                }
-            }
+            // Summarize tool results as plain text to avoid tool_call_id serialization issues
+            const toolSummary = toolResultTexts.join('\n\n');
+            messages.push(
+                vscode.LanguageModelChatMessage.Assistant('I called the following tools to gather data.'),
+            );
+            messages.push(
+                vscode.LanguageModelChatMessage.User(
+                    `Here are the tool results:\n\n${toolSummary}\n\nPlease analyze these results and provide your response.`
+                ),
+            );
 
             // Continue conversation with tool results
             try {
