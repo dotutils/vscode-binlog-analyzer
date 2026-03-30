@@ -2405,9 +2405,11 @@ async function showTimelineWebview(context: vscode.ExtensionContext) {
     </div>
 
     <h2 title="Targets sorted by cumulative duration across all project invocations. With parallel builds, these times can exceed the total build time."><span class="section-icon">🔥</span>Slowest Targets</h2>
+    <p style="color:var(--vscode-descriptionForeground); font-size:12px; margin:-4px 0 8px 0;">Cumulative time across all project invocations — may exceed wall-clock build time with parallel builds</p>
     ${targetBars.length > 0 ? renderBars(targetBars, maxTargetMs, 'var(--vscode-charts-red, #f14c4c)', 'target') : '<p style="color:var(--vscode-descriptionForeground)">No target data</p>'}
 
     <h2 title="Tasks sorted by cumulative duration. A task may run many times across projects."><span class="section-icon">🔧</span>Slowest Tasks</h2>
+    <p style="color:var(--vscode-descriptionForeground); font-size:12px; margin:-4px 0 8px 0;">Cumulative time — a task may run many times across projects</p>
     ${taskBars.length > 0 ? renderBars(taskBars, maxTaskMs, 'var(--vscode-charts-blue, #3794ff)', 'task') : '<p style="color:var(--vscode-descriptionForeground)">No task data</p>'}
 
     ${uniqueProjectBars.length > 0 ? `<h2><span class="section-icon">📁</span>Project Build Times</h2>
