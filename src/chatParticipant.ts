@@ -421,10 +421,16 @@ export class BinlogChatParticipant {
             // Add assistant tool calls and results to messages
             if (toolCalls.length > 0) {
                 messages.push(
-                    vscode.LanguageModelChatMessage.Assistant(toolCalls.map(tc => tc)),
+                    vscode.LanguageModelChatMessage.Assistant([
+                        new vscode.LanguageModelTextPart(''),
+                        ...toolCalls,
+                    ]),
                 );
                 messages.push(
-                    vscode.LanguageModelChatMessage.User(toolResults.map(tr => tr)),
+                    vscode.LanguageModelChatMessage.User([
+                        new vscode.LanguageModelTextPart('Tool results:'),
+                        ...toolResults,
+                    ]),
                 );
             }
 
