@@ -335,9 +335,11 @@ export class BinlogChatParticipant {
 
         } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
+            const errStr = String(err);
             telemetry.trackError('chatParticipant', err);
             // Handle corrupted tool history — retry without conversation history
-            if (errMsg.includes('invalid_request_body') || errMsg.includes('tool_calls') || errMsg.includes("role 'tool'")) {
+            if (errMsg.includes('invalid_request_body') || errMsg.includes('tool_calls') || errMsg.includes("role 'tool'") ||
+                errStr.includes('tool_call_id') || errStr.includes('tool_calls') || errMsg.includes('400')) {
                 const freshMessages = [
                     vscode.LanguageModelChatMessage.User(SYSTEM_PROMPT || ' '),
                     vscode.LanguageModelChatMessage.User(userMessage || 'Analyze the binlog.'),

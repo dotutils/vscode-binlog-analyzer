@@ -609,21 +609,29 @@ export async function activate(context: vscode.ExtensionContext) {
 
             // Wait for the terminal/build to finish, then auto-load the binlog
             let loaded = false;
+            const startTime = Date.now();
+            let lastSize = -1;
+            let stableCount = 0;
+            const STABLE_NEEDED = 3; // 3 consecutive same-size readings (15s stable)
             const pollInterval = setInterval(() => {
                 if (Date.now() - startTime > 600000) { clearInterval(pollInterval); return; }
                 try {
                     const stat = fs.statSync(binlogPath);
-                    // File exists and hasn't been modified in the last 3 seconds — build likely done
-                    if (Date.now() - stat.mtimeMs > 3000 && stat.size > 0) {
-                        clearInterval(pollInterval);
-                        disposable.dispose();
-                        if (loaded) { return; }
-                        loaded = true;
-                        handleBinlogOpen([binlogPath], context);
+                    if (stat.size > 0 && stat.size === lastSize) {
+                        stableCount++;
+                        if (stableCount >= STABLE_NEEDED) {
+                            clearInterval(pollInterval);
+                            disposable.dispose();
+                            if (loaded) { return; }
+                            loaded = true;
+                            handleBinlogOpen([binlogPath], context);
+                        }
+                    } else {
+                        lastSize = stat.size;
+                        stableCount = 0;
                     }
                 } catch { /* file doesn't exist yet */ }
             }, 5000);
-            const startTime = Date.now();
             const disposable = vscode.window.onDidCloseTerminal((closedTerminal) => {
                 if (closedTerminal === terminal) {
                     disposable.dispose();
