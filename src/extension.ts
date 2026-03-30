@@ -2445,16 +2445,19 @@ async function showComparisonTimelineWebview(context: vscode.ExtensionContext) {
     interface PerfData {
         targets: Record<string, any>;
         tasks: Record<string, any>;
+        overview: string;
     }
 
     async function fetchPerfData(binlogPath: string): Promise<PerfData> {
-        const [targetsResult, tasksResult] = await Promise.all([
+        const [targetsResult, tasksResult, overviewResult] = await Promise.all([
             mcpClient!.callTool('binlog_expensive_targets', { top_number: 15, binlog_file: binlogPath }),
             mcpClient!.callTool('binlog_expensive_tasks', { top_number: 15, binlog_file: binlogPath }),
+            mcpClient!.callTool('binlog_overview', { binlog_file: binlogPath }).catch(() => ({ text: '{}' })),
         ]);
         return {
             targets: JSON.parse(targetsResult.text),
             tasks: JSON.parse(tasksResult.text),
+            overview: overviewResult.text,
         };
     }
 
@@ -2553,6 +2556,20 @@ async function showComparisonTimelineWebview(context: vscode.ExtensionContext) {
     const totalDelta = totalA > 0 ? ((totalB - totalA) / totalA * 100) : 0;
     const totalDeltaClass = totalDelta > 5 ? 'delta-worse' : totalDelta < -5 ? 'delta-better' : 'delta-neutral';
 
+    // Extract wall-clock build duration from overview text
+    function extractBuildDuration(overviewText: string): string {
+        // Look for patterns like "Build succeeded in 294.3s" or "Duration: 5m 12s" or "duration_seconds": 294
+        const secMatch = overviewText.match(/(?:in|Duration[:\s]*)\s*([\d.]+)\s*s/i);
+        if (secMatch) { return `${parseFloat(secMatch[1]).toFixed(1)}s`; }
+        const minMatch = overviewText.match(/(?:in|Duration[:\s]*)\s*(\d+)\s*m\s*([\d.]+)\s*s/i);
+        if (minMatch) { return `${minMatch[1]}m ${parseFloat(minMatch[2]).toFixed(0)}s`; }
+        const jsonMatch = overviewText.match(/"(?:duration_seconds|durationSeconds|totalSeconds)"[:\s]*([\d.]+)/i);
+        if (jsonMatch) { return `${parseFloat(jsonMatch[1]).toFixed(1)}s`; }
+        return '';
+    }
+    const wallClockA = extractBuildDuration(dataA.overview);
+    const wallClockB = extractBuildDuration(dataB.overview);
+
     panel.webview.html = `<!DOCTYPE html>
 <html>
 <head>
@@ -2624,13 +2641,22 @@ async function showComparisonTimelineWebview(context: vscode.ExtensionContext) {
     </div>
 
     <div class="summary">
-        <div class="summary-item">
+        ${wallClockA || wallClockB ? `
+        <div class="summary-item" title="Actual elapsed time (wall-clock) for the entire build">
+            <div class="summary-value">${wallClockA || '—'}</div>
+            <div class="summary-label">Build A (wall-clock)</div>
+        </div>
+        <div class="summary-item" title="Actual elapsed time (wall-clock) for the entire build">
+            <div class="summary-value">${wallClockB || '—'}</div>
+            <div class="summary-label">Build B (wall-clock)</div>
+        </div>
+        <div class="summary-item" style="border-left: 1px solid var(--vscode-widget-border); padding-left: 20px;">` : `<div class="summary-item">`}
             <div class="summary-value">${formatDuration(totalA)}</div>
-            <div class="summary-label">Build A (targets)</div>
+            <div class="summary-label" title="Sum of all target durations (cumulative CPU time)">Build A (targets)</div>
         </div>
         <div class="summary-item">
             <div class="summary-value">${formatDuration(totalB)}</div>
-            <div class="summary-label">Build B (targets)</div>
+            <div class="summary-label" title="Sum of all target durations (cumulative CPU time)">Build B (targets)</div>
         </div>
         <div class="summary-item">
             <div class="summary-value ${totalDeltaClass}">${totalDelta > 0 ? '+' : ''}${totalDelta.toFixed(1)}%</div>
