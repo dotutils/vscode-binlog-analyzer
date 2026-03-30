@@ -2388,16 +2388,16 @@ async function showTimelineWebview(context: vscode.ExtensionContext) {
             <div class="summary-value">${targetBars.length}</div>
             <div class="summary-label">Targets</div>
         </div>
-        <div class="summary-item">
+        <div class="summary-item" title="Cumulative time of the single most expensive target across all projects. With parallel builds, this can exceed wall-clock time because multiple projects run concurrently.">
             <div class="summary-value">${formatDuration(maxTargetMs)}</div>
             <div class="summary-label">Slowest Target</div>
         </div>
     </div>
 
-    <h2><span class="section-icon">🔥</span>Slowest Targets</h2>
+    <h2 title="Targets sorted by cumulative duration across all project invocations. With parallel builds, these times can exceed the total build time."><span class="section-icon">🔥</span>Slowest Targets</h2>
     ${targetBars.length > 0 ? renderBars(targetBars, maxTargetMs, 'var(--vscode-charts-red, #f14c4c)', 'target') : '<p style="color:var(--vscode-descriptionForeground)">No target data</p>'}
 
-    <h2><span class="section-icon">🔧</span>Slowest Tasks</h2>
+    <h2 title="Tasks sorted by cumulative duration. A task may run many times across projects."><span class="section-icon">🔧</span>Slowest Tasks</h2>
     ${taskBars.length > 0 ? renderBars(taskBars, maxTaskMs, 'var(--vscode-charts-blue, #3794ff)', 'task') : '<p style="color:var(--vscode-descriptionForeground)">No task data</p>'}
 
     ${uniqueProjectBars.length > 0 ? `<h2><span class="section-icon">📁</span>Project Build Times</h2>
