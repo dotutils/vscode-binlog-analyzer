@@ -297,24 +297,27 @@ export class BinlogChatParticipant {
             ? `You are an MSBuild build analysis expert. Use BinlogInsights MCP tools to analyze binlog files. Start with binlog_overview, then use analysis tools. Every tool call MUST include the binlog_file parameter with the FULL ABSOLUTE PATH. Provide specific actionable fixes with exact MSBuild properties.`
             : SYSTEM_PROMPT;
         const includeHistory = !useMinimalPrompt;
+        const historyMessages = includeHistory ? context.history.flatMap(turn => {
+            if (turn instanceof vscode.ChatResponseTurn) {
+                const textParts = turn.response
+                    .filter((p): p is vscode.ChatResponseMarkdownPart => p instanceof vscode.ChatResponseMarkdownPart)
+                    .map(p => p.value.value);
+                const text = textParts.join('');
+                // Skip empty responses and responses that had tool calls (they cause 400 errors)
+                if (!text.trim()) { return []; }
+                // Check if this response turn had any tool call parts — skip it entirely
+                const hasToolCalls = turn.response.some(p => !(p instanceof vscode.ChatResponseMarkdownPart));
+                if (hasToolCalls) { return []; }
+                return [vscode.LanguageModelChatMessage.Assistant(text)];
+            } else {
+                const prompt = (turn as vscode.ChatRequestTurn).prompt;
+                if (!prompt || !prompt.trim()) { return []; }
+                return [vscode.LanguageModelChatMessage.User(prompt)];
+            }
+        }) : [];
         const messages = [
             vscode.LanguageModelChatMessage.User(systemPrompt || ' '),
-            // Include conversation history — only text-based turns (skip for /compare)
-            ...(includeHistory ? context.history.flatMap(turn => {
-                if (turn instanceof vscode.ChatResponseTurn) {
-                    const textParts = turn.response
-                        .filter((p): p is vscode.ChatResponseMarkdownPart => p instanceof vscode.ChatResponseMarkdownPart)
-                        .map(p => p.value.value);
-                    const text = textParts.join('');
-                    // Skip empty responses (likely tool-only turns)
-                    if (!text.trim()) { return []; }
-                    return [vscode.LanguageModelChatMessage.Assistant(text)];
-                } else {
-                    const prompt = (turn as vscode.ChatRequestTurn).prompt;
-                    if (!prompt || !prompt.trim()) { return []; }
-                    return [vscode.LanguageModelChatMessage.User(prompt)];
-                }
-            }) : []),
+            ...historyMessages,
             vscode.LanguageModelChatMessage.User(userMessage || 'Analyze the binlog.'),
         ];
 
