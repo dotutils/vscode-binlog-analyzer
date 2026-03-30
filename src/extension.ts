@@ -2187,12 +2187,22 @@ async function loadOptimizedAndCompare(
 
     await handleBinlogOpen(allBinlogPaths, context, false);
 
+    // Wait for MCP client to be ready before offering comparison
+    const waitForMcp = async () => {
+        for (let i = 0; i < 30; i++) { // up to 30s
+            if (mcpClient?.isReady) { return true; }
+            await new Promise(r => setTimeout(r, 1000));
+        }
+        return false;
+    };
+    const mcpReady = await waitForMcp();
+
     const hasMultiple = binlogsToLoad.length > 2;
     vscode.window.showInformationMessage(
         hasMultiple
             ? `✅ Optimization complete! ${binlogsToLoad.length} binlogs loaded (baseline → before-warm → after-cold → after-warm).`
             : `✅ Optimized build complete! ${binlogsToLoad.length} binlogs loaded for comparison.`,
-        'Show Comparison Timeline',
+        ...(mcpReady ? ['Show Comparison Timeline'] : []),
         'Dismiss'
     ).then(action => {
         if (action === 'Show Comparison Timeline') {
