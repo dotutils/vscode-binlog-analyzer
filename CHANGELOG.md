@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.10.15 (Preview)
+
+### Added
+- **Enhanced Diagnostics in Build & Collect** — after selecting binlog name and restore options, a new multi-select QuickPick offers diagnostic enhancements:
+  - **Property Tracking** (`MsBuildLogPropertyTracking=15`) — records full property lifecycle: initial values, reassignments, env var reads
+  - **BuildCheck Analysis** (`-check`) — detects double writes, undefined properties, shared output paths (SDK 9.0.100+)
+  - **Analyzer Performance** (`/p:ReportAnalyzer=true`) — per-analyzer timing in binlog
+  - **Embed Project Imports** (`ProjectImports=Embed`) — ensures .props/.targets source is embedded
+- **Run BuildCheck Analysis command** (`binlog.runBuildCheck`) — replays an existing binlog with `dotnet build <binlog> /check` to detect build quality issues without rebuilding. Results appear in the Problems panel. Available from command palette and tree view title bar
+- **Rebuild with Property Tracking command** (`binlog.rebuildWithPropertyTracking`) — builds with full MSBuild property tracking enabled
+- **`/buildcheck` slash command** — runs BuildCheck replay from `@binlog` chat and formats results with fix suggestions
+- **`/propertyhistory` slash command** — traces property assignment history through the build, suggests property tracking rebuild if data is sparse
+- **Click-to-open source files** — search results and diagnostics with file paths now open the source file at the exact line/column on click
+- **Comprehensive tree view telemetry** — all node expansions and item clicks now tracked (`treeExpand`, `treeClick`)
+- **New telemetry events**: `buildCheck`, `enhancedDiagnostics`, `treeClick`
+
+### Changed
+- **Faster binlog auto-load** — reduced stabilization polling from 5s×3 (15s) to 2s×2 (4s) after build completes
+
+### Settings
+- `binlogAnalyzer.diagnostics.propertyTrackingLevel` — MsBuildLogPropertyTracking level (default: 15)
+- `binlogAnalyzer.diagnostics.autoRunBuildCheck` — auto-run BuildCheck on binlog load (default: false)
+
 ## 0.10.9 (Preview)
 
 ### Fixed

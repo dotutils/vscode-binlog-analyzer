@@ -2,7 +2,7 @@
   "name": "binlog-analyzer",
   "displayName": "MSBuild Binlog Analyzer",
   "description": "Analyze MSBuild binary logs with Copilot Chat and MCP tools",
-  "version": "0.10.14",
+  "version": "0.10.15",
   "preview": true,
   "publisher": "dotutils",
   "license": "MIT",
@@ -211,6 +211,16 @@
         "command": "binlog.downloadFromCi",
         "title": "Binlog: Download Binlog from CI/CD",
         "icon": "$(cloud-download)"
+      },
+      {
+        "command": "binlog.runBuildCheck",
+        "title": "Binlog: Run BuildCheck Analysis",
+        "icon": "$(checklist)"
+      },
+      {
+        "command": "binlog.rebuildWithPropertyTracking",
+        "title": "Binlog: Rebuild with Property Tracking",
+        "icon": "$(symbol-property)"
       }
     ],
     "configuration": {
@@ -264,6 +274,26 @@
           "items": { "type": "string" },
           "default": [],
           "description": "Additional tool name patterns to include in the @binlog chat participant. Each entry is matched as a substring against tool names (e.g. 'copilot_codebase', 'terminal')."
+        },
+        "binlogAnalyzer.diagnostics.propertyTrackingLevel": {
+          "type": "number",
+          "default": 15,
+          "enum": [1, 2, 3, 4, 7, 8, 15],
+          "enumDescriptions": [
+            "Reassignment only",
+            "Initial values only",
+            "Reassignment + initial values",
+            "Environment variable reads only",
+            "Reassignment + initial values + env reads",
+            "Uninitialized property reads only",
+            "All property tracking (recommended)"
+          ],
+          "description": "MsBuildLogPropertyTracking level to use when rebuilding with property tracking. 15 = all events."
+        },
+        "binlogAnalyzer.diagnostics.autoRunBuildCheck": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically run BuildCheck analysis when a binlog is loaded (requires .NET SDK 9.0.100+)."
         }
       }
     },
@@ -326,6 +356,14 @@
           {
             "name": "items",
             "description": "Browse MSBuild items (PackageReference, Compile, etc.) and their metadata"
+          },
+          {
+            "name": "buildcheck",
+            "description": "Run MSBuild BuildCheck rules against the loaded binlog (double writes, undefined properties, etc.)"
+          },
+          {
+            "name": "propertyhistory",
+            "description": "Show the assignment history and provenance of an MSBuild property"
           }
         ]
       }
@@ -369,6 +407,11 @@
         {
           "command": "binlog.compareTimelines",
           "when": "view == binlogExplorer && binlog.hasMultipleBinlogs",
+          "group": "navigation"
+        },
+        {
+          "command": "binlog.runBuildCheck",
+          "when": "view == binlogExplorer && binlog.hasLoadedBinlogs",
           "group": "navigation"
         }
       ],

@@ -2,6 +2,10 @@ import * as vscode from 'vscode';
 
 import * as telemetry from './telemetry';
 import { McpClient } from './mcpClient';
+import {
+    runBuildCheck, detectSdkVersion, formatBuildCheckForChat,
+    initBuildCheckDiagnostics, pushBuildCheckToProblemsPanel
+} from './buildCheck';
 
 const SYSTEM_PROMPT = `You are an MSBuild build analysis expert embedded in VS Code. You help developers understand and fix build issues using MSBuild binary log (binlog) files.
 
@@ -172,6 +176,24 @@ const COMMAND_PROMPTS: Record<string, string> = {
         'Then show the most important ones: PackageReference, ProjectReference, Compile, Content, None, Reference. ' +
         'For each type, use binlog_items to get the actual items and their metadata. ' +
         'Highlight any issues (duplicate references, version conflicts, unnecessary includes).',
+    buildcheck: 'IMPORTANT: Do NOT call any MCP tools. Instead, tell the user that BuildCheck analysis is running, and report the results that are provided below.\n' +
+        'BuildCheck is an MSBuild feature (SDK 9.0.100+) that detects build quality issues by replaying the binlog with `dotnet build <binlog> /check`.\n' +
+        'Available checks: BC0101 (shared output path), BC0102 (double writes), BC0103 (env var usage), BC0104 (Reference vs ProjectReference), ' +
+        'BC0201 (undefined property), BC0202 (property used before declared).\n' +
+        'For each finding, explain what the issue means and provide a concrete fix.',
+    propertyhistory: 'Trace the full assignment history and provenance of the specified MSBuild property. Follow these steps:\n' +
+        '1. Call binlog_search with the property name to find all assignment/reassignment events\n' +
+        '2. Call binlog_properties to get the final evaluated value\n' +
+        '3. Call binlog_evaluations then binlog_evaluation_properties to see evaluation-time values\n' +
+        '4. If available, call binlog_preprocess on the relevant project to show where in the import chain the property is set\n' +
+        '5. Present a chronological timeline of assignments:\n' +
+        '   - Initial value and source location\n' +
+        '   - Each reassignment with old→new value and source\n' +
+        '   - Final evaluated value\n' +
+        '6. Explain WHY the property ended up with its final value\n' +
+        '7. If property tracking data is sparse (no initial value events), note:\n' +
+        '   "💡 This binlog may have partial property tracking. Use **Binlog: Rebuild with Property Tracking** ' +
+        '(MsBuildLogPropertyTracking=15) to capture full property lifecycle including initial values and environment variable reads."',
 };
 
 export class BinlogChatParticipant {
@@ -226,6 +248,32 @@ export class BinlogChatParticipant {
             }
         }
 
+        // For /buildcheck, run BuildCheck replay and inject results
+        let buildCheckResults = '';
+        if (request.command === 'buildcheck') {
+            if (this.binlogPaths.length === 0) {
+                stream.markdown('⚠️ No binlog loaded. Load a binlog first.\n');
+                return;
+            }
+            const { supported, sdkVersion } = await detectSdkVersion();
+            if (!supported) {
+                stream.markdown(
+                    `⚠️ **BuildCheck requires .NET SDK 9.0.100+.** Your version: ${sdkVersion}\n\n` +
+                    'To use BuildCheck:\n' +
+                    '1. Install .NET SDK 9.0.100 or later\n' +
+                    '2. Or rebuild with `-check` flag: `dotnet build -check -bl:build.binlog`\n'
+                );
+                return;
+            }
+            stream.progress('Running BuildCheck analysis (dotnet build <binlog> /check)...');
+            const summary = await runBuildCheck(this.binlogPaths[0]);
+            buildCheckResults = formatBuildCheckForChat(summary);
+
+            // Also push to Problems panel
+            const collection = initBuildCheckDiagnostics();
+            pushBuildCheckToProblemsPanel(summary, collection);
+        }
+
         const binlogContext= this.binlogPaths.length > 0
             ? (request.command === 'compare' && this.binlogPaths.length >= 2
                 ? this.binlogPaths.map((p, i) => {
@@ -247,7 +295,8 @@ export class BinlogChatParticipant {
         const userMessage = [
             commandPrompt,
             request.prompt,
-            binlogContext
+            binlogContext,
+            buildCheckResults,
         ].filter(Boolean).join('\n\n') || 'Analyze the binlog.';
 
         // Find available tools based on configuration
@@ -289,7 +338,7 @@ export class BinlogChatParticipant {
 
         // Build messages
         // For data-heavy commands, skip history and use minimal system prompt to avoid token overflow
-        const heavyCommands = new Set(['compare', 'incremental', 'perf']);
+        const heavyCommands = new Set(['compare', 'incremental', 'perf', 'buildcheck']);
         const useMinimalPrompt = heavyCommands.has(request.command || '');
         const systemPrompt = request.command === 'compare'
             ? `You are an MSBuild build analysis expert. Compare binlog files using BinlogInsights MCP tools. Use binlog_compare, binlog_expensive_targets, and binlog_errors for each binlog. Keep response concise.`

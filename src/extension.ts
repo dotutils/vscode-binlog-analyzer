@@ -5,6 +5,11 @@ import { BinlogTreeDataProvider, BinlogTreeItem, AboutInfo } from './binlogTreeV
 import { McpClient, buildMcpArgs } from './mcpClient';
 import { BinlogDocumentProvider, BINLOG_SCHEME, openBinlogDocument } from './binlogDocumentProvider';
 import { downloadCiBinlog, setCiContext } from './ciIntegration';
+import {
+    initBuildCheckDiagnostics, runBuildCheck, pushBuildCheckToProblemsPanel,
+    formatBuildCheckForChat, detectSdkVersion, buildWithPropertyTracking,
+    BuildCheckSummary
+} from './buildCheck';
 import * as telemetry from './telemetry';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -74,6 +79,16 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     binlogTreeView = treeView;
     context.subscriptions.push(treeView);
+
+    // Track tree item clicks
+    context.subscriptions.push(
+        treeView.onDidChangeSelection(e => {
+            if (e.selection.length > 0) {
+                const item = e.selection[0];
+                telemetry.trackTreeClick(item.nodeKind || 'unknown');
+            }
+        })
+    );
 
     // Status bar item showing loaded binlog count
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
@@ -598,12 +613,85 @@ export async function activate(context: vscode.ExtensionContext) {
             );
             if (!skipRestore) { return; }
 
+            // Enhanced diagnostics options
+            interface DiagnosticOption extends vscode.QuickPickItem {
+                flag?: string;
+                envVar?: { key: string; value: string };
+                blOption?: string;
+            }
+            const diagnosticOptions: DiagnosticOption[] = [
+                {
+                    label: '$(symbol-property) Property Tracking',
+                    description: 'MsBuildLogPropertyTracking=15',
+                    detail: 'Records full property lifecycle: initial value assignments, every reassignment with old→new values and source location, environment variable reads, and uninitialized property reads. Essential for answering "why is this property set to X?" questions.',
+                    picked: false,
+                    envVar: { key: 'MsBuildLogPropertyTracking', value: '15' },
+                },
+                {
+                    label: '$(checklist) BuildCheck Analysis',
+                    description: 'dotnet build -check',
+                    detail: 'Runs MSBuild BuildCheck rules during the build (SDK 9.0.100+). Detects: BC0102 double writes (two tasks writing same file), BC0101 shared output paths, BC0201 undefined property usage, BC0202 property used before declared, BC0104 Reference instead of ProjectReference, and more.',
+                    picked: false,
+                    flag: '-check',
+                },
+                {
+                    label: '$(pulse) Analyzer Performance',
+                    description: '/p:ReportAnalyzer=true',
+                    detail: 'Reports per-analyzer and per-source-generator execution time in the binlog. Shows exactly which Roslyn analyzers are slow and how much time each one adds to compilation. Useful when Csc/CoreCompile is a bottleneck.',
+                    picked: false,
+                    flag: '/p:ReportAnalyzer=true',
+                },
+                {
+                    label: '$(file-code) Embed Project Imports',
+                    description: 'ProjectImports=Embed',
+                    detail: 'Embeds all .csproj, .props, and .targets file contents into the binlog. This is the default for dotnet build -bl, but explicitly setting it ensures the binlog contains source files for property provenance tracing and the Preprocess view.',
+                    picked: false,
+                    blOption: 'ProjectImports=Embed',
+                },
+            ];
+
+            const selectedDiagnostics = await vscode.window.showQuickPick(diagnosticOptions, {
+                placeHolder: 'Enhanced diagnostics (optional — press OK to skip)',
+                canPickMany: true,
+                title: 'Select Enhanced Diagnostics',
+            });
+            // selectedDiagnostics is undefined if user presses Escape; [] if they press OK with nothing selected
+            if (selectedDiagnostics === undefined) { return; }
+
+            if (selectedDiagnostics.length > 0) {
+                telemetry.trackEnhancedDiagnostics(selectedDiagnostics.map(d =>
+                    (typeof d.label === 'string' ? d.label : '').replace(/\$\([^)]+\)\s*/g, '').trim()
+                ));
+            }
+
             const binlogPath = path.join(wsFolder, safeName);
             const buildArg = buildTarget ? `"${buildTarget}"` : '';
             const noRestoreFlag = skipRestore.value ? ' --no-restore' : '';
-            const cmd = `dotnet build ${buildArg}${noRestoreFlag} /bl:"${binlogPath}"`;
 
-            const terminal = vscode.window.createTerminal({ name: 'Build & Collect Binlog', cwd: wsFolder });
+            // Collect extra flags from selected diagnostics
+            const extraFlags: string[] = [];
+            const envVars: Record<string, string> = {};
+            let blOptions = '';
+            for (const opt of selectedDiagnostics) {
+                if (opt.flag) { extraFlags.push(opt.flag); }
+                if (opt.envVar) { envVars[opt.envVar.key] = opt.envVar.value; }
+                if (opt.blOption) { blOptions = opt.blOption; }
+            }
+
+            const blArg = blOptions
+                ? `/bl:"${binlogPath};${blOptions}"`
+                : `/bl:"${binlogPath}"`;
+            const extraStr = extraFlags.length > 0 ? ' ' + extraFlags.join(' ') : '';
+            const cmd = `dotnet build ${buildArg}${noRestoreFlag}${extraStr} ${blArg}`;
+
+            const terminalOptions: vscode.TerminalOptions = {
+                name: 'Build & Collect Binlog',
+                cwd: wsFolder,
+            };
+            if (Object.keys(envVars).length > 0) {
+                terminalOptions.env = envVars;
+            }
+            const terminal = vscode.window.createTerminal(terminalOptions);
             terminal.show();
             terminal.sendText(cmd);
 
@@ -612,7 +700,7 @@ export async function activate(context: vscode.ExtensionContext) {
             const startTime = Date.now();
             let lastSize = -1;
             let stableCount = 0;
-            const STABLE_NEEDED = 3; // 3 consecutive same-size readings (15s stable)
+            const STABLE_NEEDED = 2; // 2 consecutive same-size readings (4s stable)
             const pollInterval = setInterval(() => {
                 if (Date.now() - startTime > 600000) { clearInterval(pollInterval); return; }
                 try {
@@ -631,7 +719,7 @@ export async function activate(context: vscode.ExtensionContext) {
                         stableCount = 0;
                     }
                 } catch { /* file doesn't exist yet */ }
-            }, 5000);
+            }, 2000);
             const disposable = vscode.window.onDidCloseTerminal((closedTerminal) => {
                 if (closedTerminal === terminal) {
                     disposable.dispose();
@@ -1035,6 +1123,145 @@ export async function activate(context: vscode.ExtensionContext) {
         })
     );
 
+    // Command: Run BuildCheck Analysis — replay binlog with /check
+    context.subscriptions.push(
+        vscode.commands.registerCommand('binlog.runBuildCheck', async () => {
+            telemetry.trackCommand('runBuildCheck');
+            if (allBinlogPaths.length === 0) {
+                vscode.window.showWarningMessage('No binlog loaded. Load a binlog first.');
+                return;
+            }
+
+            const { supported, sdkVersion } = await detectSdkVersion();
+            if (!supported) {
+                const msg = sdkVersion === 'unknown'
+                    ? 'Could not detect .NET SDK. Make sure `dotnet` is in your PATH.'
+                    : `BuildCheck requires .NET SDK 9.0.100+. Your version: ${sdkVersion}`;
+                const action = await vscode.window.showWarningMessage(msg, 'Rebuild with -check');
+                if (action === 'Rebuild with -check') {
+                    vscode.commands.executeCommand('binlog.buildAndCollect');
+                }
+                return;
+            }
+
+            // Pick binlog if multiple
+            let binlogPath = allBinlogPaths[0];
+            if (allBinlogPaths.length > 1) {
+                const picked = await vscode.window.showQuickPick(
+                    allBinlogPaths.map(p => ({ label: path.basename(p), detail: p })),
+                    { placeHolder: 'Select binlog to analyze with BuildCheck' }
+                );
+                if (!picked) { return; }
+                binlogPath = picked.detail;
+            }
+
+            await vscode.window.withProgress(
+                { location: vscode.ProgressLocation.Notification, title: 'Running BuildCheck analysis...', cancellable: false },
+                async () => {
+                    const summary = await runBuildCheck(binlogPath);
+                    const collection = initBuildCheckDiagnostics();
+                    pushBuildCheckToProblemsPanel(summary, collection);
+
+                    telemetry.trackBuildCheck(summary.results.length, summary.sdkVersion, summary.durationMs);
+
+                    if (summary.results.length === 0) {
+                        vscode.window.showInformationMessage(
+                            `✅ BuildCheck passed — no issues found. (SDK ${summary.sdkVersion}, ${summary.durationMs}ms)`
+                        );
+                    } else {
+                        const errorCount = summary.results.filter(r => r.severity === 'error').length;
+                        const warnCount = summary.results.filter(r => r.severity === 'warning').length;
+                        const suggCount = summary.results.filter(r => r.severity === 'suggestion').length;
+                        const parts: string[] = [];
+                        if (errorCount > 0) { parts.push(`${errorCount} error(s)`); }
+                        if (warnCount > 0) { parts.push(`${warnCount} warning(s)`); }
+                        if (suggCount > 0) { parts.push(`${suggCount} suggestion(s)`); }
+                        const action = await vscode.window.showWarningMessage(
+                            `BuildCheck found ${parts.join(', ')}. Results in Problems panel.`,
+                            'Show Problems'
+                        );
+                        if (action === 'Show Problems') {
+                            vscode.commands.executeCommand('workbench.actions.view.problems');
+                        }
+                    }
+                }
+            );
+        })
+    );
+
+    // Command: Rebuild with Property Tracking
+    context.subscriptions.push(
+        vscode.commands.registerCommand('binlog.rebuildWithPropertyTracking', async () => {
+            telemetry.trackCommand('rebuildWithPropertyTracking');
+            const wsFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+            if (!wsFolder) {
+                vscode.window.showWarningMessage('No workspace folder open. Open a project folder first.');
+                return;
+            }
+
+            const config = vscode.workspace.getConfiguration('binlogAnalyzer');
+            const trackingLevel = config.get<number>('diagnostics.propertyTrackingLevel', 15);
+
+            // Find build target
+            const slnFiles = await vscode.workspace.findFiles('*.sln', null, 5);
+            const csprojFiles = await vscode.workspace.findFiles('**/*.csproj', '**/node_modules/**', 20);
+
+            let buildTarget: string | undefined;
+            if (slnFiles.length === 1) {
+                buildTarget = slnFiles[0].fsPath;
+            } else if (slnFiles.length > 1) {
+                const picked = await vscode.window.showQuickPick(
+                    slnFiles.map(f => ({ label: getFileName(f.fsPath), detail: f.fsPath, uri: f })),
+                    { placeHolder: 'Select a solution to build' }
+                );
+                if (!picked) { return; }
+                buildTarget = picked.uri.fsPath;
+            } else if (csprojFiles.length === 1) {
+                buildTarget = csprojFiles[0].fsPath;
+            } else if (csprojFiles.length > 1) {
+                const picked = await vscode.window.showQuickPick(
+                    csprojFiles.map(f => ({ label: getFileName(f.fsPath), detail: f.fsPath, uri: f })),
+                    { placeHolder: 'Select a project to build' }
+                );
+                if (!picked) { return; }
+                buildTarget = picked.uri.fsPath;
+            }
+
+            const binlogPath = await buildWithPropertyTracking(
+                wsFolder, buildTarget, 'build-tracked.binlog', trackingLevel
+            );
+
+            vscode.window.showInformationMessage(
+                `Building with MsBuildLogPropertyTracking=${trackingLevel}. ` +
+                `The binlog will auto-load when the build completes.`
+            );
+
+            // Poll for binlog completion, reuse the same stabilization logic
+            let lastSize = -1;
+            let stableCount = 0;
+            const STABLE_NEEDED = 3;
+            const startTime = Date.now();
+            const pollInterval = setInterval(() => {
+                if (Date.now() - startTime > 600000) { clearInterval(pollInterval); return; }
+                try {
+                    const stat = fs.statSync(binlogPath);
+                    if (stat.size > 0 && stat.size === lastSize) {
+                        stableCount++;
+                        if (stableCount >= STABLE_NEEDED) {
+                            clearInterval(pollInterval);
+                            handleBinlogOpen([binlogPath], context);
+                        }
+                    } else {
+                        stableCount = 0;
+                        lastSize = stat.size;
+                    }
+                } catch {
+                    // File doesn't exist yet
+                }
+            }, 5000);
+        })
+    );
+
     // About / update commands
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.checkForUpdates', async () => {
@@ -1183,6 +1410,26 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
     const treeClientPromise = startMcpClientForTree(allBinlogPaths).then(() => {
         treeDataProvider?.setLoading(false);
         updateStatusBar(); // Switch from spinning to final state
+
+        // Auto-run BuildCheck if setting is enabled
+        const diagConfig = vscode.workspace.getConfiguration('binlogAnalyzer');
+        if (diagConfig.get<boolean>('diagnostics.autoRunBuildCheck', false)) {
+            runBuildCheck(allBinlogPaths[0]).then(summary => {
+                if (summary.results.length > 0) {
+                    const collection = initBuildCheckDiagnostics();
+                    pushBuildCheckToProblemsPanel(summary, collection);
+                    const count = summary.results.length;
+                    vscode.window.showInformationMessage(
+                        `BuildCheck found ${count} issue(s). Results in Problems panel.`,
+                        'Show Problems'
+                    ).then(action => {
+                        if (action === 'Show Problems') {
+                            vscode.commands.executeCommand('workbench.actions.view.problems');
+                        }
+                    });
+                }
+            }).catch(() => {});
+        }
     }).catch((err) => {
         treeDataProvider?.setLoading(false);
         updateStatusBar();

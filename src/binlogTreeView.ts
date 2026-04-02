@@ -283,8 +283,22 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                 const msg = d.message || d.Message || d.text || '';
                 const file = d.file || d.File || d.projectFile || '';
                 const line = d.lineNumber || d.LineNumber || d.line || '';
+                const col = d.columnNumber || d.ColumnNumber || d.column || 0;
                 const label = code ? `${code}: ${msg}` : String(msg);
                 const loc = file ? `${this.extractFileName(String(file))}${line ? ':' + line : ''}` : '';
+                let command: vscode.Command | undefined;
+                if (file) {
+                    const lineNum = typeof line === 'number' ? line : parseInt(String(line), 10) || 0;
+                    const colNum = typeof col === 'number' ? col : parseInt(String(col), 10) || 0;
+                    command = {
+                        command: 'vscode.open',
+                        title: 'Open File',
+                        arguments: [
+                            vscode.Uri.file(String(file)),
+                            lineNum > 0 ? { selection: new vscode.Range(lineNum - 1, Math.max(0, colNum - 1), lineNum - 1, Math.max(0, colNum - 1)) } : undefined,
+                        ],
+                    };
+                }
                 items.push({
                     kind: 'diagnostic',
                     label,
@@ -292,6 +306,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                     tooltip: `${label}\n${file}${line ? ':' + line : ''}`,
                     icon: severity === 'error' ? 'error' : 'warning',
                     projectFile: file,
+                    command,
                 });
             }
         }
@@ -316,14 +331,29 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                     const msg = d.message || d.Message || d.text || '';
                     const file = d.file || d.File || d.projectFile || '';
                     const line = d.lineNumber || d.LineNumber || d.line || '';
+                    const col = d.columnNumber || d.ColumnNumber || d.column || 0;
                     const label = code ? `${code}: ${msg}` : String(msg);
                     const loc = file ? `${this.extractFileName(String(file))}${line ? ':' + line : ''}` : '';
+                    let command: vscode.Command | undefined;
+                    if (file) {
+                        const lineNum = typeof line === 'number' ? line : parseInt(String(line), 10) || 0;
+                        const colNum = typeof col === 'number' ? col : parseInt(String(col), 10) || 0;
+                        command = {
+                            command: 'vscode.open',
+                            title: 'Open File',
+                            arguments: [
+                                vscode.Uri.file(String(file)),
+                                lineNum > 0 ? { selection: new vscode.Range(lineNum - 1, Math.max(0, colNum - 1), lineNum - 1, Math.max(0, colNum - 1)) } : undefined,
+                            ],
+                        };
+                    }
                     const item: TreeNodeData = {
                         kind: 'diagnostic',
                         label,
                         description: loc,
                         tooltip: `${label}\n${file}${line ? ':' + line : ''}`,
                         icon: this.isError(sev) ? 'error' : 'warning',
+                        command,
                     };
                     if (this.isError(sev)) {
                         errors.push(item);
@@ -362,13 +392,39 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             const task = item.taskName || item.TaskName || '';
             const nodeType = item.nodeType || item.NodeType || '';
             const ctx = [projName, target, task].filter(Boolean).join(' → ');
+
+            // Try to extract a source file path and line number from the message
+            // Pattern: "Source: C:\path\to\file.targets (25,5)" or just "C:\path\to\file.ext(12,3)"
+            const sourceMatch = msg.match(/Source:\s*(.+?)\s*\((\d+),\s*(\d+)\)/i)
+                || msg.match(/(?:^|\s)((?:[A-Za-z]:\\|\/)[^\s(]+\.(?:targets|props|csproj|vbproj|fsproj|cs|vb|fs|xml))\s*\((\d+),\s*(\d+)\)/i);
+            const filePath = item.file || item.File || (sourceMatch ? sourceMatch[1].trim() : '');
+            const lineNum = item.lineNumber || item.LineNumber || (sourceMatch ? parseInt(sourceMatch[2], 10) : 0);
+            const colNum = item.columnNumber || item.ColumnNumber || (sourceMatch ? parseInt(sourceMatch[3], 10) : 0);
+
+            let command: vscode.Command | undefined;
+            if (filePath) {
+                command = {
+                    command: 'vscode.open',
+                    title: 'Open File',
+                    arguments: [
+                        vscode.Uri.file(filePath),
+                        {
+                            selection: lineNum > 0
+                                ? new vscode.Range(lineNum - 1, Math.max(0, colNum - 1), lineNum - 1, Math.max(0, colNum - 1))
+                                : undefined,
+                        },
+                    ],
+                };
+            }
+
             return {
                 kind: 'search-result' as NodeKind,
                 label: msg,
                 description: ctx,
-                tooltip: `[${nodeType}] ${ctx}\n\n${msg}`,
+                tooltip: `[${nodeType}] ${ctx}\n\n${msg}` + (filePath ? `\n\n📂 Click to open: ${filePath}${lineNum > 0 ? `:${lineNum}` : ''}` : ''),
                 icon: nodeType === 'Error' ? 'error' : nodeType === 'Warning' ? 'warning' : 'note',
                 projectFile: proj,
+                command,
             };
         });
         this._onDidChangeTreeData.fire(undefined);
@@ -613,33 +669,44 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                 telemetry.trackTreeExpand('project');
                 return this.fetchProjectTargets(element);
             case 'target':
+                telemetry.trackTreeExpand('target');
                 return this.fetchTargetTasks(element);
             case 'task':
+                telemetry.trackTreeExpand('task');
                 return this.fetchTaskDetails(element);
             case 'root-errors':
+                telemetry.trackTreeExpand('root-errors');
                 return this.fetchDiagnostics('Error');
             case 'root-warnings':
+                telemetry.trackTreeExpand('root-warnings');
                 return this.fetchDiagnostics('Warning');
             case 'root-perf':
                 telemetry.trackTreeExpand('root-perf');
                 return this.getPerfChildren();
             case 'perf-targets':
+                telemetry.trackTreeExpand('perf-targets');
                 return this.fetchExpensiveTargets();
             case 'perf-tasks':
+                telemetry.trackTreeExpand('perf-tasks');
                 return this.fetchExpensiveTasks();
             case 'perf-analyzers':
+                telemetry.trackTreeExpand('perf-analyzers');
                 return this.fetchExpensiveAnalyzers();
 
             case 'root-evaluations':
                 telemetry.trackTreeExpand('root-evaluations');
                 return this.fetchEvaluations();
             case 'evaluation':
+                telemetry.trackTreeExpand('evaluation');
                 return this.getEvaluationChildren(element);
             case 'eval-properties':
+                telemetry.trackTreeExpand('eval-properties');
                 return this.fetchEvalProperties(element);
             case 'eval-global-props':
+                telemetry.trackTreeExpand('eval-global-props');
                 return this.fetchEvalGlobalProps(element);
             case 'root-search': {
+                telemetry.trackTreeExpand('root-search');
                 if (!this.searchResults || this.searchResults.length === 0) {
                     return [this.makeInfoItem('No results', 'info')];
                 }

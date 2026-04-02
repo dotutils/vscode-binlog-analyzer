@@ -87,6 +87,26 @@ export function trackTreeExpand(nodeKind: string): void {
     reporter?.sendTelemetryEvent('treeExpand', { nodeKind });
 }
 
+/** Track tree item click/selection */
+export function trackTreeClick(nodeKind: string): void {
+    reporter?.sendTelemetryEvent('treeClick', { nodeKind });
+}
+
+/** Track BuildCheck run */
+export function trackBuildCheck(resultCount: number, sdkVersion: string, durationMs: number): void {
+    reporter?.sendTelemetryEvent('buildCheck', { sdkVersion }, { resultCount, durationMs });
+}
+
+/** Track enhanced diagnostics selection in Build & Collect */
+export function trackEnhancedDiagnostics(options: string[]): void {
+    reporter?.sendTelemetryEvent('enhancedDiagnostics', { options: options.join(',') });
+}
+
+/** Track file open from tree view */
+export function trackFileOpen(source: string): void {
+    reporter?.sendTelemetryEvent('fileOpen', { source });
+}
+
 /** Track click-to-analyze usage */
 export function trackAnalyzeInChat(category: string): void {
     reporter?.sendTelemetryEvent('analyzeInChat', { category });
