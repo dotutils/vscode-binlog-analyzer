@@ -85,7 +85,7 @@ export async function activate(context: vscode.ExtensionContext) {
         treeView.onDidChangeSelection(e => {
             if (e.selection.length > 0) {
                 const item = e.selection[0];
-                telemetry.trackTreeClick(item.nodeKind || 'unknown');
+                telemetry.trackTreeSelect(item.nodeKind || 'unknown');
             }
         })
     );
@@ -1388,6 +1388,8 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
     telemetry.trackBinlogLoad(binlogPaths.length, openedViaUri ? 'uri' : 'file');
     allBinlogPaths = [...binlogPaths];
     currentBinlogPath = binlogPaths[0];
+    // Capture a local snapshot to detect stale callbacks
+    const loadedPaths = [...binlogPaths];
     // Persist binlog paths in globalState keyed by workspace URI (survives workspace changes)
     context.globalState.update(binlogStateKey(), allBinlogPaths);
     chatParticipant?.setBinlogPaths(binlogPaths);
@@ -1422,15 +1424,18 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
 
     // Start MCP config and tree client concurrently — configureMcpServer writes settings
     // for Copilot Chat while startMcpClientForTree spawns the private MCP subprocess
-    const mcpConfigPromise = configureMcpServer(allBinlogPaths, config);
-    const treeClientPromise = startMcpClientForTree(allBinlogPaths).then(() => {
+    const mcpConfigPromise = configureMcpServer(loadedPaths, config);
+    const treeClientPromise = startMcpClientForTree(loadedPaths).then(() => {
+        // Guard against stale callback — a newer load may have replaced allBinlogPaths
+        if (allBinlogPaths[0] !== loadedPaths[0]) { return; }
         treeDataProvider?.setLoading(false);
         updateStatusBar(); // Switch from spinning to final state
 
         // Auto-run BuildCheck if setting is enabled
         const diagConfig = vscode.workspace.getConfiguration('binlogAnalyzer');
         if (diagConfig.get<boolean>('diagnostics.autoRunBuildCheck', false)) {
-            runBuildCheck(allBinlogPaths[0]).then(summary => {
+            runBuildCheck(loadedPaths[0]).then(summary => {
+                if (allBinlogPaths[0] !== loadedPaths[0]) { return; }
                 if (summary.error || summary.results.length === 0) { return; }
                 const collection = initBuildCheckDiagnostics();
                 pushBuildCheckToProblemsPanel(summary, collection);
@@ -1446,6 +1451,7 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
             }).catch(() => {});
         }
     }).catch((err) => {
+        if (allBinlogPaths[0] !== loadedPaths[0]) { return; }
         treeDataProvider?.setLoading(false);
         updateStatusBar();
         telemetry.trackMcpError('startMcpClient', String(err));

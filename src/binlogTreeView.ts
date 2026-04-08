@@ -394,9 +394,9 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             const ctx = [projName, target, task].filter(Boolean).join(' → ');
 
             // Try to extract a source file path and line number from the message
-            // Pattern: "Source: C:\path\to\file.targets (25,5)" or just "C:\path\to\file.ext(12,3)"
-            const sourceMatch = msg.match(/Source:\s*(.+?)\s*\((\d+),\s*(\d+)\)/i)
-                || msg.match(/(?:^|\s)((?:[A-Za-z]:\\|\/)[^\s(]+\.(?:targets|props|csproj|vbproj|fsproj|cs|vb|fs|xml))\s*\((\d+),\s*(\d+)\)/i);
+            // Pattern: "Source: C:\path with spaces\file.targets (25,5)"
+            const sourceMatch = msg.match(/Source:\s*(.+)\s+\((\d+),\s*(\d+)\)/i)
+                || msg.match(/((?:[A-Za-z]:\\|\/)\S.*?\.(?:targets|props|csproj|vbproj|fsproj|cs|vb|fs|xml))\s*\((\d+),\s*(\d+)\)/i);
             const filePath = item.file || item.File || (sourceMatch ? sourceMatch[1].trim() : '');
             const lineNum = item.lineNumber || item.LineNumber || (sourceMatch ? parseInt(sourceMatch[2], 10) : 0);
             const colNum = item.columnNumber || item.ColumnNumber || (sourceMatch ? parseInt(sourceMatch[3], 10) : 0);
@@ -663,7 +663,6 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             case 'root-files':
                 return this.getFileChildren();
             case 'root-projects':
-                telemetry.trackTreeExpand('root-projects');
                 return this.fetchProjects();
             case 'project':
                 telemetry.trackTreeExpand('project');
@@ -675,26 +674,19 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                 telemetry.trackTreeExpand('task');
                 return this.fetchTaskDetails(element);
             case 'root-errors':
-                telemetry.trackTreeExpand('root-errors');
                 return this.fetchDiagnostics('Error');
             case 'root-warnings':
-                telemetry.trackTreeExpand('root-warnings');
                 return this.fetchDiagnostics('Warning');
             case 'root-perf':
-                telemetry.trackTreeExpand('root-perf');
                 return this.getPerfChildren();
             case 'perf-targets':
-                telemetry.trackTreeExpand('perf-targets');
                 return this.fetchExpensiveTargets();
             case 'perf-tasks':
-                telemetry.trackTreeExpand('perf-tasks');
                 return this.fetchExpensiveTasks();
             case 'perf-analyzers':
-                telemetry.trackTreeExpand('perf-analyzers');
                 return this.fetchExpensiveAnalyzers();
 
             case 'root-evaluations':
-                telemetry.trackTreeExpand('root-evaluations');
                 return this.fetchEvaluations();
             case 'evaluation':
                 telemetry.trackTreeExpand('evaluation');
@@ -706,7 +698,6 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                 telemetry.trackTreeExpand('eval-global-props');
                 return this.fetchEvalGlobalProps(element);
             case 'root-search': {
-                telemetry.trackTreeExpand('root-search');
                 if (!this.searchResults || this.searchResults.length === 0) {
                     return [this.makeInfoItem('No results', 'info')];
                 }
@@ -759,6 +750,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         if (this.projectsCache) {
             return this.projectsCache.map(d => this.dataToItem(d));
         }
+        telemetry.trackTreeExpand('root-projects');
         // Fallback if not prefetched
         return this.callMcpTool('binlog_projects', {}, 'root-projects', (text) => {
             const data = this.tryParseJson(text);
@@ -814,6 +806,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         if (this.targetsCache) {
             return this.targetsCache.map(d => this.dataToItem(d));
         }
+        telemetry.trackTreeExpand('perf-targets');
         return this.callMcpTool('binlog_expensive_targets', { top_number: 10 }, 'perf-targets', (text) => {
             const items = this.parsePerfItems(text, 'flame');
             this.targetsCache = items;
@@ -825,6 +818,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         if (this.tasksCache) {
             return this.tasksCache.map(d => this.dataToItem(d));
         }
+        telemetry.trackTreeExpand('perf-tasks');
         return this.callMcpTool('binlog_expensive_tasks', { top_number: 10 }, 'perf-tasks', (text) => {
             const items = this.parsePerfItems(text, 'tools');
             this.tasksCache = items;
@@ -839,6 +833,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             }
             return this.analyzersCache.map(d => this.dataToItem(d));
         }
+        telemetry.trackTreeExpand('perf-analyzers');
 
         if (!this.mcpClient) {
             return [this.makeInfoItem('MCP server not connected', 'info')];
@@ -1421,6 +1416,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         if (this.evaluationsCache) {
             return this.evaluationsCache.map(d => this.dataToItem(d));
         }
+        telemetry.trackTreeExpand('root-evaluations');
         if (!this.mcpClient) {
             return [this.makeInfoItem('MCP server not connected', 'info')];
         }

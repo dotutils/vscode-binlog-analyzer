@@ -87,9 +87,9 @@ export function trackTreeExpand(nodeKind: string): void {
     reporter?.sendTelemetryEvent('treeExpand', { nodeKind });
 }
 
-/** Track tree item click/selection */
-export function trackTreeClick(nodeKind: string): void {
-    reporter?.sendTelemetryEvent('treeClick', { nodeKind });
+/** Track tree item selection (click, keyboard navigation, focus change) */
+export function trackTreeSelect(nodeKind: string): void {
+    reporter?.sendTelemetryEvent('treeSelect', { nodeKind });
 }
 
 /** Track BuildCheck run */

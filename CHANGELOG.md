@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.16 (Preview)
+
+### Fixed
+- **Stale async race** in `handleBinlogOpen` — captured local snapshot of loaded binlog paths so async callbacks from a superseded load are ignored
+- **Inflated telemetry** — `trackTreeExpand` now only fires on actual MCP fetches, not cache hits
+- **Telemetry event renamed** — `treeClick` → `treeSelect` to accurately reflect that it fires on selection changes (keyboard navigation, not just clicks)
+- **Search result regex** — improved path extraction to handle file paths with spaces (e.g., `Source: C:\My Projects\file.targets (25,5)`)
+
 ## 0.10.15 (Preview)
 
 ### Added
