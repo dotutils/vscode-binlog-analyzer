@@ -600,6 +600,13 @@ export async function activate(context: vscode.ExtensionContext) {
                 prompt: 'Binlog file name',
                 value: 'msbuild.binlog',
                 valueSelection: [0, 7], // select "msbuild" part for easy renaming
+                validateInput: (value) => {
+                    if (!value) { return 'Name is required'; }
+                    if (/[;|&`$\\/<>]|\.\./.test(value)) {
+                        return 'Name cannot contain special characters (;|&`$\\/<>) or ".."';
+                    }
+                    return undefined;
+                },
             });
             if (!binlogName) { return; }
             const safeName = binlogName.endsWith('.binlog') ? binlogName : `${binlogName}.binlog`;
@@ -1159,10 +1166,16 @@ export async function activate(context: vscode.ExtensionContext) {
                 { location: vscode.ProgressLocation.Notification, title: 'Running BuildCheck analysis...', cancellable: false },
                 async () => {
                     const summary = await runBuildCheck(binlogPath);
-                    const collection = initBuildCheckDiagnostics();
-                    pushBuildCheckToProblemsPanel(summary, collection);
 
                     telemetry.trackBuildCheck(summary.results.length, summary.sdkVersion, summary.durationMs);
+
+                    if (summary.error) {
+                        vscode.window.showErrorMessage(`BuildCheck failed: ${summary.error}`);
+                        return;
+                    }
+
+                    const collection = initBuildCheckDiagnostics();
+                    pushBuildCheckToProblemsPanel(summary, collection);
 
                     if (summary.results.length === 0) {
                         vscode.window.showInformationMessage(
@@ -1239,7 +1252,7 @@ export async function activate(context: vscode.ExtensionContext) {
             // Poll for binlog completion, reuse the same stabilization logic
             let lastSize = -1;
             let stableCount = 0;
-            const STABLE_NEEDED = 3;
+            const STABLE_NEEDED = 2;
             const startTime = Date.now();
             const pollInterval = setInterval(() => {
                 if (Date.now() - startTime > 600000) { clearInterval(pollInterval); return; }
@@ -1249,16 +1262,19 @@ export async function activate(context: vscode.ExtensionContext) {
                         stableCount++;
                         if (stableCount >= STABLE_NEEDED) {
                             clearInterval(pollInterval);
-                            handleBinlogOpen([binlogPath], context);
+                            void handleBinlogOpen([binlogPath], context).catch(() => {});
                         }
                     } else {
                         stableCount = 0;
                         lastSize = stat.size;
                     }
-                } catch {
-                    // File doesn't exist yet
+                } catch (e: any) {
+                    if (e?.code !== 'ENOENT') {
+                        clearInterval(pollInterval);
+                        vscode.window.showErrorMessage(`Error checking binlog: ${e?.message || e}`);
+                    }
                 }
-            }, 5000);
+            }, 2000);
         })
     );
 
@@ -1415,19 +1431,18 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
         const diagConfig = vscode.workspace.getConfiguration('binlogAnalyzer');
         if (diagConfig.get<boolean>('diagnostics.autoRunBuildCheck', false)) {
             runBuildCheck(allBinlogPaths[0]).then(summary => {
-                if (summary.results.length > 0) {
-                    const collection = initBuildCheckDiagnostics();
-                    pushBuildCheckToProblemsPanel(summary, collection);
-                    const count = summary.results.length;
-                    vscode.window.showInformationMessage(
-                        `BuildCheck found ${count} issue(s). Results in Problems panel.`,
-                        'Show Problems'
-                    ).then(action => {
-                        if (action === 'Show Problems') {
-                            vscode.commands.executeCommand('workbench.actions.view.problems');
-                        }
-                    });
-                }
+                if (summary.error || summary.results.length === 0) { return; }
+                const collection = initBuildCheckDiagnostics();
+                pushBuildCheckToProblemsPanel(summary, collection);
+                const count = summary.results.length;
+                vscode.window.showInformationMessage(
+                    `BuildCheck found ${count} issue(s). Results in Problems panel.`,
+                    'Show Problems'
+                ).then(action => {
+                    if (action === 'Show Problems') {
+                        vscode.commands.executeCommand('workbench.actions.view.problems');
+                    }
+                });
             }).catch(() => {});
         }
     }).catch((err) => {

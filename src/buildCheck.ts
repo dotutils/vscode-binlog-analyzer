@@ -18,6 +18,7 @@ export interface BuildCheckSummary {
     sdkVersion: string;
     binlogPath: string;
     durationMs: number;
+    error?: string;
 }
 
 export interface PropertyTrackingLevel {
@@ -47,7 +48,11 @@ export async function detectSdkVersion(): Promise<{ supported: boolean; sdkVersi
                 resolve({ supported: false, sdkVersion: 'unknown' });
                 return;
             }
-            const version = stdout.trim();
+            const version = (stdout || '').split(/\r?\n/)[0].trim();
+            if (!version) {
+                resolve({ supported: false, sdkVersion: 'unknown' });
+                return;
+            }
             const parts = version.split('.');
             const major = parseInt(parts[0], 10) || 0;
             const minor = parseInt(parts[1], 10) || 0;
@@ -68,37 +73,59 @@ export async function runBuildCheck(binlogPath: string): Promise<BuildCheckSumma
             sdkVersion,
             binlogPath,
             durationMs: Date.now() - start,
+            error: sdkVersion === 'unknown' ? 'dotnet not found' : `SDK ${sdkVersion} < 9.0.100`,
         };
     }
 
     return new Promise((resolve) => {
+        let resolved = false;
+        const finish = (summary: BuildCheckSummary) => {
+            if (resolved) { return; }
+            resolved = true;
+            clearTimeout(timer);
+            resolve(summary);
+        };
+
         const args = ['build', binlogPath, '/check'];
         const proc = cp.spawn('dotnet', args, {
             cwd: path.dirname(binlogPath),
-            shell: true,
-            timeout: 120000,
         });
 
         let output = '';
         proc.stdout?.on('data', (d: Buffer) => { output += d.toString(); });
         proc.stderr?.on('data', (d: Buffer) => { output += d.toString(); });
 
-        proc.on('close', () => {
-            const results = parseBuildCheckOutput(output);
-            resolve({
-                results,
-                sdkVersion,
-                binlogPath,
-                durationMs: Date.now() - start,
-            });
-        });
-
-        proc.on('error', () => {
-            resolve({
+        const timer = setTimeout(() => {
+            proc.kill();
+            finish({
                 results: [],
                 sdkVersion,
                 binlogPath,
                 durationMs: Date.now() - start,
+                error: 'BuildCheck timed out after 120 seconds',
+            });
+        }, 120000);
+
+        proc.on('close', (code) => {
+            const results = parseBuildCheckOutput(output);
+            finish({
+                results,
+                sdkVersion,
+                binlogPath,
+                durationMs: Date.now() - start,
+                error: code !== 0 && results.length === 0
+                    ? `dotnet build exited with code ${code}`
+                    : undefined,
+            });
+        });
+
+        proc.on('error', (err) => {
+            finish({
+                results: [],
+                sdkVersion,
+                binlogPath,
+                durationMs: Date.now() - start,
+                error: `Failed to spawn dotnet: ${err.message}`,
             });
         });
     });
@@ -106,45 +133,59 @@ export async function runBuildCheck(binlogPath: string): Promise<BuildCheckSumma
 
 function parseBuildCheckOutput(output: string): BuildCheckResult[] {
     const results: BuildCheckResult[] = [];
-    // Match MSBuild diagnostic output patterns:
-    // path\to\file.csproj(12,5): warning BC0102: message
-    // path\to\file.csproj : warning BC0102: message
-    // warning BC0102: message
-    const lineRegex = /^(.+?)\((\d+),(\d+)\)\s*:\s*(error|warning|message)\s+(BC\d+)\s*:\s*(.+)$/gm;
-    const noLocRegex = /^(.+?)\s*:\s*(error|warning|message)\s+(BC\d+)\s*:\s*(.+)$/gm;
-    const bareRegex = /^\s*(error|warning|message)\s+(BC\d+)\s*:\s*(.+)$/gm;
+    const seen = new Set<string>();
 
-    let match;
-    while ((match = lineRegex.exec(output)) !== null) {
-        results.push({
-            file: match[1].trim(),
-            line: parseInt(match[2], 10),
-            column: parseInt(match[3], 10),
-            severity: mapSeverity(match[4]),
-            code: match[5],
-            message: match[6].trim(),
-        });
-    }
+    for (const line of output.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed) { continue; }
 
-    while ((match = noLocRegex.exec(output)) !== null) {
-        const code = match[3];
-        if (results.some(r => r.code === code && r.file === match![1].trim())) { continue; }
-        results.push({
-            file: match[1].trim(),
-            severity: mapSeverity(match[2]),
-            code,
-            message: match[4].trim(),
-        });
-    }
+        let result: BuildCheckResult | null = null;
 
-    while ((match = bareRegex.exec(output)) !== null) {
-        const code = match[2];
-        if (results.some(r => r.code === code)) { continue; }
-        results.push({
-            severity: mapSeverity(match[1]),
-            code,
-            message: match[3].trim(),
-        });
+        // Pattern 1: file(line,col): severity BC####: message
+        const locMatch = trimmed.match(/^(.+?)\((\d+),(\d+)\)\s*:\s*(error|warning|message)\s+(BC\d+)\s*:\s*(.+)$/i);
+        if (locMatch) {
+            result = {
+                file: locMatch[1].trim(),
+                line: parseInt(locMatch[2], 10),
+                column: parseInt(locMatch[3], 10),
+                severity: mapSeverity(locMatch[4]),
+                code: locMatch[5],
+                message: locMatch[6].trim(),
+            };
+        }
+
+        // Pattern 2: file : severity BC####: message (no location — match from right to avoid drive letter colon)
+        if (!result) {
+            const noLocMatch = trimmed.match(/^(.+?)\s+:\s*(error|warning|message)\s+(BC\d+)\s*:\s*(.+)$/i);
+            if (noLocMatch) {
+                result = {
+                    file: noLocMatch[1].trim(),
+                    severity: mapSeverity(noLocMatch[2]),
+                    code: noLocMatch[3],
+                    message: noLocMatch[4].trim(),
+                };
+            }
+        }
+
+        // Pattern 3: severity BC####: message (bare, no file)
+        if (!result) {
+            const bareMatch = trimmed.match(/^\s*(error|warning|message)\s+(BC\d+)\s*:\s*(.+)$/i);
+            if (bareMatch) {
+                result = {
+                    severity: mapSeverity(bareMatch[1]),
+                    code: bareMatch[2],
+                    message: bareMatch[3].trim(),
+                };
+            }
+        }
+
+        if (result) {
+            const key = `${result.code}|${result.file || ''}|${result.line || 0}|${result.column || 0}|${result.message}`;
+            if (!seen.has(key)) {
+                seen.add(key);
+                results.push(result);
+            }
+        }
     }
 
     return results;
@@ -190,7 +231,7 @@ export function pushBuildCheckToProblemsPanel(
         const col = Math.max(0, (result.column || 1) - 1);
 
         const diag = new vscode.Diagnostic(
-            new vscode.Range(line, col, line, col + 100),
+            new vscode.Range(line, col, line, col + 1),
             `${result.message}`,
             severity
         );
@@ -207,6 +248,10 @@ export function pushBuildCheckToProblemsPanel(
 }
 
 export function formatBuildCheckForChat(summary: BuildCheckSummary): string {
+    if (summary.error) {
+        return `⚠️ **BuildCheck failed:** ${summary.error}\n`;
+    }
+
     if (summary.results.length === 0) {
         return '✅ **BuildCheck passed** — no issues found.\n';
     }
