@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
+import * as fs from 'fs';
 import { McpClient } from './mcpClient';
 import * as telemetry from './telemetry';
 
@@ -297,14 +299,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                 if (file) {
                     const lineNum = typeof line === 'number' ? line : parseInt(String(line), 10) || 0;
                     const colNum = typeof col === 'number' ? col : parseInt(String(col), 10) || 0;
-                    command = {
-                        command: 'vscode.open',
-                        title: 'Open File',
-                        arguments: [
-                            vscode.Uri.file(String(file)),
-                            lineNum > 0 ? { selection: new vscode.Range(lineNum - 1, Math.max(0, colNum - 1), lineNum - 1, Math.max(0, colNum - 1)) } : undefined,
-                        ],
-                    };
+                    command = this.makeOpenCommand(String(file), lineNum, colNum);
                 }
                 items.push({
                     kind: 'diagnostic',
@@ -345,14 +340,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                     if (file) {
                         const lineNum = typeof line === 'number' ? line : parseInt(String(line), 10) || 0;
                         const colNum = typeof col === 'number' ? col : parseInt(String(col), 10) || 0;
-                        command = {
-                            command: 'vscode.open',
-                            title: 'Open File',
-                            arguments: [
-                                vscode.Uri.file(String(file)),
-                                lineNum > 0 ? { selection: new vscode.Range(lineNum - 1, Math.max(0, colNum - 1), lineNum - 1, Math.max(0, colNum - 1)) } : undefined,
-                            ],
-                        };
+                        command = this.makeOpenCommand(String(file), lineNum, colNum);
                     }
                     const item: TreeNodeData = {
                         kind: 'diagnostic',
@@ -410,18 +398,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
 
             let command: vscode.Command | undefined;
             if (filePath) {
-                command = {
-                    command: 'vscode.open',
-                    title: 'Open File',
-                    arguments: [
-                        vscode.Uri.file(filePath),
-                        {
-                            selection: lineNum > 0
-                                ? new vscode.Range(lineNum - 1, Math.max(0, colNum - 1), lineNum - 1, Math.max(0, colNum - 1))
-                                : undefined,
-                        },
-                    ],
-                };
+                command = this.makeOpenCommand(filePath, lineNum, colNum);
             }
 
             return {
@@ -1661,14 +1638,62 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         return path.split(/[/\\]/).pop() || path;
     }
 
-    private extractDirectory(path: string): string {
-        const parts = path.replace(/\\/g, '/').split('/');
+    private extractDirectory(filePath: string): string {
+        const parts = filePath.replace(/\\/g, '/').split('/');
         if (parts.length <= 1) { return ''; }
         parts.pop(); // remove filename
         // Show last 2-3 path segments to keep it readable
         const segments = parts.filter(Boolean);
         if (segments.length <= 3) { return segments.join('/'); }
         return '…/' + segments.slice(-3).join('/');
+    }
+
+    /**
+     * Resolve a file path from binlog data to a local file that exists.
+     * Returns the resolved path or null if the file can't be found locally.
+     * Handles binlogs built on different machines (CI, coworker).
+     */
+    private resolveLocalPath(filePath: string): string | null {
+        if (!filePath) { return null; }
+        // 1. Exact path exists
+        if (path.isAbsolute(filePath) && fs.existsSync(filePath)) {
+            return filePath;
+        }
+        const fileName = path.basename(filePath);
+        const relative = filePath.replace(/^[a-zA-Z]:/, '').replace(/^[\\/]+/, '');
+        // 2. Try workspace folders
+        const folders = vscode.workspace.workspaceFolders;
+        if (folders) {
+            for (const folder of folders) {
+                const byRelative = path.join(folder.uri.fsPath, relative);
+                if (fs.existsSync(byRelative)) { return byRelative; }
+                const byName = path.join(folder.uri.fsPath, fileName);
+                if (fs.existsSync(byName)) { return byName; }
+            }
+        }
+        // 3. Try relative to binlog directory
+        if (this.binlogPaths.length > 0) {
+            const binlogDir = path.dirname(this.binlogPaths[0]);
+            const nearBinlog = path.join(binlogDir, fileName);
+            if (fs.existsSync(nearBinlog)) { return nearBinlog; }
+        }
+        return null;
+    }
+
+    /** Build a vscode.open command for a file path, resolving against workspace. */
+    private makeOpenCommand(filePath: string, lineNum: number, colNum: number): vscode.Command | undefined {
+        const resolved = this.resolveLocalPath(filePath);
+        if (!resolved) { return undefined; }
+        return {
+            command: 'vscode.open',
+            title: 'Open File',
+            arguments: [
+                vscode.Uri.file(resolved),
+                lineNum > 0
+                    ? { selection: new vscode.Range(lineNum - 1, Math.max(0, colNum - 1), lineNum - 1, Math.max(0, colNum - 1)) }
+                    : undefined,
+            ],
+        };
     }
 
     /** Get candidate workspace root folders from binlog project paths */
