@@ -1423,9 +1423,6 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
     const config = vscode.workspace.getConfiguration('binlogAnalyzer');
     const autoLoad = config.get<boolean>('autoLoad', true);
 
-    const fileName = getFileName(binlogPaths[0]);
-    const multi = binlogPaths.length > 1 ? ` (+${binlogPaths.length - 1} more)` : '';
-
     // Configure MCP server for Copilot Chat and start tree client in parallel
     // cleanupBinlogInstructions is fire-and-forget (non-critical cleanup of old files)
     cleanupBinlogInstructions().catch(() => {});
@@ -1473,7 +1470,9 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
 
     // Only open chat and steal focus when user explicitly loaded a binlog
     if (interactive) {
-        const chatMessage = `@binlog Binlog "${fileName}"${multi} is loaded. What would you like to analyze?`;
+        // Trigger the @binlog /summary slash command directly so the model
+        // calls binlog_overview instead of politely asking what to do.
+        const chatMessage = `@binlog /summary`;
         setTimeout(() => {
             // Use chat.new to avoid reusing a previous chat session with stale tool-call history
             vscode.commands.executeCommand('workbench.action.chat.new', chatMessage)
