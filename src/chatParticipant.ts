@@ -235,11 +235,15 @@ export class BinlogChatParticipant {
         if (this.binlogPaths.length === 0) {
             parts.push('<binlogs>none loaded</binlogs>');
         } else if (this.binlogPaths.length === 1) {
-            // Single binlog → MCP client auto-injects binlog_file, so we don't
-            // need to repeat the path; saves tokens and avoids hallucinated
-            // path echoes.
-            const name = this.binlogPaths[0].split(/[/\\]/).pop();
-            parts.push(`<binlogs count="1" active="${escapeAttr(name || '')}"/>`);
+            // Single binlog: surface the absolute path. The MCP client
+            // auto-injects when binlog_file is omitted, but if the model
+            // *does* pass a value (e.g. echoing the filename it sees here)
+            // it must be the absolute path or the MCP server can't resolve it.
+            parts.push(
+                `<binlogs count="1">\n  <binlog path="${escapeAttr(this.binlogPaths[0])}"/>\n</binlogs>\n` +
+                `When calling tools you may omit binlog_file (the extension fills it in) ` +
+                `or pass the full path verbatim — never a bare filename.`,
+            );
         } else {
             // Multi-binlog → MCP throws if binlog_file is omitted, so the
             // model MUST learn the absolute paths and labels.
