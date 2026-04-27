@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { McpClient } from './mcpClient';
+import { BinlogCodeActionProvider } from './codeActions';
 
 interface BinlogDiagnostic {
     file: string;
@@ -31,8 +32,8 @@ export class BinlogDiagnosticsProvider implements vscode.Disposable {
         // Register code action provider for quick fixes on binlog diagnostics
         this.codeActionProvider = vscode.languages.registerCodeActionsProvider(
             { scheme: 'file' },
-            new BinlogCodeActionProvider(this.diagnosticCollection),
-            { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }
+            new BinlogCodeActionProvider(),
+            { providedCodeActionKinds: BinlogCodeActionProvider.providedCodeActionKinds }
         );
     }
 
@@ -209,52 +210,5 @@ export class BinlogDiagnosticsProvider implements vscode.Disposable {
         this.diagnosticCollection.dispose();
         this.decorationType.dispose();
         this.codeActionProvider?.dispose();
-    }
-}
-
-/** Provides Quick Fix code actions for binlog diagnostics */
-class BinlogCodeActionProvider implements vscode.CodeActionProvider {
-    constructor(private readonly diagnosticCollection: vscode.DiagnosticCollection) {}
-
-    provideCodeActions(
-        document: vscode.TextDocument,
-        range: vscode.Range,
-        context: vscode.CodeActionContext,
-    ): vscode.CodeAction[] {
-        const actions: vscode.CodeAction[] = [];
-        const binlogDiags = context.diagnostics.filter(d => d.source === 'MSBuild Binlog');
-
-        for (const diag of binlogDiags) {
-            // "Fix with Copilot" action
-            const fixAction = new vscode.CodeAction(
-                `$(sparkle) Fix "${diag.code}" with Copilot`,
-                vscode.CodeActionKind.QuickFix
-            );
-            fixAction.diagnostics = [diag];
-            fixAction.command = {
-                command: 'workbench.action.chat.open',
-                title: 'Fix with Copilot',
-                arguments: [`@binlog Fix this build error: ${diag.code}: ${diag.message} in ${document.uri.fsPath}:${diag.range.start.line + 1}`],
-            };
-            actions.push(fixAction);
-
-            // "Suppress with NoWarn" action for warnings
-            if (diag.severity === vscode.DiagnosticSeverity.Warning && diag.code) {
-                const suppressAction = new vscode.CodeAction(
-                    `Suppress ${diag.code} with #pragma`,
-                    vscode.CodeActionKind.QuickFix
-                );
-                suppressAction.diagnostics = [diag];
-                const edit = new vscode.WorkspaceEdit();
-                const lineStart = new vscode.Position(diag.range.start.line, 0);
-                const indent = document.lineAt(diag.range.start.line).text.match(/^\s*/)?.[0] || '';
-                edit.insert(document.uri, lineStart,
-                    `${indent}#pragma warning disable ${diag.code} // Suppressed: from binlog analysis\n`);
-                suppressAction.edit = edit;
-                actions.push(suppressAction);
-            }
-        }
-
-        return actions;
     }
 }

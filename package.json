@@ -41,7 +41,7 @@
     "onView:binlogExplorer",
     "onCustomEditor:binlog-analyzer.binlogViewer"
   ],
-  "main": "./out/extension.js",
+  "main": "./dist/extension.js",
   "contributes": {
     "viewsContainers": {
       "activitybar": [
@@ -271,14 +271,24 @@
         },
         "binlogAnalyzer.chat.additionalToolPatterns": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "description": "Additional tool name patterns to include in the @binlog chat participant. Each entry is matched as a substring against tool names (e.g. 'copilot_codebase', 'terminal')."
         },
         "binlogAnalyzer.diagnostics.propertyTrackingLevel": {
           "type": "number",
           "default": 15,
-          "enum": [1, 2, 3, 4, 7, 8, 15],
+          "enum": [
+            1,
+            2,
+            3,
+            4,
+            7,
+            8,
+            15
+          ],
           "enumDescriptions": [
             "Reassignment only",
             "Initial values only",
@@ -307,6 +317,134 @@
           }
         ],
         "priority": "default"
+      }
+    ],
+    "languageModelTools": [
+      {
+        "name": "binlog_overview",
+        "displayName": "Binlog: Overview",
+        "modelDescription": "Summarise the loaded MSBuild binary log: build result, duration, project count, top-level errors and warnings.",
+        "userDescription": "Get a high-level summary of the loaded binlog.",
+        "tags": [
+          "binlog",
+          "msbuild",
+          "build",
+          "diagnostics"
+        ],
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "binlogOverview",
+        "icon": "$(file-binary)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "binlog": {
+              "type": "string",
+              "description": "Optional. Absolute path to the binlog to analyse. Required when more than one binlog is loaded."
+            }
+          }
+        }
+      },
+      {
+        "name": "binlog_errors",
+        "displayName": "Binlog: Errors",
+        "modelDescription": "List build errors and warnings from the loaded MSBuild binary log with file paths, line numbers and error codes.",
+        "userDescription": "List errors and warnings from the loaded binlog.",
+        "tags": [
+          "binlog",
+          "msbuild",
+          "build",
+          "diagnostics"
+        ],
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "binlogErrors",
+        "icon": "$(error)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "binlog": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "name": "binlog_search",
+        "displayName": "Binlog: Search",
+        "modelDescription": "Free-text search across all build events in the loaded MSBuild binary log (targets, tasks, messages, properties).",
+        "userDescription": "Search across all events in the loaded binlog.",
+        "tags": [
+          "binlog",
+          "msbuild",
+          "build"
+        ],
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "binlogSearch",
+        "icon": "$(search)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Required. Free-text search query."
+            },
+            "binlog": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      },
+      {
+        "name": "binlog_perf",
+        "displayName": "Binlog: Performance Summary",
+        "modelDescription": "Performance analysis: returns expensive targets, tasks, projects and Roslyn analyzers from the loaded MSBuild binary log.",
+        "userDescription": "Get performance bottlenecks from the loaded binlog.",
+        "tags": [
+          "binlog",
+          "msbuild",
+          "build",
+          "performance"
+        ],
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "binlogPerf",
+        "icon": "$(graph)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "binlog": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "name": "binlog_compare",
+        "displayName": "Binlog: Compare",
+        "modelDescription": "Compare two loaded MSBuild binary logs and report differences in result, errors, properties and target durations.",
+        "userDescription": "Compare two loaded binlogs.",
+        "tags": [
+          "binlog",
+          "msbuild",
+          "build"
+        ],
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "binlogCompare",
+        "icon": "$(diff)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "binlog": {
+              "type": "string",
+              "description": "Path to the first binlog (defaults to the first loaded binlog)."
+            },
+            "binlog_other": {
+              "type": "string",
+              "description": "Path to the second binlog (defaults to the second loaded binlog)."
+            }
+          }
+        }
       }
     ],
     "chatParticipants": [
@@ -460,13 +598,16 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run bundle",
     "compile": "tsc -p ./",
+    "bundle": "node esbuild.config.js",
+    "bundle:watch": "node esbuild.config.js --watch",
     "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
     "test": "mocha --ui tdd out/test/*.test.js",
     "test:e2e": "node out/test/e2e/runTest.js",
     "lint": "eslint src",
-    "package": "vsce package"
+    "package": "npm run bundle && vsce package"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
@@ -474,6 +615,7 @@
     "@types/vscode": "^1.99.0",
     "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^3.0.0",
+    "esbuild": "^0.24.2",
     "glob": "^13.0.6",
     "mocha": "^11.7.5",
     "typescript": "^5.5.0"

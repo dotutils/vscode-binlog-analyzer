@@ -11,6 +11,7 @@ import {
     BuildCheckSummary
 } from './buildCheck';
 import * as telemetry from './telemetry';
+import { registerBinlogLanguageModelTools } from './languageModelTools';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -45,6 +46,13 @@ export async function activate(context: vscode.ExtensionContext) {
     telemetry.initTelemetry(context);
     telemetry.trackActivation();
     setCiContext(context);
+
+    // Expose binlog analysis as VS Code language-model tools so any agent
+    // (@workspace, custom modes, agent mode) can use them — not just @binlog.
+    registerBinlogLanguageModelTools(context, {
+        getClient: () => mcpClient ?? null,
+        getBinlogPaths: () => allBinlogPaths,
+    });
 
     // Set updating context immediately so the welcome view never flickers to "No binlog loaded"
     const hasPendingUpdate = !!context.globalState.get<boolean>('binlog.pendingToolUpdate');

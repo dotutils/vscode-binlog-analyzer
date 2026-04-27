@@ -1,6 +1,10 @@
 import { ChildProcess, spawn } from 'child_process';
 import { EventEmitter } from 'events';
 import * as vscode from 'vscode';
+import { buildMcpArgs } from './mcpArgs';
+
+// Re-export for backward compatibility with consumers that import from mcpClient.
+export { buildMcpArgs };
 
 // Debug output channel for MCP client diagnostics
 let outputChannel: vscode.OutputChannel | undefined;
@@ -12,19 +16,7 @@ function log(msg: string) {
 }
 
 /**
- * Builds CLI args from a template string and binlog paths.
- * Template uses `${binlog}` as placeholder. The template is expanded
- * once per binlog path. E.g. `--binlog ${binlog}` with 2 paths produces
- * `['--binlog', 'a.binlog', '--binlog', 'b.binlog']`.
- */
-export function buildMcpArgs(template: string, binlogPaths: string[]): string[] {
-    return binlogPaths.flatMap(p =>
-        template.replace(/\$\{binlog\}/g, p).split(/\s+/).filter(Boolean)
-    );
-}
-
-/**
- * Minimal MCP (Model Context Protocol) client that communicates with
+ * Minimal MCP (Model Context Protocol) clientthat communicates with
  * BinlogInsights.Mcp over stdio using JSON-RPC 2.0 with newline-delimited JSON.
  *
  * Emits:
@@ -51,6 +43,9 @@ export class McpClient extends EventEmitter {
 
     /** Whether the client is ready to accept tool calls */
     get isReady(): boolean { return this.initialized && !this.disposed; }
+
+    /** Snapshot of the binlog paths this client was started with. */
+    get loadedBinlogs(): readonly string[] { return this.binlogPaths; }
 
     async start(): Promise<void> {
         this.disposed = false;
@@ -105,9 +100,18 @@ export class McpClient extends EventEmitter {
         if (!this.initialized) {
             throw new Error('MCP client not initialized');
         }
-        // Auto-inject binlog_file if not provided
-        if (!args.binlog_file && this.binlogPaths.length > 0) {
+        // Auto-inject binlog_file ONLY when a single binlog is loaded.
+        // With multiple binlogs the caller MUST be explicit — silently
+        // defaulting to binlogPaths[0] produced wrong answers for binlog B/C/...
+        // (see issue: "binlog_file auto-inject is wrong for multi-binlog").
+        if (!args.binlog_file && this.binlogPaths.length === 1) {
             args.binlog_file = this.binlogPaths[0];
+        } else if (!args.binlog_file && this.binlogPaths.length > 1) {
+            const list = this.binlogPaths.map((p, i) => `${String.fromCharCode(65 + i)}: ${p}`).join('\n');
+            throw new Error(
+                `Tool '${name}' requires an explicit binlog_file argument when multiple binlogs are loaded. ` +
+                `Loaded binlogs:\n${list}`
+            );
         }
         log(`callTool: ${name} args=${JSON.stringify(args).substring(0, 200)}`);
         const result = await this.sendRequest('tools/call', { name, arguments: args }) as {
