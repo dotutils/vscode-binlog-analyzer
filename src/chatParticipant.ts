@@ -30,7 +30,6 @@ const PLAYBOOK_FOR_COMMAND: Record<string, 'perf' | 'incremental' | undefined> =
 
 export class BinlogChatParticipant {
     private binlogPaths: string[] = [];
-    private mcpClient: McpClient | null = null;
     private participant: vscode.Disposable | undefined;
     private playbooks!: PlaybookLoader;
 
@@ -38,8 +37,14 @@ export class BinlogChatParticipant {
         this.binlogPaths = paths;
     }
 
-    setMcpClient(client: McpClient | null) {
-        this.mcpClient = client;
+    /**
+     * Kept for binary compat with existing call sites in extension.ts.
+     * The chat participant routes through `vscode.lm.tools` (the
+     * BinlogInsights MCP tools are surfaced via the platform), so it does
+     * not need a direct reference to the McpClient.
+     */
+    setMcpClient(_client: McpClient | null) {
+        // intentionally a no-op
     }
 
     register(context: vscode.ExtensionContext) {

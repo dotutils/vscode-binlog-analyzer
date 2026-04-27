@@ -19,15 +19,22 @@ export class BinlogCodeActionProvider implements vscode.CodeActionProvider {
     static readonly providedCodeActionKinds = [vscode.CodeActionKind.QuickFix];
     static readonly DIAGNOSTIC_SOURCE = 'MSBuild Binlog';
 
+    /**
+     * Maximum binlog diagnostics to expose actions for in a single
+     * provideCodeActions call. With many warnings on one line the QuickFix
+     * menu becomes unusable; cap at MAX_DIAGS_PER_CALL (3 actions each).
+     */
+    private static readonly MAX_DIAGS_PER_CALL = 5;
+
     provideCodeActions(
         document: vscode.TextDocument,
         _range: vscode.Range,
         context: vscode.CodeActionContext,
     ): vscode.CodeAction[] {
         const actions: vscode.CodeAction[] = [];
-        const binlogDiags = context.diagnostics.filter(
-            d => d.source === BinlogCodeActionProvider.DIAGNOSTIC_SOURCE,
-        );
+        const binlogDiags = context.diagnostics
+            .filter(d => d.source === BinlogCodeActionProvider.DIAGNOSTIC_SOURCE)
+            .slice(0, BinlogCodeActionProvider.MAX_DIAGS_PER_CALL);
 
         for (const diag of binlogDiags) {
             actions.push(this.askAction(document, diag));

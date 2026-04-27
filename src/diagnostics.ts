@@ -133,13 +133,9 @@ export class BinlogDiagnosticsProvider implements vscode.Disposable {
             this.applyInlineDecorations(groupedByFile);
         }
 
-        const errorCount = filtered.filter(d => d.severity === 'error').length;
-        const warnCount = filtered.filter(d => d.severity === 'warning').length;
-        if (errorCount > 0 || warnCount > 0) {
-            vscode.window.showInformationMessage(
-                `Binlog: ${errorCount} error(s), ${warnCount} warning(s) pushed to Problems panel.`
-            );
-        }
+        // Counts are surfaced via the status bar (see updateStatusBar) and
+        // the Problems panel itself — no need for a popup toast on every
+        // binlog load.
     }
 
     /** Get summary counts for status bar and other consumers */
@@ -147,10 +143,6 @@ export class BinlogDiagnosticsProvider implements vscode.Disposable {
         const errors = this.cachedDiagnostics.filter(d => d.severity === 'error').length;
         const warnings = this.cachedDiagnostics.filter(d => d.severity === 'warning').length;
         return { errorCount: errors, warningCount: warnings };
-    }
-
-    async loadFromBinlog(binlogPath: string, config: vscode.WorkspaceConfiguration) {
-        // This is now a no-op — diagnostics are loaded via loadFromMcpClient after MCP client starts
     }
 
     private filterBySeverity(diagnostics: BinlogDiagnostic[], minSeverity: string): BinlogDiagnostic[] {
@@ -164,18 +156,28 @@ export class BinlogDiagnosticsProvider implements vscode.Disposable {
     }
 
     private resolveFilePath(filePath: string): string | null {
-        if (!filePath) return null;
+        if (!filePath) { return null; }
 
         if (path.isAbsolute(filePath)) {
             return filePath;
         }
 
+        // Multi-root workspaces: try each folder, prefer one where the file
+        // actually exists. Fall back to the first folder if none match.
         const workspaceFolders = vscode.workspace.workspaceFolders;
-        if (workspaceFolders) {
-            for (const folder of workspaceFolders) {
-                const resolved = path.join(folder.uri.fsPath, filePath);
-                return resolved;
+        if (workspaceFolders && workspaceFolders.length > 0) {
+            try {
+                const fs = require('fs') as typeof import('fs');
+                for (const folder of workspaceFolders) {
+                    const candidate = path.join(folder.uri.fsPath, filePath);
+                    if (fs.existsSync(candidate)) {
+                        return candidate;
+                    }
+                }
+            } catch {
+                // fs failure is non-fatal — fall through
             }
+            return path.join(workspaceFolders[0].uri.fsPath, filePath);
         }
 
         return filePath;

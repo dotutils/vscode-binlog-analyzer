@@ -57,6 +57,19 @@ export class McpClient extends EventEmitter {
 
         this.proc.stdout!.on('data', (chunk: Buffer) => this.onData(chunk));
         this.proc.stderr!.on('data', () => { /* ignore debug logs */ });
+        // Without this handler, spawn failures (ENOENT, EACCES) crash the
+        // extension host process via an unhandled 'error' event.
+        this.proc.on('error', (err) => {
+            log(`MCP server spawn error: ${err.message}`);
+            this.initialized = false;
+            for (const p of this.pending.values()) {
+                p.reject(new Error(`MCP server failed to start: ${err.message}`));
+            }
+            this.pending.clear();
+            if (!this.disposed) {
+                this.emit('unexpected-exit', null);
+            }
+        });
         this.proc.on('exit', (code) => {
             const wasInitialized = this.initialized;
             this.initialized = false;
@@ -157,15 +170,26 @@ export class McpClient extends EventEmitter {
     private sendRequest(method: string, params: unknown): Promise<unknown> {
         return new Promise((resolve, reject) => {
             const id = this.nextId++;
-            this.pending.set(id, { resolve, reject });
-            this.writeMessage({ jsonrpc: '2.0', id, method, params });
-
-            setTimeout(() => {
+            const timer = setTimeout(() => {
                 if (this.pending.has(id)) {
                     this.pending.delete(id);
                     reject(new Error(`MCP request '${method}' timed out`));
                 }
             }, 30000);
+            // Wrap resolve/reject so we always clear the timer — otherwise
+            // every successful request leaks a 30s timer keeping the event
+            // loop active.
+            this.pending.set(id, {
+                resolve: (v) => { clearTimeout(timer); resolve(v); },
+                reject: (e) => { clearTimeout(timer); reject(e); },
+            });
+            try {
+                this.writeMessage({ jsonrpc: '2.0', id, method, params });
+            } catch (err) {
+                clearTimeout(timer);
+                this.pending.delete(id);
+                reject(err instanceof Error ? err : new Error(String(err)));
+            }
         });
     }
 
