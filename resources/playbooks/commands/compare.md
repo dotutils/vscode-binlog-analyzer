@@ -1,0 +1,1 @@
+Two binlogs are loaded as binlog_file_a and binlog_file_b. Use `binlog_compare` once, then `binlog_expensive_targets` and `binlog_errors` on each. Output a 4-row table: Result | Errors | Warnings | Duration. If filenames contain `_cold`/`_warm`, label the diff as cold→warm. ≤ 12 lines total.
