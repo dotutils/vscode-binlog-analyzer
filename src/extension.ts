@@ -938,19 +938,36 @@ export async function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    // Command: Fix a specific diagnostic with @binlog (context menu on errors/warnings)
+    // Command: Fix a specific diagnostic with Copilot agent (context menu on errors/warnings)
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.fixDiagnostic', async (treeItem?: BinlogTreeItem) => {
             telemetry.trackCommand('fixDiagnostic');
             if (!treeItem) { return; }
             const label = typeof treeItem.label === 'string' ? treeItem.label : '';
             const detail = treeItem.fullText || label;
-            const binlogCtx = currentBinlogPath ? ` The binlog_file is "${currentBinlogPath}".` : '';
+            const binlogCtx = currentBinlogPath ? `\nBINLOG: ${currentBinlogPath}` : '';
+
+            // Extract file path from the tooltip if available
+            const tooltip = typeof treeItem.tooltip === 'string' ? treeItem.tooltip : '';
+            // Tooltip format is typically "CODE: message\nfilepath:line"
+            const fileMatch = tooltip.match(/([A-Za-z]:\\[^\n]+|\/[^\n]+):(\d+)/);
+            const fileLine = fileMatch ? `\nFILE: ${fileMatch[1]}\nLINE: ${fileMatch[2]}` : '';
+
             const prompt =
-                `@binlog Suggest a concrete fix for this MSBuild diagnostic. ` +
-                `Provide exact MSBuild XML or CLI flags and indicate which file to edit.\n\n` +
-                `${detail}${binlogCtx}`;
-            vscode.commands.executeCommand('workbench.action.chat.open', prompt);
+                `Fix this MSBuild diagnostic by editing the source file directly.\n\n` +
+                `DIAGNOSTIC: ${detail}${fileLine}${binlogCtx}\n\n` +
+                `INSTRUCTIONS:\n` +
+                `1. Open the file mentioned in the diagnostic\n` +
+                `2. Apply the fix (edit the MSBuild XML, add/move properties, fix references, etc.)\n` +
+                `3. If the file path doesn't exist locally, check the workspace for a file with the same name\n` +
+                `4. If the issue cannot be fixed directly (e.g. SDK limitation), suppress it with NoWarn and add a comment explaining why\n` +
+                `5. Show what you changed`;
+
+            // Use agent mode so Copilot can edit files
+            vscode.commands.executeCommand('workbench.action.chat.open', {
+                query: prompt,
+                isPartialQuery: false,
+            });
         })
     );
     context.subscriptions.push(
