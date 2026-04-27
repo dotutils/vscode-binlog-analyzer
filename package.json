@@ -2,7 +2,7 @@
   "name": "binlog-analyzer",
   "displayName": "MSBuild Binlog Analyzer",
   "description": "Analyze MSBuild binary logs with Copilot Chat and MCP tools",
-  "version": "0.10.19",
+  "version": "0.10.20",
   "preview": true,
   "publisher": "dotutils",
   "license": "MIT",
@@ -321,7 +321,7 @@
     ],
     "languageModelTools": [
       {
-        "name": "binlog_overview",
+        "name": "binlog_lm_overview",
         "displayName": "Binlog: Overview",
         "modelDescription": "Summarise the loaded MSBuild binary log: build result, duration, project count, top-level errors and warnings.",
         "userDescription": "Get a high-level summary of the loaded binlog.",
@@ -345,7 +345,7 @@
         }
       },
       {
-        "name": "binlog_errors",
+        "name": "binlog_lm_errors",
         "displayName": "Binlog: Errors",
         "modelDescription": "List build errors and warnings from the loaded MSBuild binary log with file paths, line numbers and error codes.",
         "userDescription": "List errors and warnings from the loaded binlog.",
@@ -368,7 +368,7 @@
         }
       },
       {
-        "name": "binlog_search",
+        "name": "binlog_lm_search",
         "displayName": "Binlog: Search",
         "modelDescription": "Free-text search across all build events in the loaded MSBuild binary log (targets, tasks, messages, properties).",
         "userDescription": "Search across all events in the loaded binlog.",
@@ -397,7 +397,7 @@
         }
       },
       {
-        "name": "binlog_perf",
+        "name": "binlog_lm_perf",
         "displayName": "Binlog: Performance Summary",
         "modelDescription": "Performance analysis: returns expensive targets, tasks, projects and Roslyn analyzers from the loaded MSBuild binary log.",
         "userDescription": "Get performance bottlenecks from the loaded binlog.",
@@ -420,7 +420,7 @@
         }
       },
       {
-        "name": "binlog_compare",
+        "name": "binlog_lm_compare",
         "displayName": "Binlog: Compare",
         "modelDescription": "Compare two loaded MSBuild binary logs and report differences in result, errors, properties and target durations.",
         "userDescription": "Compare two loaded binlogs.",

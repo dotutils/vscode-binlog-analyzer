@@ -114,10 +114,17 @@ export class BinlogChatParticipant {
         } else if (includeAllTools) {
             tools = vscode.lm.tools;
         } else {
+            // Prefer the original MCP-server tools over our LM-tool wrappers
+            // (`binlog_lm_*`). The wrappers exist for OTHER agents
+            // (@workspace, agent mode, etc.) — the @binlog participant has
+            // direct access to the MCP tools and using the wrappers just
+            // adds a redundant trampoline that can fail during MCP startup.
             tools = vscode.lm.tools.filter(t =>
-                t.name.startsWith('binlog_') ||
-                t.name.includes('binlog_insights') ||
-                additionalPatterns.some(p => t.name.includes(p)),
+                !t.name.startsWith('binlog_lm_') && (
+                    t.name.startsWith('binlog_') ||
+                    t.name.includes('binlog_insights') ||
+                    additionalPatterns.some(p => t.name.includes(p))
+                ),
             );
         }
 
