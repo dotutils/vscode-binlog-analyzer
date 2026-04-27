@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.10.17 (Preview)
+
+### Added
+- **Language Model Tools** — 5 LM-tool wrappers (`binlog_lm_overview`, `binlog_lm_errors`, `binlog_lm_search`, `binlog_lm_perf`, `binlog_lm_compare`) registered via `vscode.lm.registerTool` so any agent (@workspace, agent mode, custom chat modes) can analyze loaded binlogs — not just `@binlog`
+- **"Ask @binlog" CodeAction** — click a build error/warning squiggle in the editor → Quick Fix → "Ask @binlog about this error" or "Fix with @binlog"
+- **Auto-fix diagnostic** — right-click any error/warning in the Binlog Explorer → "Auto-fix with Copilot" opens agent mode to edit the source file directly
+- **Diagnostic context menu** — right-click error/warning tree items for "Ask @binlog about this issue" and "Auto-fix with Copilot"
+- **Fix All: before/after comparison** — "Fix All Issues" now writes to a new `{name}_fixed_{N}.binlog` (preserving the original) and auto-loads both for `/compare`
+- **`/timeline` command playbook** — `/timeline` now has its own per-command instruction file
+- **esbuild bundling** — extension ships as a single `dist/extension.js` (~476 KB) instead of raw TypeScript output
+- **CI matrix** — GitHub Actions workflow runs on both Ubuntu and Windows
+
+### Changed
+- **Prompt refactor** — SYSTEM_PROMPT and COMMAND_PROMPTS moved to lazy-loaded markdown playbooks (`resources/playbooks/`). Total prompt budget ~250 tokens baseline vs ~1500 before
+- **Auto-greeting** — loading a binlog now fires `@binlog /summary` automatically instead of asking "What would you like to analyze?"
+- **Multi-binlog support** — all MCP tool calls (tree view, document provider, timeline, extension commands) now auto-inject `binlog_file` for the primary binlog when multiple are loaded
+
+### Fixed
+- **MCP startup race** — auto-greeting now waits for both MCP config AND tree client initialization before firing `/summary`
+- **LM-tool readiness** — wrappers wait up to 10s for MCP client to become ready instead of immediately returning "No binlog loaded"
+- **Cross-machine file navigation** — diagnostics and tree view items from binlogs built on other machines (CI, coworkers) no longer show "file not found" — paths are resolved against workspace folders
+- **Multi-root workspace path resolution** — `resolveFilePath` now checks each workspace folder for file existence instead of blindly using the first
+- **MCP timer leak** — `setTimeout` in `sendRequest` is now cleared on resolve/reject
+- **Spawn error handler** — missing `error` event listener on MCP subprocess no longer crashes the extension host
+- **processResponse error retry** — recursive tool-call retry now checks all 5 error patterns (was missing `role 'tool'`, `tool_call_id`, `400`)
+- **CodeAction cap** — max 5 diagnostics per `provideCodeActions` call to prevent unusable Quick Fix menus
+- **Cross-platform tests** — `workspaceMatchesBinlog` and `getSourceLabel` no longer depend on `path.sep` (fixes CI on Ubuntu)
+- **Stale tool names in prompts** — `analyzeInChat` prompts no longer reference non-existent tools (`binlog_search_targets`, etc.)
+
 ## 0.10.16 (Preview)
 
 ### Fixed

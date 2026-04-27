@@ -35,6 +35,19 @@ function escapeHtml(s: string): string {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+/**
+ * Call an MCP tool, auto-injecting `binlog_file` for the current primary
+ * binlog when multiple are loaded. This prevents "requires explicit
+ * binlog_file" errors throughout extension.ts call sites.
+ */
+function callMcpTool(tool: string, args: Record<string, unknown> = {}): Promise<{ text: string }> {
+    if (!mcpClient) { throw new Error('MCP server not connected'); }
+    if (!args.binlog_file && allBinlogPaths.length > 1) {
+        args.binlog_file = currentBinlogPath || allBinlogPaths[0];
+    }
+    return mcpClient.callTool(tool, args);
+}
+
 /** Returns a globalState key scoped to the current workspace folder, or a fallback for no-workspace. */
 function binlogStateKey(): string {
     const ws = vscode.workspace.workspaceFolders?.[0]?.uri.toString();
@@ -889,16 +902,16 @@ export async function activate(context: vscode.ExtensionContext) {
                 const isKnown = /^(ResolveAssemblyReferences|CoreCompile|Csc|Copy|RAR|Restore|ResolvePackageAssets|GenerateNuspec)/i.test(name);
                 if (isKnown) {
                     prompt = `@binlog The MSBuild target ${itemCtx} is a known build bottleneck. ` +
-                        `First use binlog_expensive_targets to confirm its timing, then explain what specific MSBuild properties ` +
-                        `can reduce its time. Show the exact XML to add to Directory.Build.props and any trade-offs.${binlogPath}`;
+                        `Use binlog_lm_search to find which projects invoke it and binlog_expensive_targets to confirm its timing. ` +
+                        `Explain what specific MSBuild properties can reduce its time. Show the exact XML to add to Directory.Build.props and any trade-offs.${binlogPath}`;
                 } else {
                     prompt = `@binlog Investigate the MSBuild target ${itemCtx}. ` +
-                        `Use binlog_search_targets to find where it runs and which projects invoke it. ` +
+                        `Use binlog_lm_search with the target name to find where it runs and which projects invoke it. ` +
                         `Is it running too many times? Can it be skipped with proper Inputs/Outputs?${binlogPath}`;
                 }
             } else if (category === 'task') {
                 prompt = `@binlog Investigate the MSBuild task ${itemCtx}. ` +
-                    `Use binlog_search_tasks to find it, then binlog_task_details for its parameters and output. ` +
+                    `Use binlog_lm_search with the task name to find it and understand its parameters and output. ` +
                     `What does it do and can it be optimized?${binlogPath}`;
             } else if (category === 'property-item') {
                 prompt = `@binlog Explain the MSBuild property ${name} = "${detail}". ` +
@@ -910,11 +923,11 @@ export async function activate(context: vscode.ExtensionContext) {
                     `Are there any version conflicts or redundancies?${binlogPath}`;
             } else if (category === 'project') {
                 prompt = `@binlog Analyze the project ${itemCtx}. ` +
-                    `Use binlog_project_targets to show target breakdown and timing. ` +
+                    `Use binlog_lm_search with the project name to show its targets and timing. ` +
                     `What are its slowest targets? Does it have unnecessary dependencies?${binlogPath}`;
             } else {
                 prompt = `@binlog Analyze the MSBuild target ${itemCtx}. ` +
-                    `Use binlog_search_targets to find where it runs and binlog_expensive_targets for timing. ` +
+                    `Use binlog_lm_search with the target name to find where it runs and binlog_expensive_targets for timing. ` +
                     `What does it do and how does it affect the build?${binlogPath}`;
             }
 
@@ -990,7 +1003,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 { location: vscode.ProgressLocation.Notification, title: `Searching binlog for "${query}"...` },
                 async () => {
                     try {
-                        const result = await mcpClient!.callTool('binlog_search', {
+                        const result = await callMcpTool('binlog_search', {
                             query: query.trim(),
                             limit: 200,
                         });
@@ -1044,7 +1057,7 @@ export async function activate(context: vscode.ExtensionContext) {
                     const pageSize = 500;
                     const maxTotal = 10000;
                     while (offset < maxTotal) {
-                        const result = await mcpClient!.callTool('binlog_search', {
+                        const result = await callMcpTool('binlog_search', {
                             query: query.trim(),
                             limit: pageSize,
                             offset,
@@ -1102,7 +1115,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
                         // Always include overview
                         try {
-                            const overview = await mcpClient!.callTool('binlog_overview', {});
+                            const overview = await callMcpTool('binlog_overview', {});
                             sections.push('BUILD OVERVIEW');
                             sections.push('─'.repeat(40));
                             sections.push(overview.text);
@@ -1111,7 +1124,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
                         // Always include errors
                         try {
-                            const errors = await mcpClient!.callTool('binlog_errors', {});
+                            const errors = await callMcpTool('binlog_errors', {});
                             sections.push('ERRORS');
                             sections.push('─'.repeat(40));
                             sections.push(errors.text || 'None');
@@ -1120,7 +1133,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
                         // Always include warnings
                         try {
-                            const warnings = await mcpClient!.callTool('binlog_warnings', {});
+                            const warnings = await callMcpTool('binlog_warnings', {});
                             sections.push('WARNINGS');
                             sections.push('─'.repeat(40));
                             sections.push(warnings.text || 'None');
@@ -1130,7 +1143,7 @@ export async function activate(context: vscode.ExtensionContext) {
                         if (verbosity.value !== 'minimal') {
                             // Normal+: include projects and properties
                             try {
-                                const projects = await mcpClient!.callTool('binlog_projects', {});
+                                const projects = await callMcpTool('binlog_projects', {});
                                 sections.push('PROJECTS');
                                 sections.push('─'.repeat(40));
                                 sections.push(projects.text);
@@ -1138,7 +1151,7 @@ export async function activate(context: vscode.ExtensionContext) {
                             } catch { /* non-fatal */ }
 
                             try {
-                                const props = await mcpClient!.callTool('binlog_properties', {});
+                                const props = await callMcpTool('binlog_properties', {});
                                 sections.push('PROPERTIES');
                                 sections.push('─'.repeat(40));
                                 sections.push(props.text);
@@ -1149,7 +1162,7 @@ export async function activate(context: vscode.ExtensionContext) {
                         if (verbosity.value === 'detailed' || verbosity.value === 'diagnostic') {
                             // Detailed+: include targets and tasks
                             try {
-                                const targets = await mcpClient!.callTool('binlog_expensive_targets', { top_number: 30 });
+                                const targets = await callMcpTool('binlog_expensive_targets', { top_number: 30 });
                                 sections.push('TARGETS (by duration)');
                                 sections.push('─'.repeat(40));
                                 sections.push(targets.text);
@@ -1157,7 +1170,7 @@ export async function activate(context: vscode.ExtensionContext) {
                             } catch { /* non-fatal */ }
 
                             try {
-                                const tasks = await mcpClient!.callTool('binlog_expensive_tasks', { top_number: 30 });
+                                const tasks = await callMcpTool('binlog_expensive_tasks', { top_number: 30 });
                                 sections.push('TASKS (by duration)');
                                 sections.push('─'.repeat(40));
                                 sections.push(tasks.text);
@@ -1165,7 +1178,7 @@ export async function activate(context: vscode.ExtensionContext) {
                             } catch { /* non-fatal */ }
 
                             try {
-                                const itemTypes = await mcpClient!.callTool('binlog_item_types', {});
+                                const itemTypes = await callMcpTool('binlog_item_types', {});
                                 sections.push('ITEM TYPES');
                                 sections.push('─'.repeat(40));
                                 sections.push(itemTypes.text);
@@ -1176,7 +1189,7 @@ export async function activate(context: vscode.ExtensionContext) {
                         if (verbosity.value === 'diagnostic') {
                             // Diagnostic: include imports, NuGet, compiler, analyzers
                             try {
-                                const imports = await mcpClient!.callTool('binlog_imports', {});
+                                const imports = await callMcpTool('binlog_imports', {});
                                 sections.push('IMPORTS');
                                 sections.push('─'.repeat(40));
                                 sections.push(imports.text);
@@ -1184,7 +1197,7 @@ export async function activate(context: vscode.ExtensionContext) {
                             } catch { /* non-fatal */ }
 
                             try {
-                                const nuget = await mcpClient!.callTool('binlog_nuget', {});
+                                const nuget = await callMcpTool('binlog_nuget', {});
                                 sections.push('NUGET');
                                 sections.push('─'.repeat(40));
                                 sections.push(nuget.text);
@@ -1192,7 +1205,7 @@ export async function activate(context: vscode.ExtensionContext) {
                             } catch { /* non-fatal */ }
 
                             try {
-                                const analyzers = await mcpClient!.callTool('binlog_expensive_analyzers', { limit: 20 });
+                                const analyzers = await callMcpTool('binlog_expensive_analyzers', { limit: 20 });
                                 sections.push('ANALYZERS (by duration)');
                                 sections.push('─'.repeat(40));
                                 sections.push(analyzers.text);
@@ -1200,7 +1213,7 @@ export async function activate(context: vscode.ExtensionContext) {
                             } catch { /* non-fatal */ }
 
                             try {
-                                const compiler = await mcpClient!.callTool('binlog_compiler', {});
+                                const compiler = await callMcpTool('binlog_compiler', {});
                                 sections.push('COMPILER COMMAND LINE');
                                 sections.push('─'.repeat(40));
                                 sections.push(compiler.text);
@@ -1587,7 +1600,7 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
                     // Fallback: older VS Code versions may not support chat.new
                     vscode.commands.executeCommand('workbench.action.chat.open', chatMessage);
                 });
-        }, 500);
+        }, 1000);
     }
 
     // If workspace doesn't match binlog location, suggest updating it
@@ -2335,8 +2348,8 @@ async function optimizeBuildFlow(context: vscode.ExtensionContext) {
 
     // Step 1: Get perf data from MCP
     const [targetsResult, tasksResult] = await Promise.allSettled([
-        mcpClient.callTool('binlog_expensive_targets', { top_number: 10 }),
-        mcpClient.callTool('binlog_expensive_tasks', { top_number: 10 }),
+        callMcpTool('binlog_expensive_targets', { top_number: 10 }),
+        callMcpTool('binlog_expensive_tasks', { top_number: 10 }),
     ]);
 
     const targetsText = targetsResult.status === 'fulfilled' ? targetsResult.value.text : '';
@@ -2614,10 +2627,10 @@ async function showTimelineWebview(context: vscode.ExtensionContext) {
 
     try {
         const [targetsResult, tasksResult, projectsResult, allProjectsResult] = await Promise.all([
-            mcpClient.callTool('binlog_expensive_targets', { top_number: 20 }),
-            mcpClient.callTool('binlog_expensive_tasks', { top_number: 20 }),
-            mcpClient.callTool('binlog_expensive_projects', { limit: 20 }),
-            mcpClient.callTool('binlog_projects'),
+            callMcpTool('binlog_expensive_targets', { top_number: 20 }),
+            callMcpTool('binlog_expensive_tasks', { top_number: 20 }),
+            callMcpTool('binlog_expensive_projects', { limit: 20 }),
+            callMcpTool('binlog_projects'),
         ]);
         targetsData = JSON.parse(targetsResult.text);
         tasksData = JSON.parse(tasksResult.text);
@@ -2630,8 +2643,9 @@ async function showTimelineWebview(context: vscode.ExtensionContext) {
             return String(fp).split(/[/\\]/).pop()?.toLowerCase() || '';
         }).filter(Boolean));
         totalProjectCount = uniqueNames.size || projectList.length;
-    } catch {
-        panel.webview.html = '<html><body><h2>Failed to load timeline data</h2></body></html>';
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        panel.webview.html = `<html><body><h2>Failed to load timeline data</h2><p>${escapeHtml(msg)}</p></body></html>`;
         return;
     }
 
