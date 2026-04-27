@@ -825,7 +825,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
 
         // Try the dedicated MCP tool first
         try {
-            const result = await this.mcpClient.callTool('binlog_expensive_analyzers', { limit: 20 });
+            const result = await this.mcpCall('binlog_expensive_analyzers', { limit: 20 });
             const items = this.parsePerfItems(result.text, 'microscope');
             if (items.length > 0) {
                 this.analyzersCache = items;
@@ -842,7 +842,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         //   "363 ms   Microsoft.CodeAnalysis.CSharp.NetAnalyzers ... = 341 ms"
         try {
             // First check if the binlog has analyzer data at all
-            const checkResult = await this.mcpClient.callTool('binlog_search', {
+            const checkResult = await this.mcpCall('binlog_search', {
                 query: 'Total analyzer execution',
                 limit: 5,
             });
@@ -877,7 +877,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             ];
             for (const term of searchTerms) {
                 try {
-                    const result = await this.mcpClient.callTool('binlog_search', {
+                    const result = await this.mcpCall('binlog_search', {
                         query: term,
                         limit: 200,
                     });
@@ -1019,7 +1019,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         }
         try {
             const projectName = this.extractFileName(projectFile).replace(/\.[^.]+$/, '');
-            const result = await this.mcpClient.callTool('binlog_project_targets', {
+            const result = await this.mcpCall('binlog_project_targets', {
                 project: projectName,
             });
             const data = this.tryParseJson(result.text);
@@ -1089,7 +1089,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                 target_name: targetName,
                 project: projectName,
             };
-            const result = await this.mcpClient.callTool('binlog_tasks_in_target', args);
+            const result = await this.mcpCall('binlog_tasks_in_target', args);
             const data = this.tryParseJson(result.text);
             const items: BinlogTreeItem[] = [];
             const entries = Array.isArray(data) ? data : (data && typeof data === 'object' ? Object.entries(data).map(([name, info]) => ({ name, ...(info as object) })) : []);
@@ -1152,7 +1152,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                 project: projectName,
                 target_name: element.targetName || '',
             };
-            const result = await this.mcpClient.callTool('binlog_task_details', args);
+            const result = await this.mcpCall('binlog_task_details', args);
             const items: BinlogTreeItem[] = [];
 
             // Try to parse as JSON first
@@ -1224,7 +1224,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         if (!this.mcpClient) {
             throw new Error('MCP server not connected');
         }
-        return this.mcpClient.callTool('binlog_search', {
+        return this.mcpCall('binlog_search', {
             query,
             limit: maxResults,
         });
@@ -1405,7 +1405,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             return [this.makeInfoItem('MCP server not connected', 'info')];
         }
         try {
-            const result = await this.mcpClient.callTool('binlog_evaluations');
+            const result = await this.mcpCall('binlog_evaluations');
             const data = this.tryParseJson(result.text);
             const entries = Array.isArray(data) ? data : [];
 
@@ -1456,7 +1456,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             return [this.makeInfoItem('No evaluation ID', 'info')];
         }
         try {
-            const result = await this.mcpClient.callTool('binlog_evaluation_properties', {
+            const result = await this.mcpCall('binlog_evaluation_properties', {
                 evaluation_id: element.evaluationId,
             });
             const data = this.tryParseJson(result.text);
@@ -1502,7 +1502,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             return [this.makeInfoItem('No evaluation ID', 'info')];
         }
         try {
-            const result = await this.mcpClient.callTool('binlog_evaluation_global_properties', {
+            const result = await this.mcpCall('binlog_evaluation_global_properties', {
                 evaluation_id: element.evaluationId,
             });
             const data = this.tryParseJson(result.text);
@@ -1559,9 +1559,15 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             return [this.makeInfoItem('Loading...', 'loading')];
         }
 
+        // Auto-inject binlog_file for multi-binlog to avoid
+        // "requires explicit binlog_file" errors.
+        if (!args.binlog_file && this.binlogPaths.length > 1) {
+            args.binlog_file = this.binlogPaths[0];
+        }
+
         this.loadingSet.add(parentKind);
         try {
-            const result = await this.mcpClient.callTool(toolName, args);
+            const result = await this.mcpCall(toolName, args);
             this.loadingSet.delete(parentKind);
             const data = parser(result.text);
             if (data.length === 0) {
@@ -1573,6 +1579,18 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             const msg = err instanceof Error ? err.message : String(err);
             return [this.makeInfoItem(`Error: ${msg.substring(0, 80)}`, 'error')];
         }
+    }
+
+    /**
+     * Call MCP tool with auto-injected binlog_file for multi-binlog mode.
+     * Used by direct callTool sites outside of the callMcpTool helper.
+     */
+    private mcpCall(tool: string, args: Record<string, unknown> = {}): Promise<{ text: string }> {
+        if (!this.mcpClient) { throw new Error('MCP server not connected'); }
+        if (!args.binlog_file && this.binlogPaths.length > 1) {
+            args.binlog_file = this.binlogPaths[0];
+        }
+        return this.mcpClient.callTool(tool, args);
     }
 
     // --- Helpers ---

@@ -20,6 +20,20 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
         this.cache.clear();
     }
 
+    /**
+     * Wrapper around mcpClient.callTool that auto-injects binlog_file
+     * for the primary (first) loaded binlog. Without this, multi-binlog
+     * mode causes "requires explicit binlog_file" errors in every
+     * document render call.
+     */
+    private async call(tool: string, args: Record<string, unknown> = {}): Promise<{ text: string }> {
+        if (!this.mcpClient) { throw new Error('MCP server not connected'); }
+        if (!args.binlog_file && this.mcpClient.loadedBinlogs.length > 1) {
+            args.binlog_file = this.mcpClient.loadedBinlogs[0];
+        }
+        return this.mcpClient.callTool(tool, args);
+    }
+
     invalidate(uri: vscode.Uri) {
         this.cache.delete(uri.toString());
         this._onDidChange.fire(uri);
@@ -82,7 +96,7 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
 
         // Build overview
         try {
-            const overviewResult = await this.mcpClient!.callTool('binlog_overview');
+            const overviewResult = await this.call('binlog_overview');
             const ov = JSON.parse(overviewResult.text);
             const status = ov.succeeded ? '✅ BUILD SUCCEEDED' : '❌ BUILD FAILED';
             const dur = ov.duration || '';
@@ -110,7 +124,7 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
 
         // Projects
         try {
-            const projResult = await this.mcpClient!.callTool('binlog_projects');
+            const projResult = await this.call('binlog_projects');
             const projData = JSON.parse(projResult.text);
 
             // Handle both formats: array (BinlogInsights) and object (baronfel)
@@ -141,8 +155,8 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
             let diagsByProject: Map<string, { errors: number; warnings: number }> | undefined;
             try {
                 const [errResult, warnResult] = await Promise.allSettled([
-                    this.mcpClient!.callTool('binlog_errors'),
-                    this.mcpClient!.callTool('binlog_warnings'),
+                    this.call('binlog_errors'),
+                    this.call('binlog_warnings'),
                 ]);
                 diagsByProject = new Map();
                 for (const result of [errResult, warnResult]) {
@@ -188,8 +202,8 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
         // Diagnostics
         try {
             const [errResult, warnResult] = await Promise.allSettled([
-                this.mcpClient!.callTool('binlog_errors'),
-                this.mcpClient!.callTool('binlog_warnings'),
+                this.call('binlog_errors'),
+                this.call('binlog_warnings'),
             ]);
 
             const parseItems = (r: PromiseSettledResult<any>) => {
@@ -237,7 +251,7 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
 
         // Performance
         try {
-            const targetsResult = await this.mcpClient!.callTool('binlog_expensive_targets', { top_number: 10 });
+            const targetsResult = await this.call('binlog_expensive_targets', { top_number: 10 });
             const targetsData = JSON.parse(targetsResult.text);
             lines.push('🔥 SLOWEST TARGETS');
             lines.push('─────────────────────────────────────────────────────');
@@ -250,7 +264,7 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
         lines.push('');
 
         try {
-            const tasksResult = await this.mcpClient!.callTool('binlog_expensive_tasks', { top_number: 10 });
+            const tasksResult = await this.call('binlog_expensive_tasks', { top_number: 10 });
             const tasksData = JSON.parse(tasksResult.text);
             lines.push('🔧 SLOWEST TASKS');
             lines.push('─────────────────────────────────────────────────────');
@@ -263,7 +277,7 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
 
         // Analyzers
         try {
-            const analyzersResult = await this.mcpClient!.callTool('binlog_expensive_analyzers', { limit: 10 });
+            const analyzersResult = await this.call('binlog_expensive_analyzers', { limit: 10 });
             const analyzersData = JSON.parse(analyzersResult.text);
             const entries = this.parsePerfEntries(analyzersData);
             if (entries.length > 0) {
@@ -300,7 +314,7 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
 
         // Get per-project target times
         try {
-            const targetTimesResult = await this.mcpClient!.callTool('binlog_project_target_times', {
+            const targetTimesResult = await this.call('binlog_project_target_times', {
                 project: projectName,
             });
             const targetData = JSON.parse(targetTimesResult.text);
@@ -330,7 +344,7 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
         } catch {
             // Try fallback: binlog_expensive_projects for at least a total time
             try {
-                const buildTimeResult = await this.mcpClient!.callTool('binlog_expensive_projects');
+                const buildTimeResult = await this.call('binlog_expensive_projects');
                 const data = JSON.parse(buildTimeResult.text);
                 const projects = Array.isArray(data) ? data : [];
                 const match = projects.find((p: any) =>
@@ -348,8 +362,8 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
         // Get diagnostics and filter for this project
         try {
             const [errResult, warnResult] = await Promise.allSettled([
-                this.mcpClient!.callTool('binlog_errors'),
-                this.mcpClient!.callTool('binlog_warnings'),
+                this.call('binlog_errors'),
+                this.call('binlog_warnings'),
             ]);
 
             const parseItems = (r: PromiseSettledResult<any>) => {
@@ -414,18 +428,18 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
     }
 
     private async renderProjects(): Promise<string> {
-        const result = await this.mcpClient!.callTool('binlog_projects');
+        const result = await this.call('binlog_projects');
         return this.formatSection('PROJECTS', result.text);
     }
 
     private async renderDiagnostics(type: 'errors' | 'warnings'): Promise<string> {
         const tool = type === 'errors' ? 'binlog_errors' : 'binlog_warnings';
-        const result = await this.mcpClient!.callTool(tool);
+        const result = await this.call(tool);
         return this.formatSection(type.toUpperCase(), result.text);
     }
 
     private async renderExpensive(tool: string, title: string): Promise<string> {
-        const result = await this.mcpClient!.callTool(tool, { top_number: 20 });
+        const result = await this.call(tool, { top_number: 20 });
         return this.formatSection(title.toUpperCase(), result.text);
     }
 
