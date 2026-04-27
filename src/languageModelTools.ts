@@ -83,7 +83,17 @@ class BinlogLmTool implements vscode.LanguageModelTool<BinlogToolInput> {
         options: vscode.LanguageModelToolInvocationOptions<BinlogToolInput>,
         _token: vscode.CancellationToken,
     ): Promise<vscode.LanguageModelToolResult> {
-        const client = this.ctx.getClient();
+        // The MCP client may still be initializing (especially right after
+        // binlog load when /summary fires immediately). Wait up to 10 s
+        // for it to become ready before giving up.
+        let client = this.ctx.getClient();
+        if (client && !client.isReady) {
+            for (let i = 0; i < 20; i++) {
+                await new Promise(r => setTimeout(r, 500));
+                client = this.ctx.getClient();
+                if (!client || client.isReady) break;
+            }
+        }
         const loaded = this.ctx.getBinlogPaths();
 
         if (!client || !client.isReady) {

@@ -1462,10 +1462,13 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
         telemetry.trackMcpError('startMcpClient', String(err));
     });
 
-    // Wait for MCP config (needed before Copilot Chat works) but don't block forever
+    // Wait for BOTH MCP config (for mcp.json settings) AND the tree client
+    // (for the LM-tool wrappers) before opening chat. The tree client must
+    // be ready before /summary fires, otherwise the wrapper returns
+    // "No binlog is currently loaded".
     await Promise.race([
-        mcpConfigPromise,
-        new Promise(resolve => setTimeout(resolve, 10000)),
+        Promise.all([mcpConfigPromise, treeClientPromise]),
+        new Promise(resolve => setTimeout(resolve, 15000)),
     ]);
 
     // Only open chat and steal focus when user explicitly loaded a binlog
@@ -1473,6 +1476,7 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
         // Trigger the @binlog /summary slash command directly so the model
         // calls binlog_overview instead of politely asking what to do.
         const chatMessage = `@binlog /summary`;
+        // Small delay so the chat panel finishes rendering before we send.
         setTimeout(() => {
             // Use chat.new to avoid reusing a previous chat session with stale tool-call history
             vscode.commands.executeCommand('workbench.action.chat.new', chatMessage)
@@ -1480,7 +1484,7 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
                     // Fallback: older VS Code versions may not support chat.new
                     vscode.commands.executeCommand('workbench.action.chat.open', chatMessage);
                 });
-        }, 1500);
+        }, 500);
     }
 
     // If workspace doesn't match binlog location, suggest updating it
