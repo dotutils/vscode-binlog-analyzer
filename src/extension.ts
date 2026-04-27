@@ -423,18 +423,27 @@ export async function activate(context: vscode.ExtensionContext) {
 
             // Get project files for build command reconstruction
             const projectFiles = treeDataProvider?.getProjectFiles() || [];
-            const binlogPath = currentBinlogPath.replace(/\\/g, '/');
 
             // Infer the build command from binlog + project info
-            // Try to find a solution file or the root project
             const slnFiles = projectFiles.filter(f => /\.sln$/i.test(f));
             const buildTarget = slnFiles.length > 0
                 ? slnFiles[0].replace(/\\/g, '/')
                 : (projectFiles.length === 1 ? projectFiles[0].replace(/\\/g, '/') : '');
 
+            // Snapshot the original binlog so we can compare before/after.
+            // The rebuild writes to a NEW path to preserve the baseline.
+            const binlogDir = path.dirname(currentBinlogPath);
+            const binlogBase = path.basename(currentBinlogPath, '.binlog');
+            let fixIndex = 1;
+            while (fs.existsSync(path.join(binlogDir, `${binlogBase}_fixed_${fixIndex}.binlog`))) {
+                fixIndex++;
+            }
+            const afterFixPath = path.join(binlogDir, `${binlogBase}_fixed_${fixIndex}.binlog`);
+            const afterFixPathFwd = afterFixPath.replace(/\\/g, '/');
+
             const buildCmd = buildTarget
-                ? `dotnet build "${buildTarget}" -bl:"${binlogPath}"`
-                : `dotnet build -bl:"${binlogPath}"`;
+                ? `dotnet build "${buildTarget}" -bl:"${afterFixPathFwd}"`
+                : `dotnet build -bl:"${afterFixPathFwd}"`;
 
             // Build a detailed prompt with actual issues for agent mode
             const issueLines: string[] = [];
@@ -451,7 +460,8 @@ export async function activate(context: vscode.ExtensionContext) {
                 `Fix the following ${diag.errorCount} errors and ${diag.warningCount} warnings from the MSBuild binary log.\n\n` +
                 issueLines.join('\n') + '\n\n' +
                 `BUILD COMMAND: \`${buildCmd}\`\n` +
-                `BINLOG PATH: \`${binlogPath}\`\n\n` +
+                `ORIGINAL BINLOG: \`${currentBinlogPath.replace(/\\/g, '/')}\` (preserved as baseline)\n` +
+                `NEW BINLOG: \`${afterFixPathFwd}\` (will be created by the rebuild)\n\n` +
                 `INSTRUCTIONS — FIX-BUILD-VERIFY LOOP:\n` +
                 `You MUST follow this iterative cycle until the build is clean:\n\n` +
                 `**STEP 1 — FIX:** For each issue listed above:\n` +
@@ -460,7 +470,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 `    suppress it with a pragma/NoWarn and add a comment: // Suppressed: <reason>\n\n` +
                 `**STEP 2 — REBUILD:** Run the build command in the terminal:\n` +
                 `  \`${buildCmd}\`\n` +
-                `  This will regenerate the binlog at the same path.\n\n` +
+                `  This creates a NEW binlog at ${afterFixPathFwd} — the original is preserved.\n\n` +
                 `**STEP 3 — VERIFY:** Check the build output for remaining errors/warnings.\n` +
                 `  - If the build output still shows errors or warnings, go back to STEP 1 and fix them.\n` +
                 `  - Repeat this cycle (max 5 iterations) until the build succeeds with 0 errors and 0 warnings.\n` +
@@ -476,10 +486,9 @@ export async function activate(context: vscode.ExtensionContext) {
                 isPartialQuery: false,
             });
 
-            // Watch the binlog file for changes so the tree auto-refreshes
-            // after the agent rebuilds. MSBuild writes progressively, so we
-            // wait for the file size to stabilise before triggering a reload.
-            const watchedPath = currentBinlogPath;
+            // Watch for the new binlog file to appear and stabilise, then
+            // load both (original + fixed) for comparison.
+            const baselinePath = currentBinlogPath;
             const fixStartTime = Date.now();
             const FIX_POLL_INTERVAL = 8_000;
             const FIX_STABLE_READINGS = 3;
@@ -489,14 +498,13 @@ export async function activate(context: vscode.ExtensionContext) {
 
             const pollBinlog = async () => {
                 try {
-                    if (!fs.existsSync(watchedPath)) {
+                    if (!fs.existsSync(afterFixPath)) {
                         fixStableCount = 0;
                         fixLastSize = -1;
                         fixPollTimer = setTimeout(pollBinlog, FIX_POLL_INTERVAL);
                         return;
                     }
-                    const stat = fs.statSync(watchedPath);
-                    // Only react to writes that happened after the fix flow started
+                    const stat = fs.statSync(afterFixPath);
                     if (stat.mtimeMs < fixStartTime) {
                         fixPollTimer = setTimeout(pollBinlog, FIX_POLL_INTERVAL);
                         return;
@@ -504,10 +512,10 @@ export async function activate(context: vscode.ExtensionContext) {
                     if (stat.size > 0 && stat.size === fixLastSize) {
                         fixStableCount++;
                         if (fixStableCount >= FIX_STABLE_READINGS) {
-                            // Binlog is stable → reload the tree
+                            // Load both binlogs for comparison
                             if (extensionContext) {
-                                await handleBinlogOpen(allBinlogPaths, extensionContext, false);
-                                vscode.window.setStatusBarMessage('$(check) Binlog reloaded after fix', 5000);
+                                await handleBinlogOpen([baselinePath, afterFixPath], extensionContext, false);
+                                vscode.window.setStatusBarMessage('$(check) Before/after binlogs loaded for comparison', 5000);
                             }
                             return;
                         }
