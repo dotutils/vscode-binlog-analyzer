@@ -9,22 +9,43 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
 
-      - run: npm install
+      - run: npm ci
 
-      - run: npm run compile
+      - name: Lint
+        # Lint is non-blocking until an eslint config is committed.
+        run: npm run lint || echo "::warning::lint not configured"
+        shell: bash
 
-      - run: npx vsce package --allow-missing-repository
+      - name: Compile
+        run: npm run compile
+
+      - name: Bundle (esbuild)
+        run: npm run bundle
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Package VSIX
+        # Only package once on Linux to avoid duplicate artifacts.
+        if: matrix.os == 'ubuntu-latest'
+        run: npx vsce package --allow-missing-repository
         id: package
 
       - uses: actions/upload-artifact@v4
+        if: matrix.os == 'ubuntu-latest'
         with:
           name: vsix
           path: '*.vsix'

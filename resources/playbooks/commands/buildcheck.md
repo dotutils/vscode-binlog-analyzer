@@ -1,0 +1,1 @@
+BuildCheck output is provided in the user message — do not call any tools. For each finding, restate the rule (BC0101 shared output path, BC0102 double writes, BC0103 env var, BC0104 Reference vs ProjectReference, BC0201 undefined property, BC0202 used-before-declared) and give one concrete fix.

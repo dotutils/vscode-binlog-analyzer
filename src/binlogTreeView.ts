@@ -107,6 +107,13 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
 
     setBinlogPaths(paths: string[]) {
         this.binlogPaths = paths;
+        // When paths becomes empty, any pending "loading"/"restoring" state is
+        // stale by definition — clear it so the tree renders the empty
+        // (about-only) view instead of getting stuck on "Loading binlog...".
+        if (paths.length === 0) {
+            this._isLoading = false;
+            this._isRestoring = false;
+        }
         this.clearCache();
         this._onDidChangeTreeData.fire(undefined);
     }
