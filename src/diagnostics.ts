@@ -158,29 +158,45 @@ export class BinlogDiagnosticsProvider implements vscode.Disposable {
     private resolveFilePath(filePath: string): string | null {
         if (!filePath) { return null; }
 
-        if (path.isAbsolute(filePath)) {
+        const fs = require('fs') as typeof import('fs');
+
+        // Absolute path: verify it exists before using it. Binlogs built on
+        // other machines (CI, coworker) embed absolute paths that won't exist
+        // locally — fall through to workspace-relative resolution.
+        if (path.isAbsolute(filePath) && fs.existsSync(filePath)) {
             return filePath;
         }
 
+        // Extract the relative portion (strip drive prefix on Windows)
+        const relativePath = path.isAbsolute(filePath)
+            ? filePath.replace(/^[a-zA-Z]:/, '').replace(/^[\\/]+/, '')
+            : filePath;
+        const fileName = path.basename(filePath);
+
         // Multi-root workspaces: try each folder, prefer one where the file
-        // actually exists. Fall back to the first folder if none match.
+        // actually exists.
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (workspaceFolders && workspaceFolders.length > 0) {
             try {
-                const fs = require('fs') as typeof import('fs');
                 for (const folder of workspaceFolders) {
-                    const candidate = path.join(folder.uri.fsPath, filePath);
+                    // Try the relative path structure
+                    const candidate = path.join(folder.uri.fsPath, relativePath);
                     if (fs.existsSync(candidate)) {
                         return candidate;
                     }
+                    // Try just the filename
+                    const flat = path.join(folder.uri.fsPath, fileName);
+                    if (fs.existsSync(flat)) {
+                        return flat;
+                    }
                 }
             } catch {
-                // fs failure is non-fatal — fall through
+                // fs failure is non-fatal
             }
-            return path.join(workspaceFolders[0].uri.fsPath, filePath);
         }
 
-        return filePath;
+        // File doesn't exist locally — skip rather than point at a missing file
+        return null;
     }
 
     private toVSCodeSeverity(severity: string): vscode.DiagnosticSeverity {

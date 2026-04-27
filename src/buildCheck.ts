@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as cp from 'child_process';
 import * as path from 'path';
-import * as telemetry from './telemetry';
+import * as fs from 'fs';
 
 export interface BuildCheckResult {
     code: string;
@@ -209,15 +209,10 @@ export function pushBuildCheckToProblemsPanel(
         const filePath = result.file;
         if (!filePath) { continue; }
 
-        let uri: vscode.Uri;
-        try {
-            uri = path.isAbsolute(filePath)
-                ? vscode.Uri.file(filePath)
-                : vscode.Uri.file(path.join(path.dirname(summary.binlogPath), filePath));
-        } catch {
-            continue;
-        }
+        const resolved = resolveBuildCheckPath(filePath, summary.binlogPath);
+        if (!resolved) { continue; }
 
+        const uri = vscode.Uri.file(resolved);
         const key = uri.toString();
         const diags = byFile.get(key) || [];
 
@@ -245,6 +240,57 @@ export function pushBuildCheckToProblemsPanel(
     for (const [uriStr, diags] of byFile) {
         collection.set(vscode.Uri.parse(uriStr), diags);
     }
+}
+
+/**
+ * Resolve a file path from BuildCheck output to a local file that exists.
+ * BuildCheck paths are absolute on the build machine, which may differ from
+ * the local workspace layout (e.g. CI-built binlogs analysed locally).
+ */
+function resolveBuildCheckPath(filePath: string, binlogPath: string): string | null {
+    // 1. Try the path verbatim (same machine)
+    if (path.isAbsolute(filePath) && fs.existsSync(filePath)) {
+        return filePath;
+    }
+
+    // Extract the filename for relative lookups
+    const fileName = path.basename(filePath);
+
+    // 2. Try relative to the binlog directory
+    const binlogDir = path.dirname(binlogPath);
+    const nearBinlog = path.join(binlogDir, fileName);
+    if (fs.existsSync(nearBinlog)) {
+        return nearBinlog;
+    }
+
+    // 3. Try each workspace folder
+    const folders = vscode.workspace.workspaceFolders;
+    if (folders) {
+        for (const folder of folders) {
+            // Try the relative portion of the path (strip drive/root prefix)
+            const relative = filePath.replace(/^[a-zA-Z]:/, '').replace(/^[\\/]+/, '');
+            const candidate = path.join(folder.uri.fsPath, relative);
+            if (fs.existsSync(candidate)) {
+                return candidate;
+            }
+            // Try just the filename at workspace root
+            const flat = path.join(folder.uri.fsPath, fileName);
+            if (fs.existsSync(flat)) {
+                return flat;
+            }
+        }
+    }
+
+    // 4. For non-absolute paths, try relative to binlog dir
+    if (!path.isAbsolute(filePath)) {
+        const rel = path.join(binlogDir, filePath);
+        if (fs.existsSync(rel)) {
+            return rel;
+        }
+    }
+
+    // File doesn't exist locally — skip (don't create a broken diagnostic)
+    return null;
 }
 
 export function formatBuildCheckForChat(summary: BuildCheckSummary): string {
