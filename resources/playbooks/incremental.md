@@ -6,7 +6,7 @@ Tool budget: at most 3 MCP calls.
    - `skippedCount = 0` and `executionCount > 1` ⇒ target never skips (likely not incremental).
    - `0 < skippedCount < executionCount` ⇒ partial.
    - `skippedCount = executionCount` ⇒ fully incremental.
-2. Optionally one `binlog_search` for "Building target" or "up-to-date" to confirm rebuild reasons.
+2. Optionally one `binlog_lm_search` (or `binlog_search`) for "Building target" or "up-to-date" to confirm rebuild reasons.
 3. Optionally one `binlog_project_targets` call on the worst non-skipping target to inspect its `Inputs`/`Outputs`.
 
 Common fixes (use only when supported by the data):

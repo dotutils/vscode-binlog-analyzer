@@ -117,8 +117,16 @@ export class McpClient extends EventEmitter {
         // With multiple binlogs the caller MUST be explicit — silently
         // defaulting to binlogPaths[0] produced wrong answers for binlog B/C/...
         // (see issue: "binlog_file auto-inject is wrong for multi-binlog").
-        if (!args.binlog_file && this.binlogPaths.length === 1) {
-            args.binlog_file = this.binlogPaths[0];
+        if (this.binlogPaths.length === 1) {
+            const loaded = this.binlogPaths[0];
+            // Normalize: if the caller passed a bare filename / relative
+            // path / wrong path, replace with the actual loaded absolute
+            // path so the MCP server can resolve it. This guards against
+            // models that echo whatever filename they see in the prompt.
+            const provided = typeof args.binlog_file === 'string' ? args.binlog_file : '';
+            if (!provided || provided !== loaded) {
+                args.binlog_file = loaded;
+            }
         } else if (!args.binlog_file && this.binlogPaths.length > 1) {
             const list = this.binlogPaths.map((p, i) => `${String.fromCharCode(65 + i)}: ${p}`).join('\n');
             throw new Error(

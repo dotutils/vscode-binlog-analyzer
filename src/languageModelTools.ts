@@ -12,16 +12,17 @@ import { McpClient } from './mcpClient';
  *
  * By contributing `languageModelTools` and registering them with
  * `vscode.lm.registerTool`, any model anywhere in the IDE can call
- * `binlog_overview`, `binlog_errors`, `binlog_search`, `binlog_perf` and
- * `binlog_compare` against the binlog(s) the user has loaded — closing the
+ * `binlog_lm_overview`, `binlog_lm_errors`, `binlog_lm_search`,
+ * `binlog_lm_perf` and `binlog_lm_compare` against the binlog(s) the
+ * user has loaded — closing the
  * "knowledge gap between customers, builds and AI assistance" gap that
  * motivated this extension.
  *
  * Each tool here is a thin facade that forwards to a single underlying
- * BinlogInsights MCP tool (or, in the case of `binlog_perf`, a small
- * fan-out of MCP tools). They intentionally do NOT auto-pick a binlog —
- * the model must pass `binlog` explicitly when more than one is loaded,
- * matching the behaviour of `McpClient.callTool`.
+ * BinlogInsights MCP tool (or, in the case of `binlog_lm_perf`, a small
+ * fan-out of MCP tools). When a single binlog is loaded, `binlog_file`
+ * is auto-injected; when multiple are loaded the model must pass
+ * `binlog` explicitly, matching the behaviour of `McpClient.callTool`.
  */
 export interface BinlogToolContext {
     /** Returns the live MCP client, or null if no binlog is loaded. */
@@ -45,27 +46,27 @@ const TOOL_DEFS: Array<{
     description: string;
 }> = [
     {
-        name: 'binlog_overview',
+        name: 'binlog_lm_overview',
         mcpTool: 'binlog_overview',
         description: 'Summarise the loaded MSBuild binary log: build result, duration, project count, top-level errors and warnings.',
     },
     {
-        name: 'binlog_errors',
+        name: 'binlog_lm_errors',
         mcpTool: 'binlog_errors',
         description: 'List build errors and warnings from the loaded MSBuild binary log with file paths, line numbers and error codes.',
     },
     {
-        name: 'binlog_search',
+        name: 'binlog_lm_search',
         mcpTool: 'binlog_search',
         description: 'Free-text search across all build events in the loaded MSBuild binary log (targets, tasks, messages, properties).',
     },
     {
-        name: 'binlog_perf',
+        name: 'binlog_lm_perf',
         mcpTool: null,
         description: 'Performance analysis: returns expensive targets, tasks, projects and Roslyn analyzers from the loaded MSBuild binary log.',
     },
     {
-        name: 'binlog_compare',
+        name: 'binlog_lm_compare',
         mcpTool: 'binlog_compare',
         description: 'Compare two loaded MSBuild binary logs and report differences in result, errors, properties and target durations.',
     },
@@ -82,7 +83,17 @@ class BinlogLmTool implements vscode.LanguageModelTool<BinlogToolInput> {
         options: vscode.LanguageModelToolInvocationOptions<BinlogToolInput>,
         _token: vscode.CancellationToken,
     ): Promise<vscode.LanguageModelToolResult> {
-        const client = this.ctx.getClient();
+        // The MCP client may still be initializing (especially right after
+        // binlog load when /summary fires immediately). Wait up to 10 s
+        // for it to become ready before giving up.
+        let client = this.ctx.getClient();
+        if (client && !client.isReady) {
+            for (let i = 0; i < 20; i++) {
+                await new Promise(r => setTimeout(r, 500));
+                client = this.ctx.getClient();
+                if (!client || client.isReady) break;
+            }
+        }
         const loaded = this.ctx.getBinlogPaths();
 
         if (!client || !client.isReady) {
@@ -110,20 +121,20 @@ class BinlogLmTool implements vscode.LanguageModelTool<BinlogToolInput> {
             ]);
         }
 
-        if (this.toolName === 'binlog_search') {
+        if (this.toolName === 'binlog_lm_search') {
             if (!input.query) {
                 return new vscode.LanguageModelToolResult([
-                    new vscode.LanguageModelTextPart('binlog_search requires a `query` argument.'),
+                    new vscode.LanguageModelTextPart('binlog_lm_search requires a `query` argument.'),
                 ]);
             }
             args.query = input.query;
         }
 
-        if (this.toolName === 'binlog_compare') {
+        if (this.toolName === 'binlog_lm_compare') {
             if (!input.binlog_other && loaded.length < 2) {
                 return new vscode.LanguageModelToolResult([
                     new vscode.LanguageModelTextPart(
-                        'binlog_compare needs two binlogs. Pass `binlog` and `binlog_other`, or load a second binlog first.',
+                        'binlog_lm_compare needs two binlogs. Pass `binlog` and `binlog_other`, or load a second binlog first.',
                     ),
                 ]);
             }

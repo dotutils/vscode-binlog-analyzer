@@ -15,7 +15,7 @@ import {
  */
 const STATELESS_COMMANDS = new Set([
     'errors', 'summary', 'targets', 'compare', 'perf', 'incremental',
-    'search', 'properties', 'items', 'buildcheck', 'propertyhistory',
+    'timeline', 'search', 'properties', 'items', 'buildcheck', 'propertyhistory',
 ]);
 
 /**
@@ -114,6 +114,10 @@ export class BinlogChatParticipant {
         } else if (includeAllTools) {
             tools = vscode.lm.tools;
         } else {
+            // Match both the in-process LM-tool wrappers (binlog_lm_*) and the
+            // MCP-server tools when VS Code has registered them. The wrappers
+            // are the reliable path: they go through the tree's already-running
+            // McpClient and don't depend on VS Code's mcp.json startup timing.
             tools = vscode.lm.tools.filter(t =>
                 t.name.startsWith('binlog_') ||
                 t.name.includes('binlog_insights') ||
@@ -235,11 +239,15 @@ export class BinlogChatParticipant {
         if (this.binlogPaths.length === 0) {
             parts.push('<binlogs>none loaded</binlogs>');
         } else if (this.binlogPaths.length === 1) {
-            // Single binlog → MCP client auto-injects binlog_file, so we don't
-            // need to repeat the path; saves tokens and avoids hallucinated
-            // path echoes.
-            const name = this.binlogPaths[0].split(/[/\\]/).pop();
-            parts.push(`<binlogs count="1" active="${escapeAttr(name || '')}"/>`);
+            // Single binlog: surface the absolute path. The MCP client
+            // auto-injects when binlog_file is omitted, but if the model
+            // *does* pass a value (e.g. echoing the filename it sees here)
+            // it must be the absolute path or the MCP server can't resolve it.
+            parts.push(
+                `<binlogs count="1">\n  <binlog path="${escapeAttr(this.binlogPaths[0])}"/>\n</binlogs>\n` +
+                `When calling tools you may omit binlog_file (the extension fills it in) ` +
+                `or pass the full path verbatim — never a bare filename.`,
+            );
         } else {
             // Multi-binlog → MCP throws if binlog_file is omitted, so the
             // model MUST learn the absolute paths and labels.

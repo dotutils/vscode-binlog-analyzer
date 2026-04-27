@@ -423,18 +423,27 @@ export async function activate(context: vscode.ExtensionContext) {
 
             // Get project files for build command reconstruction
             const projectFiles = treeDataProvider?.getProjectFiles() || [];
-            const binlogPath = currentBinlogPath.replace(/\\/g, '/');
 
             // Infer the build command from binlog + project info
-            // Try to find a solution file or the root project
             const slnFiles = projectFiles.filter(f => /\.sln$/i.test(f));
             const buildTarget = slnFiles.length > 0
                 ? slnFiles[0].replace(/\\/g, '/')
                 : (projectFiles.length === 1 ? projectFiles[0].replace(/\\/g, '/') : '');
 
+            // Snapshot the original binlog so we can compare before/after.
+            // The rebuild writes to a NEW path to preserve the baseline.
+            const binlogDir = path.dirname(currentBinlogPath);
+            const binlogBase = path.basename(currentBinlogPath, '.binlog');
+            let fixIndex = 1;
+            while (fs.existsSync(path.join(binlogDir, `${binlogBase}_fixed_${fixIndex}.binlog`))) {
+                fixIndex++;
+            }
+            const afterFixPath = path.join(binlogDir, `${binlogBase}_fixed_${fixIndex}.binlog`);
+            const afterFixPathFwd = afterFixPath.replace(/\\/g, '/');
+
             const buildCmd = buildTarget
-                ? `dotnet build "${buildTarget}" -bl:"${binlogPath}"`
-                : `dotnet build -bl:"${binlogPath}"`;
+                ? `dotnet build "${buildTarget}" -bl:"${afterFixPathFwd}"`
+                : `dotnet build -bl:"${afterFixPathFwd}"`;
 
             // Build a detailed prompt with actual issues for agent mode
             const issueLines: string[] = [];
@@ -451,7 +460,8 @@ export async function activate(context: vscode.ExtensionContext) {
                 `Fix the following ${diag.errorCount} errors and ${diag.warningCount} warnings from the MSBuild binary log.\n\n` +
                 issueLines.join('\n') + '\n\n' +
                 `BUILD COMMAND: \`${buildCmd}\`\n` +
-                `BINLOG PATH: \`${binlogPath}\`\n\n` +
+                `ORIGINAL BINLOG: \`${currentBinlogPath.replace(/\\/g, '/')}\` (preserved as baseline)\n` +
+                `NEW BINLOG: \`${afterFixPathFwd}\` (will be created by the rebuild)\n\n` +
                 `INSTRUCTIONS — FIX-BUILD-VERIFY LOOP:\n` +
                 `You MUST follow this iterative cycle until the build is clean:\n\n` +
                 `**STEP 1 — FIX:** For each issue listed above:\n` +
@@ -460,7 +470,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 `    suppress it with a pragma/NoWarn and add a comment: // Suppressed: <reason>\n\n` +
                 `**STEP 2 — REBUILD:** Run the build command in the terminal:\n` +
                 `  \`${buildCmd}\`\n` +
-                `  This will regenerate the binlog at the same path.\n\n` +
+                `  This creates a NEW binlog at ${afterFixPathFwd} — the original is preserved.\n\n` +
                 `**STEP 3 — VERIFY:** Check the build output for remaining errors/warnings.\n` +
                 `  - If the build output still shows errors or warnings, go back to STEP 1 and fix them.\n` +
                 `  - Repeat this cycle (max 5 iterations) until the build succeeds with 0 errors and 0 warnings.\n` +
@@ -475,6 +485,52 @@ export async function activate(context: vscode.ExtensionContext) {
                 query: prompt,
                 isPartialQuery: false,
             });
+
+            // Watch for the new binlog file to appear and stabilise, then
+            // load both (original + fixed) for comparison.
+            const baselinePath = currentBinlogPath;
+            const fixStartTime = Date.now();
+            const FIX_POLL_INTERVAL = 8_000;
+            const FIX_STABLE_READINGS = 3;
+            let fixStableCount = 0;
+            let fixLastSize = -1;
+            let fixPollTimer: NodeJS.Timeout | undefined;
+
+            const pollBinlog = async () => {
+                try {
+                    if (!fs.existsSync(afterFixPath)) {
+                        fixStableCount = 0;
+                        fixLastSize = -1;
+                        fixPollTimer = setTimeout(pollBinlog, FIX_POLL_INTERVAL);
+                        return;
+                    }
+                    const stat = fs.statSync(afterFixPath);
+                    if (stat.mtimeMs < fixStartTime) {
+                        fixPollTimer = setTimeout(pollBinlog, FIX_POLL_INTERVAL);
+                        return;
+                    }
+                    if (stat.size > 0 && stat.size === fixLastSize) {
+                        fixStableCount++;
+                        if (fixStableCount >= FIX_STABLE_READINGS) {
+                            // Load both binlogs for comparison
+                            if (extensionContext) {
+                                await handleBinlogOpen([baselinePath, afterFixPath], extensionContext, false);
+                                vscode.window.setStatusBarMessage('$(check) Before/after binlogs loaded for comparison', 5000);
+                            }
+                            return;
+                        }
+                    } else {
+                        fixStableCount = 0;
+                        fixLastSize = stat.size;
+                    }
+                    fixPollTimer = setTimeout(pollBinlog, FIX_POLL_INTERVAL);
+                } catch {
+                    fixPollTimer = setTimeout(pollBinlog, FIX_POLL_INTERVAL);
+                }
+            };
+            fixPollTimer = setTimeout(pollBinlog, 15_000);
+            // Stop polling after 20 minutes
+            setTimeout(() => { if (fixPollTimer) clearTimeout(fixPollTimer); }, 20 * 60 * 1000);
         })
     );
 
@@ -866,7 +922,54 @@ export async function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    // Command: Search Build Events — search across binlog and show in tree
+    // Command: Ask @binlog about a specific diagnostic (context menu on errors/warnings)
+    context.subscriptions.push(
+        vscode.commands.registerCommand('binlog.askAboutDiagnostic', async (treeItem?: BinlogTreeItem) => {
+            telemetry.trackCommand('askAboutDiagnostic');
+            if (!treeItem) { return; }
+            const label = typeof treeItem.label === 'string' ? treeItem.label : '';
+            const detail = treeItem.fullText || label;
+            const binlogCtx = currentBinlogPath ? ` The binlog_file is "${currentBinlogPath}".` : '';
+            const prompt =
+                `@binlog Explain this MSBuild diagnostic and what is causing it. ` +
+                `Use binlog_lm_search and binlog_lm_errors to gather context.\n\n` +
+                `${detail}${binlogCtx}`;
+            vscode.commands.executeCommand('workbench.action.chat.open', prompt);
+        })
+    );
+
+    // Command: Fix a specific diagnostic with Copilot agent (context menu on errors/warnings)
+    context.subscriptions.push(
+        vscode.commands.registerCommand('binlog.fixDiagnostic', async (treeItem?: BinlogTreeItem) => {
+            telemetry.trackCommand('fixDiagnostic');
+            if (!treeItem) { return; }
+            const label = typeof treeItem.label === 'string' ? treeItem.label : '';
+            const detail = treeItem.fullText || label;
+            const binlogCtx = currentBinlogPath ? `\nBINLOG: ${currentBinlogPath}` : '';
+
+            // Extract file path from the tooltip if available
+            const tooltip = typeof treeItem.tooltip === 'string' ? treeItem.tooltip : '';
+            // Tooltip format is typically "CODE: message\nfilepath:line"
+            const fileMatch = tooltip.match(/([A-Za-z]:\\[^\n]+|\/[^\n]+):(\d+)/);
+            const fileLine = fileMatch ? `\nFILE: ${fileMatch[1]}\nLINE: ${fileMatch[2]}` : '';
+
+            const prompt =
+                `Fix this MSBuild diagnostic by editing the source file directly.\n\n` +
+                `DIAGNOSTIC: ${detail}${fileLine}${binlogCtx}\n\n` +
+                `INSTRUCTIONS:\n` +
+                `1. Open the file mentioned in the diagnostic\n` +
+                `2. Apply the fix (edit the MSBuild XML, add/move properties, fix references, etc.)\n` +
+                `3. If the file path doesn't exist locally, check the workspace for a file with the same name\n` +
+                `4. If the issue cannot be fixed directly (e.g. SDK limitation), suppress it with NoWarn and add a comment explaining why\n` +
+                `5. Show what you changed`;
+
+            // Use agent mode so Copilot can edit files
+            vscode.commands.executeCommand('workbench.action.chat.open', {
+                query: prompt,
+                isPartialQuery: false,
+            });
+        })
+    );
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.searchBinlog', async () => {
             telemetry.trackCommand('searchBinlog');
@@ -1423,9 +1526,6 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
     const config = vscode.workspace.getConfiguration('binlogAnalyzer');
     const autoLoad = config.get<boolean>('autoLoad', true);
 
-    const fileName = getFileName(binlogPaths[0]);
-    const multi = binlogPaths.length > 1 ? ` (+${binlogPaths.length - 1} more)` : '';
-
     // Configure MCP server for Copilot Chat and start tree client in parallel
     // cleanupBinlogInstructions is fire-and-forget (non-critical cleanup of old files)
     cleanupBinlogInstructions().catch(() => {});
@@ -1465,15 +1565,21 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
         telemetry.trackMcpError('startMcpClient', String(err));
     });
 
-    // Wait for MCP config (needed before Copilot Chat works) but don't block forever
+    // Wait for BOTH MCP config (for mcp.json settings) AND the tree client
+    // (for the LM-tool wrappers) before opening chat. The tree client must
+    // be ready before /summary fires, otherwise the wrapper returns
+    // "No binlog is currently loaded".
     await Promise.race([
-        mcpConfigPromise,
-        new Promise(resolve => setTimeout(resolve, 10000)),
+        Promise.all([mcpConfigPromise, treeClientPromise]),
+        new Promise(resolve => setTimeout(resolve, 15000)),
     ]);
 
     // Only open chat and steal focus when user explicitly loaded a binlog
     if (interactive) {
-        const chatMessage = `@binlog Binlog "${fileName}"${multi} is loaded. What would you like to analyze?`;
+        // Trigger the @binlog /summary slash command directly so the model
+        // calls binlog_overview instead of politely asking what to do.
+        const chatMessage = `@binlog /summary`;
+        // Small delay so the chat panel finishes rendering before we send.
         setTimeout(() => {
             // Use chat.new to avoid reusing a previous chat session with stale tool-call history
             vscode.commands.executeCommand('workbench.action.chat.new', chatMessage)
@@ -1481,7 +1587,7 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
                     // Fallback: older VS Code versions may not support chat.new
                     vscode.commands.executeCommand('workbench.action.chat.open', chatMessage);
                 });
-        }, 1500);
+        }, 500);
     }
 
     // If workspace doesn't match binlog location, suggest updating it
