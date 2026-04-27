@@ -922,7 +922,37 @@ export async function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    // Command: Search Build Events — search across binlog and show in tree
+    // Command: Ask @binlog about a specific diagnostic (context menu on errors/warnings)
+    context.subscriptions.push(
+        vscode.commands.registerCommand('binlog.askAboutDiagnostic', async (treeItem?: BinlogTreeItem) => {
+            telemetry.trackCommand('askAboutDiagnostic');
+            if (!treeItem) { return; }
+            const label = typeof treeItem.label === 'string' ? treeItem.label : '';
+            const detail = treeItem.fullText || label;
+            const binlogCtx = currentBinlogPath ? ` The binlog_file is "${currentBinlogPath}".` : '';
+            const prompt =
+                `@binlog Explain this MSBuild diagnostic and what is causing it. ` +
+                `Use binlog_lm_search and binlog_lm_errors to gather context.\n\n` +
+                `${detail}${binlogCtx}`;
+            vscode.commands.executeCommand('workbench.action.chat.open', prompt);
+        })
+    );
+
+    // Command: Fix a specific diagnostic with @binlog (context menu on errors/warnings)
+    context.subscriptions.push(
+        vscode.commands.registerCommand('binlog.fixDiagnostic', async (treeItem?: BinlogTreeItem) => {
+            telemetry.trackCommand('fixDiagnostic');
+            if (!treeItem) { return; }
+            const label = typeof treeItem.label === 'string' ? treeItem.label : '';
+            const detail = treeItem.fullText || label;
+            const binlogCtx = currentBinlogPath ? ` The binlog_file is "${currentBinlogPath}".` : '';
+            const prompt =
+                `@binlog Suggest a concrete fix for this MSBuild diagnostic. ` +
+                `Provide exact MSBuild XML or CLI flags and indicate which file to edit.\n\n` +
+                `${detail}${binlogCtx}`;
+            vscode.commands.executeCommand('workbench.action.chat.open', prompt);
+        })
+    );
     context.subscriptions.push(
         vscode.commands.registerCommand('binlog.searchBinlog', async () => {
             telemetry.trackCommand('searchBinlog');

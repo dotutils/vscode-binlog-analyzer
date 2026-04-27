@@ -2,7 +2,7 @@
   "name": "binlog-analyzer",
   "displayName": "MSBuild Binlog Analyzer",
   "description": "Analyze MSBuild binary logs with Copilot Chat and MCP tools",
-  "version": "0.10.27",
+  "version": "0.10.28",
   "preview": true,
   "publisher": "dotutils",
   "license": "MIT",
@@ -193,6 +193,16 @@
         "command": "binlog.analyzeInChat",
         "title": "Analyze in Copilot Chat",
         "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "binlog.askAboutDiagnostic",
+        "title": "Ask @binlog about this issue",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "binlog.fixDiagnostic",
+        "title": "Fix with @binlog",
+        "icon": "$(sparkle)"
       },
       {
         "command": "binlog.checkForUpdates",
@@ -582,6 +592,16 @@
         {
           "command": "binlog.analyzeInChat",
           "when": "view == binlogExplorer && viewItem =~ /^copyable-(perf|target|task|search)/",
+          "group": "0_analyze"
+        },
+        {
+          "command": "binlog.askAboutDiagnostic",
+          "when": "view == binlogExplorer && viewItem == copyable-diagnostic",
+          "group": "0_analyze"
+        },
+        {
+          "command": "binlog.fixDiagnostic",
+          "when": "view == binlogExplorer && viewItem == copyable-diagnostic",
           "group": "0_analyze"
         },
         {
