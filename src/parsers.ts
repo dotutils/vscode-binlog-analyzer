@@ -270,12 +270,14 @@ export function computePerfComparison(
  */
 export function workspaceMatchesBinlog(workspacePath: string | undefined, binlogPath: string): boolean {
     if (!workspacePath) { return false; }
-    const path = require('path');
-    const binlogDir = path.dirname(binlogPath).toLowerCase().replace(/[/\\]+$/, '');
-    const ws = workspacePath.toLowerCase().replace(/[/\\]+$/, '');
+    // Normalize to forward slashes so this works on all platforms
+    // (test paths may contain Windows backslashes even on Linux CI).
+    const normalize = (p: string) => p.replace(/\\/g, '/').toLowerCase().replace(/\/+$/, '');
+    const binlogDir = normalize(binlogPath).split('/').slice(0, -1).join('/');
+    const ws = normalize(workspacePath);
+    if (!binlogDir || !ws) { return false; }
     if (binlogDir === ws) { return true; }
-    const sep = path.sep.toLowerCase();
-    return binlogDir.startsWith(ws + sep) || ws.startsWith(binlogDir + sep);
+    return binlogDir.startsWith(ws + '/') || ws.startsWith(binlogDir + '/');
 }
 
 /**
@@ -287,18 +289,25 @@ export function getSourceLabel(
     workspaceName: string | undefined,
     binlogPath: string
 ): { label: string; tooltip: string } {
-    const path = require('path');
-    const binlogDir = path.dirname(binlogPath);
+    // Use forward-slash normalization so dirname works cross-platform
+    const normalized = binlogPath.replace(/\\/g, '/');
+    const parts = normalized.split('/');
+    parts.pop(); // remove filename
+    const binlogDir = parts.join('/') || normalized;
+    const dirName = parts.pop() || '.';
 
     if (workspacePath && workspaceMatchesBinlog(workspacePath, binlogPath)) {
+        const wsNorm = workspacePath.replace(/\\/g, '/');
+        const wsParts = wsNorm.replace(/\/+$/, '').split('/');
+        const fallbackName = wsParts.pop() || '';
         return {
-            label: workspaceName || path.basename(workspacePath),
+            label: workspaceName || fallbackName,
             tooltip: `Workspace: ${workspacePath}`,
         };
     }
 
     return {
-        label: path.basename(binlogDir),
+        label: dirName,
         tooltip: `Binlog source: ${binlogDir}`,
     };
 }
