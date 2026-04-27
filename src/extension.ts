@@ -475,6 +475,54 @@ export async function activate(context: vscode.ExtensionContext) {
                 query: prompt,
                 isPartialQuery: false,
             });
+
+            // Watch the binlog file for changes so the tree auto-refreshes
+            // after the agent rebuilds. MSBuild writes progressively, so we
+            // wait for the file size to stabilise before triggering a reload.
+            const watchedPath = currentBinlogPath;
+            const fixStartTime = Date.now();
+            const FIX_POLL_INTERVAL = 8_000;
+            const FIX_STABLE_READINGS = 3;
+            let fixStableCount = 0;
+            let fixLastSize = -1;
+            let fixPollTimer: NodeJS.Timeout | undefined;
+
+            const pollBinlog = async () => {
+                try {
+                    if (!fs.existsSync(watchedPath)) {
+                        fixStableCount = 0;
+                        fixLastSize = -1;
+                        fixPollTimer = setTimeout(pollBinlog, FIX_POLL_INTERVAL);
+                        return;
+                    }
+                    const stat = fs.statSync(watchedPath);
+                    // Only react to writes that happened after the fix flow started
+                    if (stat.mtimeMs < fixStartTime) {
+                        fixPollTimer = setTimeout(pollBinlog, FIX_POLL_INTERVAL);
+                        return;
+                    }
+                    if (stat.size > 0 && stat.size === fixLastSize) {
+                        fixStableCount++;
+                        if (fixStableCount >= FIX_STABLE_READINGS) {
+                            // Binlog is stable → reload the tree
+                            if (extensionContext) {
+                                await handleBinlogOpen(allBinlogPaths, extensionContext, false);
+                                vscode.window.setStatusBarMessage('$(check) Binlog reloaded after fix', 5000);
+                            }
+                            return;
+                        }
+                    } else {
+                        fixStableCount = 0;
+                        fixLastSize = stat.size;
+                    }
+                    fixPollTimer = setTimeout(pollBinlog, FIX_POLL_INTERVAL);
+                } catch {
+                    fixPollTimer = setTimeout(pollBinlog, FIX_POLL_INTERVAL);
+                }
+            };
+            fixPollTimer = setTimeout(pollBinlog, 15_000);
+            // Stop polling after 20 minutes
+            setTimeout(() => { if (fixPollTimer) clearTimeout(fixPollTimer); }, 20 * 60 * 1000);
         })
     );
 
