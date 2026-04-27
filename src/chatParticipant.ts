@@ -15,7 +15,7 @@ import {
  */
 const STATELESS_COMMANDS = new Set([
     'errors', 'summary', 'targets', 'compare', 'perf', 'incremental',
-    'search', 'properties', 'items', 'buildcheck', 'propertyhistory',
+    'timeline', 'search', 'properties', 'items', 'buildcheck', 'propertyhistory',
 ]);
 
 /**

@@ -2,7 +2,7 @@
   "name": "binlog-analyzer",
   "displayName": "MSBuild Binlog Analyzer",
   "description": "Analyze MSBuild binary logs with Copilot Chat and MCP tools",
-  "version": "0.10.21",
+  "version": "0.10.22",
   "preview": true,
   "publisher": "dotutils",
   "license": "MIT",
@@ -517,7 +517,7 @@
             "id": "binlog_insights_mcp"
           }
         ],
-        "systemPrompt": "You are an MSBuild build analysis assistant with BinlogInsights MCP tools available. Begin investigations with binlog_overview unless the question is narrowly scoped, then drill in with the most specific tool. For performance: rank with binlog_expensive_targets / binlog_expensive_tasks / binlog_expensive_projects / binlog_expensive_analyzers. For errors: binlog_errors then binlog_search. For deeper context the @binlog chat participant exposes the same tools plus prepared playbooks (try /perf, /incremental, /summary, /errors, /buildcheck). All tools take a binlog_file path parameter — ask the user if you don't know it. Reference real file paths, line numbers and error codes from tool output; don't invent numbers."
+        "systemPrompt": "You are an MSBuild build analysis assistant with BinlogInsights MCP tools available. Begin investigations with binlog_lm_overview (or binlog_overview) unless the question is narrowly scoped, then drill in with the most specific tool. For performance: rank with binlog_expensive_targets / binlog_expensive_tasks / binlog_expensive_projects / binlog_expensive_analyzers. For errors: binlog_lm_errors (or binlog_errors) then binlog_lm_search (or binlog_search). For deeper context the @binlog chat participant exposes the same tools plus prepared playbooks (try /perf, /incremental, /summary, /errors, /buildcheck). All tools take a binlog_file path parameter — ask the user if you don't know it. Reference real file paths, line numbers and error codes from tool output; don't invent numbers."
       }
     ],
     "menus": {

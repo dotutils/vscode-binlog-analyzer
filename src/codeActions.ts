@@ -61,7 +61,7 @@ export class BinlogCodeActionProvider implements vscode.CodeActionProvider {
         action.diagnostics = [diag];
         const prompt =
             `@binlog Explain this MSBuild diagnostic and what is causing it. ` +
-            `Use binlog_search and binlog_errors to gather context.\n\n` +
+            `Use binlog_lm_search and binlog_lm_errors to gather context.\n\n` +
             `- Code: ${code || '(none)'}\n` +
             `- Message: ${diag.message}\n` +
             `- Location: ${this.buildLocation(document, diag)}`;
