@@ -144,7 +144,7 @@ export class BinlogChatParticipant {
         }
 
         // --- Build prompts (lazy) ----------------------------------------------
-        const systemPrompt = this.buildSystemPrompt(request.command);
+        const systemPrompt = this.buildSystemPrompt(request.command) || 'You are an MSBuild build analysis assistant.';
         const userMessage = this.buildUserMessage(request, buildCheckBlock);
 
         // --- History gating ----------------------------------------------------
@@ -348,7 +348,7 @@ export class BinlogChatParticipant {
         // versions, so we keep the textual fallback that already worked.
         // The XML wrapping makes the boundary explicit for the model.
         messages.push(
-            vscode.LanguageModelChatMessage.User(toolResultTexts.join('\n\n')),
+            vscode.LanguageModelChatMessage.User(toolResultTexts.join('\n\n') || '(no tool results)'),
         );
 
         try {
@@ -363,7 +363,13 @@ export class BinlogChatParticipant {
             await this.processResponse(nextRequest, messages, model, tools, stream, token, depth + 1);
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
-            if (msg.includes('invalid_request_body') || msg.includes('tool_calls')) {
+            if (
+                msg.includes('invalid_request_body') ||
+                msg.includes('tool_calls') ||
+                msg.includes("role 'tool'") ||
+                msg.includes('tool_call_id') ||
+                msg.includes('400')
+            ) {
                 const retry = await model.sendRequest(messages, {}, token);
                 for await (const part of retry.stream) {
                     if (part instanceof vscode.LanguageModelTextPart) {

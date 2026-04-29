@@ -25,13 +25,17 @@ The [BinlogInsights.Mcp](https://www.nuget.org/packages/BinlogInsights.Mcp) serv
 
 | Feature | Description |
 |---------|-------------|
-| **@binlog Chat** | Ask Copilot about errors, performance, targets, imports, NuGet issues — with slash commands like `/errors`, `/perf`, `/timeline`, `/compare` |
+| **@binlog Chat** | Ask Copilot about errors, performance, targets, imports, NuGet issues — with slash commands like `/errors`, `/perf`, `/timeline`, `/compare`, `/summary`, `/incremental`, `/buildcheck`, `/search`, `/targets`, `/properties`, `/items`, `/propertyhistory` |
 | **Build & Collect** | Build a project and capture a `.binlog` in one step |
 | **Binlog Explorer** | Sidebar tree with project → target → task hierarchy, errors, warnings, performance |
 | **Build Timeline** | Visual bar charts of target/task durations with click-to-analyze in Copilot |
+| **Fix All Issues** | Copilot fixes all build errors/warnings, rebuilds, and loads before/after for comparison |
+| **Auto-fix Diagnostic** | Right-click any error/warning in the tree → "Auto-fix with Copilot" to fix it directly |
 | **Optimize Build** | Pick optimizations, Copilot applies changes, verify with A/B comparison |
+| **Build Analysis Mode** | Chat mode pre-configured with BinlogInsights MCP tools — works with any agent |
+| **Language Model Tools** | `binlog_lm_overview`, `binlog_lm_errors`, `binlog_lm_search`, `binlog_lm_perf`, `binlog_lm_compare` — available to @workspace, agent mode, and custom chat modes |
 | **CI/CD Integration** | Download binlogs from Azure DevOps Pipelines and GitHub Actions — filter by branch or PR |
-| **Problems Panel** | Build diagnostics as native VS Code errors/warnings with per-project CodeLens |
+| **Problems Panel** | Build diagnostics as native VS Code errors/warnings with per-project CodeLens and "Ask @binlog" CodeActions |
 | **Search** | Search across all build events — targets, tasks, messages, properties |
 
 ## Configuration

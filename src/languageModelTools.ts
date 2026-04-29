@@ -138,7 +138,10 @@ class BinlogLmTool implements vscode.LanguageModelTool<BinlogToolInput> {
                     ),
                 ]);
             }
-            args.binlog_file_other = input.binlog_other ?? loaded[1];
+            // binlog_compare uses binlog_file_a / binlog_file_b (not binlog_file)
+            args.binlog_file_a = args.binlog_file || loaded[0];
+            args.binlog_file_b = input.binlog_other ?? loaded[1];
+            delete args.binlog_file;
         }
 
         try {

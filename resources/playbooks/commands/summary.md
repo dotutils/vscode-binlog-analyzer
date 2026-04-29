@@ -1,1 +1,1 @@
-Use `binlog_lm_overview` (or `binlog_overview`). Output: result, duration, project count, error/warning counts, anything visibly unusual. ≤ 8 short lines.
+Use `binlog_lm_overview` (or `binlog_overview`). The `projectCount` from overview counts solution-level evaluations, not actual projects — if it's very low (1-2), also call `binlog_projects` to get the real project count. Output: result, duration, actual project count, error/warning counts, anything visibly unusual. ≤ 8 short lines.

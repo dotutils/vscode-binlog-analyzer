@@ -128,11 +128,14 @@ export class McpClient extends EventEmitter {
                 args.binlog_file = loaded;
             }
         } else if (!args.binlog_file && this.binlogPaths.length > 1) {
-            const list = this.binlogPaths.map((p, i) => `${String.fromCharCode(65 + i)}: ${p}`).join('\n');
-            throw new Error(
-                `Tool '${name}' requires an explicit binlog_file argument when multiple binlogs are loaded. ` +
-                `Loaded binlogs:\n${list}`
-            );
+            // binlog_compare uses binlog_file_a / binlog_file_b instead of binlog_file
+            if (!args.binlog_file_a) {
+                const list = this.binlogPaths.map((p, i) => `${String.fromCharCode(65 + i)}: ${p}`).join('\n');
+                throw new Error(
+                    `Tool '${name}' requires an explicit binlog_file argument when multiple binlogs are loaded. ` +
+                    `Loaded binlogs:\n${list}`
+                );
+            }
         }
         log(`callTool: ${name} args=${JSON.stringify(args).substring(0, 200)}`);
         const result = await this.sendRequest('tools/call', { name, arguments: args }) as {
