@@ -157,6 +157,7 @@ export class BinlogChatParticipant {
             vscode.LanguageModelChatMessage.User(userMessage),
         ];
 
+        const state = { hadOutput: false, toolCallCount: 0 };
         try {
             const chatRequest = await model.sendRequest(
                 messages,
@@ -166,7 +167,7 @@ export class BinlogChatParticipant {
                 },
                 token,
             );
-            await this.processResponse(chatRequest, messages, model, tools, stream, token);
+            await this.processResponse(chatRequest, messages, model, tools, stream, token, 0, state);
         } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
             telemetry.trackError('chatParticipant', err);
@@ -192,8 +193,9 @@ export class BinlogChatParticipant {
                         },
                         token,
                     );
-                    await this.processResponse(retry, fresh, model, tools, stream, token);
+                    await this.processResponse(retry, fresh, model, tools, stream, token, 0, state);
                 } catch (retryErr) {
+                    telemetry.trackError('chatParticipantRetry', retryErr);
                     const m = retryErr instanceof Error ? retryErr.message : String(retryErr);
                     stream.markdown(`⚠️ Error: ${m}\n\nTry starting a **new chat**.`);
                 }
@@ -202,6 +204,8 @@ export class BinlogChatParticipant {
             } else {
                 throw err;
             }
+        } finally {
+            telemetry.trackChatComplete(request.command, state.hadOutput, state.toolCallCount);
         }
     }
 
@@ -302,10 +306,12 @@ export class BinlogChatParticipant {
         stream: vscode.ChatResponseStream,
         token: vscode.CancellationToken,
         depth: number = 0,
-    ): Promise<void> {
+        state: { hadOutput: boolean; toolCallCount: number } = { hadOutput: false, toolCallCount: 0 },
+    ): Promise<{ hadOutput: boolean; toolCallCount: number }> {
         if (depth > 10) {
             stream.markdown('\n\n⚠️ Too many tool calls — stopping here.\n');
-            return;
+            state.hadOutput = true;
+            return state;
         }
 
         const toolCalls: vscode.LanguageModelToolCallPart[] = [];
@@ -313,15 +319,17 @@ export class BinlogChatParticipant {
         for await (const part of chatRequest.stream) {
             if (part instanceof vscode.LanguageModelTextPart) {
                 stream.markdown(part.value);
+                if (part.value.trim()) state.hadOutput = true;
             } else if (part instanceof vscode.LanguageModelToolCallPart) {
                 toolCalls.push(part);
             }
         }
 
-        if (toolCalls.length === 0) return;
+        if (toolCalls.length === 0) return state;
 
         for (const call of toolCalls) {
             stream.progress(`Calling ${call.name}…`);
+            state.toolCallCount++;
         }
 
         const toolResultTexts: string[] = [];
@@ -339,6 +347,7 @@ export class BinlogChatParticipant {
                 toolResultTexts.push(`<tool_result name="${call.name}">\n${text || '(empty)'}\n</tool_result>`);
             } catch (err) {
                 const m = err instanceof Error ? err.message : String(err);
+                telemetry.trackToolError(call.name, err);
                 toolResultTexts.push(`<tool_result name="${call.name}" error="true">${m}</tool_result>`);
             }
         }
@@ -360,9 +369,10 @@ export class BinlogChatParticipant {
                 },
                 token,
             );
-            await this.processResponse(nextRequest, messages, model, tools, stream, token, depth + 1);
+            await this.processResponse(nextRequest, messages, model, tools, stream, token, depth + 1, state);
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
+            telemetry.trackError('processResponse', err);
             if (
                 msg.includes('invalid_request_body') ||
                 msg.includes('tool_calls') ||
@@ -374,12 +384,14 @@ export class BinlogChatParticipant {
                 for await (const part of retry.stream) {
                     if (part instanceof vscode.LanguageModelTextPart) {
                         stream.markdown(part.value);
+                        if (part.value.trim()) state.hadOutput = true;
                     }
                 }
             } else {
                 throw err;
             }
         }
+        return state;
     }
 
     dispose() {
