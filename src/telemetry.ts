@@ -130,3 +130,20 @@ export function trackError(context: string, error: unknown): void {
         message: msg.substring(0, 200),
     });
 }
+
+/** Track tool invocation error */
+export function trackToolError(toolName: string, error: unknown): void {
+    const msg = error instanceof Error ? error.message : String(error);
+    reporter?.sendTelemetryErrorEvent('toolInvocationError', {
+        tool: toolName,
+        message: msg.substring(0, 200),
+    });
+}
+
+/** Track chat completion with output status */
+export function trackChatComplete(command: string | undefined, hadOutput: boolean, toolCallCount: number): void {
+    reporter?.sendTelemetryEvent('chatComplete', {
+        command: command || '(none)',
+        hadOutput: String(hadOutput),
+    }, { toolCallCount });
+}
