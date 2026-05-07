@@ -5,6 +5,12 @@ import * as http from 'http';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import {
+    isAllowedRedirectUrl,
+    safeBasename,
+    psSingleQuote,
+    assertNoZipSlip,
+} from './ciSafety';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -190,19 +196,23 @@ async function listAzdoBuilds(org: string, project: string, opts?: { pipelineId?
 }
 
 async function downloadAzdoArtifact(org: string, project: string, runId: string, artifactName: string, destDir: string): Promise<string[]> {
+    const safeName = safeBasename(artifactName);
     // Try direct ZIP download first (works for public projects without az CLI)
     const zipUrl = `https://dev.azure.com/${org}/${project}/_apis/build/builds/${runId}/artifacts?artifactName=${encodeURIComponent(artifactName)}&api-version=7.0&%24format=zip`;
-    const zipPath = path.join(destDir, `${artifactName}.zip`);
+    const zipPath = path.join(destDir, `${safeName}.zip`);
 
     try {
         await httpsDownloadFile(zipUrl, zipPath);
-        const extractDir = path.join(destDir, artifactName);
+        const extractDir = path.join(destDir, safeName);
         fs.mkdirSync(extractDir, { recursive: true });
+        // Single-quote PowerShell literals; escape embedded `'` by doubling.
         const extractResult = await execCommand('powershell', [
             '-NoProfile', '-Command',
-            `Expand-Archive -Path '${zipPath}' -DestinationPath '${extractDir}' -Force`,
+            `Expand-Archive -Path ${psSingleQuote(zipPath)} -DestinationPath ${psSingleQuote(extractDir)} -Force`,
         ], undefined, 120000);
         if (extractResult.code === 0) {
+            // Defense in depth: verify nothing escaped the extract dir.
+            assertNoZipSlip(extractDir);
             try { fs.unlinkSync(zipPath); } catch { /* ignore */ }
             return findBinlogFiles(extractDir);
         }
@@ -230,6 +240,8 @@ async function downloadAzdoArtifact(org: string, project: string, runId: string,
         );
     }
 
+    // The az CLI extracts into destDir; still validate against zip-slip.
+    assertNoZipSlip(destDir);
     return findBinlogFiles(destDir);
 }
 
@@ -368,6 +380,8 @@ async function downloadGitHubArtifact(owner: string, repo: string, runId: string
         throw new Error(`Failed to download artifact: ${result.stderr.substring(0, 300)}`);
     }
 
+    // gh extracts the archive into destDir; defense-in-depth path check.
+    assertNoZipSlip(destDir);
     return findBinlogFiles(destDir);
 }
 
@@ -413,6 +427,11 @@ function httpsGetJson(url: string, redirectCount: number = 0): Promise<any> {
                     reject(new Error('Authentication required (redirected to sign-in page)'));
                     return;
                 }
+                if (!isAllowedRedirectUrl(res.headers.location)) {
+                    res.resume();
+                    reject(new Error(`Refusing redirect to untrusted host: ${safeRedirectLog(res.headers.location)}`));
+                    return;
+                }
                 res.resume();
                 httpsGetJson(res.headers.location, redirectCount + 1).then(resolve, reject);
                 return;
@@ -448,6 +467,11 @@ function httpsDownloadFile(url: string, destPath: string): Promise<void> {
                         reject(new Error('Authentication required (redirected to sign-in page)'));
                         return;
                     }
+                    if (!isAllowedRedirectUrl(res.headers.location)) {
+                        res.resume();
+                        reject(new Error(`Refusing redirect to untrusted host: ${safeRedirectLog(res.headers.location)}`));
+                        return;
+                    }
                     res.resume();
                     doRequest(res.headers.location, redirectCount + 1);
                     return;
@@ -475,6 +499,16 @@ function httpsDownloadFile(url: string, destPath: string): Promise<void> {
         };
         doRequest(url);
     });
+}
+
+/** Return redirect URL stripped of query string for safe error messages. */
+function safeRedirectLog(rawUrl: string): string {
+    try {
+        const u = new URL(rawUrl);
+        return `${u.protocol}//${u.hostname}${u.pathname}`;
+    } catch {
+        return '<unparseable URL>';
+    }
 }
 
 /** Extract numeric build/run ID from a raw string (URL or plain number) */

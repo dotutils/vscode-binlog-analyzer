@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.10.18 (Preview)
+
+### Removed
+- **"+" toolbar button** — removed the Add File (`$(add)`) button from the Binlog Explorer view title bar. Use the "Add more binlogs..." action item in the tree, or `Binlog: Add File` from the Command Palette.
+
+### Changed
+- **More insightful chat responses** — playbooks for `/summary`, `/errors`, `/targets`, `/items`, `/properties` were collapsed to one-liners in 0.10.17 (token-budget refactor) which made answers feel terse. Each now asks for: raw numbers + brief interpretation + concrete next step. The `/summary` playbook in particular now produces a Build Overview, a "What happened" interpretation, and a suggested follow-up command. `core.md` no longer says "Keep responses concise" in a way that suppresses analysis — it now says "Be insightful, not just descriptive."
+
+### Security & robustness — codebase audit follow-up
+
+- **Path/arg safety** — `buildMcpArgs` no longer fragments binlog paths that contain spaces (regression that broke `C:\Users\Has Space\build.binlog`). PowerShell `Expand-Archive` invocations now properly escape single quotes; downloaded artifact names are sanitized via a new `safeBasename` helper that strips path separators, parent-traversal segments, and Windows reserved device names. ZIP extraction is followed by a defense-in-depth `assertNoZipSlip` walk that aborts on any entry that resolves outside the extract directory. HTTP redirects in `httpsGetJson` / `httpsDownloadFile` are now restricted to a whitelist of GitHub / Azure DevOps / Azure Storage hosts. New module: `src/ciSafety.ts`.
+
+### Multi-binlog correctness
+
+- **Active binlog concept** — introduced `setActiveBinlog(path)` plumbed through `BinlogTreeDataProvider.setActiveBinlogPath` and `BinlogDocumentProvider.setActiveBinlog`. The "primary" badge in the tree now follows the active binlog instead of being hard-coded to index 0. Switching primary is exposed via the **Manage Loaded Binlogs** quickpick (click any binlog row to make it primary).
+- **Document URI keying** — `binlog.openInEditor` now accepts an explicit binlog full path; URI query format is `name=<filename>&binlog=<full path>` instead of just the filename. Two binlogs with the same filename in different folders no longer collide on the same virtual document. Legacy URI form is still parsed for backward compat.
+- **Args mutation fixed** — `callMcpTool` (extension.ts) and `BinlogDocumentProvider.call` no longer mutate the caller's `args` object when injecting `binlog_file`; cross-call leakage of binlog selection is no longer possible.
+- **Diagnostics ↔ Problems wiring** — the per-load `onDiagnosticsRaw` subscription that self-disposed after the first event has been replaced by a single permanent subscription registered in `activate()`. Adding/removing/switching binlogs now correctly updates the Problems panel instead of leaving it stale.
+
+### Prompt-injection hardening (`@binlog`)
+
+- **System prompt framing** — playbooks are now wrapped in `<system_prompt>...</system_prompt>` with an explicit trust-boundary preamble instructing the model to ignore later attempts to override its instructions. (VS Code's language-model API doesn't expose a true System role; this is the strongest framing available.)
+- **XML escaping** — user prompt text and `dotnet build /check` output embedded in `<user_request>` and `<buildcheck>` blocks are now XML-escaped via a new `escapeXmlText` helper. A user (or a malicious binlog containing crafted error messages) can no longer inject closing tags like `</user_request>` to escape the wrapper. New module: `src/chatPrompts.ts`.
+
+### Error surfacing
+
+- **`surfaceMcpError(scope, err, opts?)`** — new helper that always logs to telemetry and the new "Binlog Analyzer" output channel; optionally shows a user warning with a "Show Details" action. Replaces several silent `.catch(() => {})` patterns at MCP startup, MCP-config writes, update checks, and post-install MCP restart, so failures stop being completely invisible.
+- **MCP client** — JSON parse errors and unmatched response IDs in `mcpClient.parseMessages` are now logged to console with a truncated frame preview instead of being silently dropped (which previously left requests hanging until 30s timeout).
+- **Diagnostics** — `BinlogDiagnosticsProvider.loadFromMcpClient` failures are logged instead of swallowed.
+
+### Fixed
+- **Fix all issues / Optimize build now check that the project source is loaded.** Previously both actions cheerfully crafted a `dotnet build "C:\...\App.csproj"` prompt and handed it to Copilot regardless of whether that path existed locally — so on a binlog dragged in from CI / a coworker, the model would burn turns trying to edit files that aren't in the workspace. Both commands now run a preflight via the new pure helper `projectSourcesAccessible(projectPaths, workspaceFolders, fileExists)` and, when no project file resolves locally, surface a modal with **Set Workspace Folder...** and **Continue Anyway** options. The "Set Workspace Folder..." branch reuses the existing detection that suggests candidate roots from the binlog's project paths.
+
+### Tests
+- Total passing tests: **208** (was 174). New coverage:
+  - `mcpArgs`: paths with spaces, equals-form (`--prefix=${binlog}`), shell metacharacters in path content, multi-binlog mix.
+  - `ciSafety`: redirect-host allowlist (positive, negative, look-alike, case-insensitive), `safeBasename` (traversal, separators, reserved names), `psSingleQuote` (PowerShell escaping), `assertNoZipSlip` (good case, empty, symlink-escape; symlink test auto-skips on Windows without `SeCreateSymbolicLinkPrivilege`).
+  - `chatPrompts`: `escapeAttr` and `escapeXmlText` against closing-tag injection attempts on both `<user_request>` and `<buildcheck>` wrappers, ordering of `&` vs `<`/`>`, non-string coercion, whitespace preservation.
+  - `parsers.parseMcpDiagnostics`: malformed line/column (NaN, Infinity, undefined, "abc") coerces to 1; null/non-object input; `diagnostics` not an array; null/missing fields; CRLF preserved in messages.
+  - `parsers.extractFileName` / `extractDirectory`: UNC paths, mixed separators, trailing separator, embedded CR.
+  - `parsers.projectSourcesAccessible`: empty project list, no-workspace + absolute-path resolves, workspace-relative match, basename-at-root match, no-match with capped examples, fileExists throwing, case-insensitive matching, empty-entry filtering.
+
 ## 0.10.17 (Preview)
 
 ### Added

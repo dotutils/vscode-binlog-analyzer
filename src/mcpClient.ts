@@ -234,9 +234,20 @@ export class McpClient extends EventEmitter {
                     } else {
                         p.resolve(msg.result);
                     }
+                } else if (msg.id !== undefined) {
+                    // Response we have no record of — log it instead of
+                    // silently dropping. Likely indicates a server bug or
+                    // a request that timed out before the reply arrived.
+                    console.warn('[binlog-mcp] received response for unknown id', msg.id);
                 }
-            } catch {
-                // Skip parse errors
+            } catch (parseErr) {
+                // Don't swallow parse errors — surface to console with
+                // a truncated preview of the offending frame so a user
+                // (or developer) can diagnose protocol corruption
+                // instead of seeing requests hang to timeout.
+                const preview = trimmed.length > 200 ? trimmed.substring(0, 200) + '…' : trimmed;
+                const errMsg = parseErr instanceof Error ? parseErr.message : String(parseErr);
+                console.warn(`[binlog-mcp] failed to parse stdout frame: ${errMsg} | frame=${preview}`);
             }
         }
     }

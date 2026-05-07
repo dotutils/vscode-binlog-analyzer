@@ -81,6 +81,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
     readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
     private binlogPaths: string[] = [];
+    private activeBinlogPath: string | undefined;
     private mcpClient: McpClient | null = null;
     private searchResults: TreeNodeData[] | null = null;
     private searchQuery: string = '';
@@ -109,15 +110,45 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
 
     setBinlogPaths(paths: string[]) {
         this.binlogPaths = paths;
+        // Reset active binlog if it's no longer in the loaded set.
+        if (this.activeBinlogPath && !paths.includes(this.activeBinlogPath)) {
+            this.activeBinlogPath = paths[0];
+        } else if (!this.activeBinlogPath && paths.length > 0) {
+            this.activeBinlogPath = paths[0];
+        }
         // When paths becomes empty, any pending "loading"/"restoring" state is
         // stale by definition — clear it so the tree renders the empty
         // (about-only) view instead of getting stuck on "Loading binlog...".
         if (paths.length === 0) {
             this._isLoading = false;
             this._isRestoring = false;
+            this.activeBinlogPath = undefined;
         }
         this.clearCache();
         this._onDidChangeTreeData.fire(undefined);
+    }
+
+    /**
+     * Records which binlog the user is currently inspecting. Used to render
+     * the "primary" badge in the tree and to drive `binlog_file` injection
+     * for tools that don't carry an explicit path.
+     *
+     * Switching the active binlog clears all per-binlog caches and re-runs
+     * prefetch so tree contents (and Problems-panel diagnostics derived
+     * from the prefetch) reflect the new selection.
+     */
+    setActiveBinlogPath(path: string | undefined) {
+        if (this.activeBinlogPath === path) { return; }
+        this.activeBinlogPath = path;
+        this.clearCache();
+        this._onDidChangeTreeData.fire(undefined);
+        if (this.mcpClient) {
+            this.prefetch();
+        }
+    }
+
+    getActiveBinlogPath(): string | undefined {
+        return this.activeBinlogPath;
     }
 
     setLoading(loading: boolean) {
@@ -712,19 +743,20 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
     }
 
     private getFileChildren(): BinlogTreeItem[] {
-        return this.binlogPaths.map((p, i) => {
+        return this.binlogPaths.map((p) => {
             const fileName = p.split(/[/\\]/).pop() || p;
+            const isActive = p === this.activeBinlogPath;
             const item = new BinlogTreeItem(fileName, vscode.TreeItemCollapsibleState.None);
             item.nodeKind = 'binlog-file';
-            item.description = i === 0 ? 'primary' : 'attached';
+            item.description = isActive ? 'primary' : 'attached';
             item.tooltip = `${p}\n\nClick to view build summary in editor`;
-            item.iconPath = new vscode.ThemeIcon(i === 0 ? 'file-binary' : 'link');
+            item.iconPath = new vscode.ThemeIcon(isActive ? 'file-binary' : 'link');
             item.contextValue = 'binlogFile';
             item.fullText = p;
             item.command = {
                 command: 'binlog.openInEditor',
                 title: 'Open Summary',
-                arguments: ['/summary', fileName],
+                arguments: ['/summary', fileName, p],
             };
             return item;
         });

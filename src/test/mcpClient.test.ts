@@ -26,5 +26,38 @@ suite('mcpClient', () => {
             const args = buildMcpArgs('--binlog ${binlog}', []);
             assert.deepStrictEqual(args, []);
         });
+
+        test('preserves spaces inside binlog paths (does not fragment argv)', () => {
+            // Regression: previously the template was substituted then split on
+            // whitespace, which broke `C:\\Users\\Has Space\\build.binlog` into
+            // three argv entries.
+            const args = buildMcpArgs('--binlog ${binlog}', ['C:\\Users\\Has Space\\build.binlog']);
+            assert.deepStrictEqual(args, ['--binlog', 'C:\\Users\\Has Space\\build.binlog']);
+        });
+
+        test('preserves embedded equals-form (--prefix=${binlog})', () => {
+            const args = buildMcpArgs('--prefix=${binlog}', ['/path with space/a.binlog']);
+            assert.deepStrictEqual(args, ['--prefix=/path with space/a.binlog']);
+        });
+
+        test('keeps each binlog as a single argv entry across multiple binlogs', () => {
+            const args = buildMcpArgs('--binlog ${binlog}', [
+                '/has space/a.binlog',
+                'C:\\Program Files\\b.binlog',
+            ]);
+            assert.deepStrictEqual(args, [
+                '--binlog', '/has space/a.binlog',
+                '--binlog', 'C:\\Program Files\\b.binlog',
+            ]);
+        });
+
+        test('does not interpret special shell characters from path content', () => {
+            // The template substitutes literally; shell semantics are the
+            // child-process layer's job. We just verify the value passes
+            // through unchanged.
+            const tricky = '/tmp/with;semi $var `back`/x.binlog';
+            const args = buildMcpArgs('--binlog ${binlog}', [tricky]);
+            assert.deepStrictEqual(args, ['--binlog', tricky]);
+        });
     });
 });

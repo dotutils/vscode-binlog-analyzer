@@ -1,1 +1,1 @@
-Use `binlog_properties`. Group as Configuration / Output / NuGet / SDK / Other. Call out values that look misconfigured.
+Use `binlog_properties`. Group as Configuration / Output / NuGet / SDK / Other. Call out values that look misconfigured (e.g. `Optimize=false` in a Release build, missing `TargetFramework`, suspicious `OutputPath` overrides, `TreatWarningsAsErrors=false` when CI expects strict). When you flag something, say what the safe value usually is and which file to edit (`Directory.Build.props`, the project file, etc.).

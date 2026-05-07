@@ -25,13 +25,35 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
      * for the primary (first) loaded binlog. Without this, multi-binlog
      * mode causes "requires explicit binlog_file" errors in every
      * document render call.
+     *
+     * The `args` object is **never mutated** — a shallow copy is taken
+     * before adding `binlog_file` so callers can reuse args literals
+     * safely. `explicitBinlog` (when provided) takes precedence over
+     * `activeBinlogPath` so each open document remains pinned to the
+     * binlog it was opened against.
      */
-    private async call(tool: string, args: Record<string, unknown> = {}): Promise<{ text: string }> {
+    private async call(tool: string, args: Record<string, unknown> = {}, explicitBinlog?: string): Promise<{ text: string }> {
         if (!this.mcpClient) { throw new Error('MCP server not connected'); }
         if (!args.binlog_file && this.mcpClient.loadedBinlogs.length > 1) {
-            args.binlog_file = this.mcpClient.loadedBinlogs[0];
+            const target = explicitBinlog || this.activeBinlogPath || this.mcpClient.loadedBinlogs[0];
+            const copy = { ...args, binlog_file: target };
+            return this.mcpClient.callTool(tool, copy);
         }
         return this.mcpClient.callTool(tool, args);
+    }
+
+    /**
+     * The path of the binlog the user is currently inspecting. Set by
+     * `extension.ts` when a binlog node is clicked / the active binlog is
+     * switched. Falls back to the first loaded binlog when undefined.
+     */
+    private activeBinlogPath: string | undefined;
+
+    setActiveBinlog(path: string | undefined) {
+        if (this.activeBinlogPath !== path) {
+            this.activeBinlogPath = path;
+            this.cache.clear();
+        }
     }
 
     invalidate(uri: vscode.Uri) {
@@ -48,35 +70,35 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
         }
 
         const section = uri.path; // e.g. /summary, /projects, /errors, /targets
-        const binlogName = uri.query; // the binlog filename for display
+        const { binlogPath, binlogName } = parseUriQuery(uri.query);
 
         try {
             let content: string;
             switch (section) {
                 case '/summary':
-                    content = await this.renderSummary(binlogName);
+                    content = await this.renderSummary(binlogName, binlogPath);
                     break;
                 case '/projects':
-                    content = await this.renderProjects();
+                    content = await this.renderProjects(binlogPath);
                     break;
                 case '/errors':
-                    content = await this.renderDiagnostics('errors');
+                    content = await this.renderDiagnostics('errors', binlogPath);
                     break;
                 case '/warnings':
-                    content = await this.renderDiagnostics('warnings');
+                    content = await this.renderDiagnostics('warnings', binlogPath);
                     break;
                 case '/targets':
-                    content = await this.renderExpensive('binlog_expensive_targets', 'Slowest Targets');
+                    content = await this.renderExpensive('binlog_expensive_targets', 'Slowest Targets', binlogPath);
                     break;
                 case '/tasks':
-                    content = await this.renderExpensive('binlog_expensive_tasks', 'Slowest Tasks');
+                    content = await this.renderExpensive('binlog_expensive_tasks', 'Slowest Tasks', binlogPath);
                     break;
                 default:
                     if (section.startsWith('/project/')) {
                         const projectId = decodeURIComponent(section.substring('/project/'.length));
-                        content = await this.renderProjectDetails(projectId, binlogName);
+                        content = await this.renderProjectDetails(projectId, binlogName, binlogPath);
                     } else {
-                        content = await this.renderSummary(binlogName);
+                        content = await this.renderSummary(binlogName, binlogPath);
                     }
             }
             this.cache.set(uri.toString(), content);
@@ -87,7 +109,7 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
         }
     }
 
-    private async renderSummary(binlogName: string): Promise<string> {
+    private async renderSummary(binlogName: string, binlogPath?: string): Promise<string> {
         const lines: string[] = [];
         lines.push('═══════════════════════════════════════════════════════');
         lines.push(`  MSBuild Binary Log: ${binlogName}`);
@@ -96,7 +118,7 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
 
         // Build overview
         try {
-            const overviewResult = await this.call('binlog_overview');
+            const overviewResult = await this.call('binlog_overview', {}, binlogPath);
             const ov = JSON.parse(overviewResult.text);
             const status = ov.succeeded ? '✅ BUILD SUCCEEDED' : '❌ BUILD FAILED';
             const dur = ov.duration || '';
@@ -124,7 +146,7 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
 
         // Projects
         try {
-            const projResult = await this.call('binlog_projects');
+            const projResult = await this.call('binlog_projects', {}, binlogPath);
             const projData = JSON.parse(projResult.text);
 
             // Handle both formats: array (BinlogInsights) and object (baronfel)
@@ -155,8 +177,8 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
             let diagsByProject: Map<string, { errors: number; warnings: number }> | undefined;
             try {
                 const [errResult, warnResult] = await Promise.allSettled([
-                    this.call('binlog_errors'),
-                    this.call('binlog_warnings'),
+                    this.call('binlog_errors', {}, binlogPath),
+                    this.call('binlog_warnings', {}, binlogPath),
                 ]);
                 diagsByProject = new Map();
                 for (const result of [errResult, warnResult]) {
@@ -202,8 +224,8 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
         // Diagnostics
         try {
             const [errResult, warnResult] = await Promise.allSettled([
-                this.call('binlog_errors'),
-                this.call('binlog_warnings'),
+                this.call('binlog_errors', {}, binlogPath),
+                this.call('binlog_warnings', {}, binlogPath),
             ]);
 
             const parseItems = (r: PromiseSettledResult<any>) => {
@@ -251,7 +273,7 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
 
         // Performance
         try {
-            const targetsResult = await this.call('binlog_expensive_targets', { top_number: 10 });
+            const targetsResult = await this.call('binlog_expensive_targets', { top_number: 10 }, binlogPath);
             const targetsData = JSON.parse(targetsResult.text);
             lines.push('🔥 SLOWEST TARGETS');
             lines.push('─────────────────────────────────────────────────────');
@@ -264,7 +286,7 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
         lines.push('');
 
         try {
-            const tasksResult = await this.call('binlog_expensive_tasks', { top_number: 10 });
+            const tasksResult = await this.call('binlog_expensive_tasks', { top_number: 10 }, binlogPath);
             const tasksData = JSON.parse(tasksResult.text);
             lines.push('🔧 SLOWEST TASKS');
             lines.push('─────────────────────────────────────────────────────');
@@ -277,7 +299,7 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
 
         // Analyzers
         try {
-            const analyzersResult = await this.call('binlog_expensive_analyzers', { limit: 10 });
+            const analyzersResult = await this.call('binlog_expensive_analyzers', { limit: 10 }, binlogPath);
             const analyzersData = JSON.parse(analyzersResult.text);
             const entries = this.parsePerfEntries(analyzersData);
             if (entries.length > 0) {
@@ -301,7 +323,7 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
         return lines.join('\n');
     }
 
-    private async renderProjectDetails(projectId: string, projectFile: string): Promise<string> {
+    private async renderProjectDetails(projectId: string, projectFile: string, binlogPath?: string): Promise<string> {
         const lines: string[] = [];
         const projectName = projectFile.split(/[/\\]/).pop() || projectFile;
         lines.push('═══════════════════════════════════════════════════════');
@@ -316,7 +338,7 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
         try {
             const targetTimesResult = await this.call('binlog_project_target_times', {
                 project: projectName,
-            });
+            }, binlogPath);
             const targetData = JSON.parse(targetTimesResult.text);
             const targets = Array.isArray(targetData) ? targetData
                 : (targetData && typeof targetData === 'object') ? Object.entries(targetData).map(([k, v]: [string, any]) => ({ name: k, ...v }))
@@ -344,7 +366,7 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
         } catch {
             // Try fallback: binlog_expensive_projects for at least a total time
             try {
-                const buildTimeResult = await this.call('binlog_expensive_projects');
+                const buildTimeResult = await this.call('binlog_expensive_projects', {}, binlogPath);
                 const data = JSON.parse(buildTimeResult.text);
                 const projects = Array.isArray(data) ? data : [];
                 const match = projects.find((p: any) =>
@@ -362,8 +384,8 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
         // Get diagnostics and filter for this project
         try {
             const [errResult, warnResult] = await Promise.allSettled([
-                this.call('binlog_errors'),
-                this.call('binlog_warnings'),
+                this.call('binlog_errors', {}, binlogPath),
+                this.call('binlog_warnings', {}, binlogPath),
             ]);
 
             const parseItems = (r: PromiseSettledResult<any>) => {
@@ -427,19 +449,19 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
         return lines.join('\n');
     }
 
-    private async renderProjects(): Promise<string> {
-        const result = await this.call('binlog_projects');
+    private async renderProjects(binlogPath?: string): Promise<string> {
+        const result = await this.call('binlog_projects', {}, binlogPath);
         return this.formatSection('PROJECTS', result.text);
     }
 
-    private async renderDiagnostics(type: 'errors' | 'warnings'): Promise<string> {
+    private async renderDiagnostics(type: 'errors' | 'warnings', binlogPath?: string): Promise<string> {
         const tool = type === 'errors' ? 'binlog_errors' : 'binlog_warnings';
-        const result = await this.call(tool);
+        const result = await this.call(tool, {}, binlogPath);
         return this.formatSection(type.toUpperCase(), result.text);
     }
 
-    private async renderExpensive(tool: string, title: string): Promise<string> {
-        const result = await this.call(tool, { top_number: 20 });
+    private async renderExpensive(tool: string, title: string, binlogPath?: string): Promise<string> {
+        const result = await this.call(tool, { top_number: 20 }, binlogPath);
         return this.formatSection(title.toUpperCase(), result.text);
     }
 
@@ -482,14 +504,46 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
     }
 }
 
-/** Opens a binlog document in the editor */
-export async function openBinlogDocument(section: string, binlogName: string): Promise<void> {
-    const uri = vscode.Uri.parse(`${SCHEME}:${section}?${encodeURIComponent(binlogName)}`);
+/**
+ * Opens a binlog section document in the editor.
+ *
+ * @param section section path (e.g. '/summary', '/errors', '/project/<id>').
+ * @param binlogName display name for headings (typically the binlog filename).
+ * @param binlogPath optional absolute path to the binlog. When provided, the
+ *                   document is pinned to this binlog regardless of which
+ *                   binlog is currently active. When omitted, MCP calls fall
+ *                   back to the active/primary binlog.
+ */
+export async function openBinlogDocument(section: string, binlogName: string, binlogPath?: string): Promise<void> {
+    const params = new URLSearchParams();
+    if (binlogName) { params.set('name', binlogName); }
+    if (binlogPath) { params.set('binlog', binlogPath); }
+    const query = params.toString();
+    // Format: binlog:/section?name=foo.binlog&binlog=<path>
+    const uri = vscode.Uri.parse(`${SCHEME}:${section}${query ? '?' + query : ''}`);
     const doc = await vscode.workspace.openTextDocument(uri);
     await vscode.window.showTextDocument(doc, {
         preview: true,
         viewColumn: vscode.ViewColumn.One,
     });
+}
+
+/**
+ * Parse the URI query string into binlog path and display name.
+ * Accepts both the new format (`name=...&binlog=...`) and the legacy
+ * single-token format (just the binlog filename, no `=`).
+ */
+function parseUriQuery(query: string): { binlogPath?: string; binlogName: string } {
+    if (!query) { return { binlogName: '' }; }
+    if (query.includes('=')) {
+        const params = new URLSearchParams(query);
+        return {
+            binlogPath: params.get('binlog') || undefined,
+            binlogName: params.get('name') || (params.get('binlog')?.split(/[/\\]/).pop() ?? ''),
+        };
+    }
+    // Legacy URI: query was just `<encoded filename>`
+    return { binlogName: decodeURIComponent(query) };
 }
 
 export const BINLOG_SCHEME = SCHEME;

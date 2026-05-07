@@ -14,6 +14,7 @@ import {
     isRestoreTarget,
     filterBuildProjects,
     getProjectDiagnosticCounts,
+    projectSourcesAccessible,
     McpDiagnostic,
 } from '../parsers';
 
@@ -503,6 +504,196 @@ suite('Parsers', () => {
             };
             const result = parseMcpDiagnostics(data);
             assert.strictEqual(result[0].projectFile, 'C:\\src\\App.csproj');
+        });
+
+        test('coerces non-finite line/column to 1 (defends against malformed MCP payloads)', () => {
+            const data = {
+                diagnostics: [
+                    { code: 'X', message: 'm', file: 'a.cs', lineNumber: 'abc', columnNumber: NaN, severity: 'Error' },
+                    { code: 'Y', message: 'm', file: 'b.cs', lineNumber: -Infinity, columnNumber: undefined, severity: 'Warning' },
+                ]
+            };
+            const result = parseMcpDiagnostics(data);
+            assert.strictEqual(result.length, 2);
+            assert.strictEqual(result[0].line, 1, 'lineNumber="abc" should fall back to 1');
+            assert.strictEqual(result[0].column, 1, 'columnNumber=NaN should fall back to 1');
+            assert.strictEqual(result[1].line, 1, 'lineNumber=-Infinity should fall back to 1');
+            assert.strictEqual(result[1].column, 1, 'columnNumber=undefined should fall back to 1');
+        });
+
+        test('returns empty array for null / non-object input', () => {
+            assert.deepStrictEqual(parseMcpDiagnostics(null), []);
+            assert.deepStrictEqual(parseMcpDiagnostics(undefined), []);
+            assert.deepStrictEqual(parseMcpDiagnostics(42 as unknown as object), []);
+            assert.deepStrictEqual(parseMcpDiagnostics('not an object' as unknown as object), []);
+        });
+
+        test('returns empty array when diagnostics is not an array', () => {
+            assert.deepStrictEqual(parseMcpDiagnostics({ diagnostics: 'oops' }), []);
+            assert.deepStrictEqual(parseMcpDiagnostics({ diagnostics: { not: 'array' } }), []);
+        });
+
+        test('handles entries with null/missing message and code without crashing', () => {
+            const data = {
+                diagnostics: [
+                    { severity: 'Error' },                 // no message, code, file
+                    { code: null, message: null, file: null, severity: 'Warning' },
+                ]
+            };
+            const result = parseMcpDiagnostics(data);
+            assert.strictEqual(result.length, 2);
+            assert.strictEqual(result[0].message, '');
+            assert.strictEqual(result[0].code, '');
+            assert.strictEqual(result[0].file, '');
+            assert.strictEqual(result[1].message, '');
+        });
+
+        test('preserves CRLF-style line endings inside message text', () => {
+            const data = {
+                diagnostics: [
+                    { code: 'X', message: 'line1\r\nline2', file: 'a.cs', severity: 'Error' },
+                ]
+            };
+            const result = parseMcpDiagnostics(data);
+            assert.strictEqual(result[0].message, 'line1\r\nline2');
+        });
+    });
+
+    suite('extractFileName — additional edge cases', () => {
+        test('extracts filename from a UNC path', () => {
+            assert.strictEqual(extractFileName('\\\\server\\share\\proj\\App.csproj'), 'App.csproj');
+            assert.strictEqual(extractFileName('//server/share/proj/App.csproj'), 'App.csproj');
+        });
+
+        test('strips a single trailing separator before extracting', () => {
+            assert.strictEqual(extractFileName('C:\\src\\Project\\'), 'Project');
+            assert.strictEqual(extractFileName('/home/dev/'), 'dev');
+        });
+
+        test('handles a path with mixed separators', () => {
+            assert.strictEqual(extractFileName('C:\\src/sub\\App.csproj'), 'App.csproj');
+        });
+    });
+
+    suite('extractDirectory — additional edge cases', () => {
+        test('handles UNC-style paths (note: collapses leading slashes)', () => {
+            // Document current behaviour: leading separators are filtered as
+            // empty segments, which means UNC `\\server\share` loses the
+            // double-backslash prefix. This test pins the behaviour so a
+            // future change that fixes UNC handling is intentional.
+            const result = extractDirectory('\\\\server\\share\\proj\\sub\\App.csproj');
+            assert.ok(result.length > 0, 'should produce some directory representation');
+            assert.ok(!result.includes('\\'), 'normalised to forward slashes');
+        });
+
+        test('handles path with embedded CRLF / control characters by treating them as part of segment names', () => {
+            // Defensive: parser shouldn't crash on weird input — output may
+            // be ugly but must be a string.
+            const result = extractDirectory('C:/src/with\rcr/App.csproj');
+            assert.strictEqual(typeof result, 'string');
+        });
+    });
+
+    suite('projectSourcesAccessible', () => {
+        // Helper: fake fs.existsSync that knows about a fixed set of paths.
+        const stubExists = (existing: string[]) => {
+            const lower = new Set(existing.map(p => p.toLowerCase().replace(/\\/g, '/')));
+            return (p: string) => lower.has(p.toLowerCase().replace(/\\/g, '/'));
+        };
+
+        test('returns no-projects when project list is empty', () => {
+            const r = projectSourcesAccessible([], ['C:/ws'], () => true);
+            assert.strictEqual(r.ok, false);
+            assert.strictEqual(r.reason, 'no-projects');
+        });
+
+        test('ok=true when the recorded absolute path exists locally', () => {
+            const r = projectSourcesAccessible(
+                ['C:/src/App/App.csproj'],
+                [],
+                stubExists(['C:/src/App/App.csproj']),
+            );
+            assert.strictEqual(r.ok, true);
+        });
+
+        test('no-workspace when no folder is open AND absolute paths do not resolve', () => {
+            const r = projectSourcesAccessible(
+                ['/ci/agent/work/App.csproj'],
+                [],
+                stubExists([]), // nothing exists
+            );
+            assert.strictEqual(r.ok, false);
+            assert.strictEqual(r.reason, 'no-workspace');
+            assert.deepStrictEqual(r.missingExamples, ['/ci/agent/work/App.csproj']);
+        });
+
+        test('ok=true when workspace contains the project at its recorded relative path', () => {
+            // Binlog recorded C:/build/agent/src/App/App.csproj
+            // User opened C:/build/agent
+            // → workspace + tail should resolve.
+            const r = projectSourcesAccessible(
+                ['C:/build/agent/src/App/App.csproj'],
+                ['C:/build/agent'],
+                stubExists(['C:/build/agent/src/App/App.csproj']),
+            );
+            assert.strictEqual(r.ok, true);
+        });
+
+        test('ok=true when workspace contains a file with the project basename at root', () => {
+            // CI binlog records /build/work/foo/App.csproj.
+            // User cloned the repo to C:/repos/myapp where App.csproj lives at root.
+            const r = projectSourcesAccessible(
+                ['/build/work/foo/App.csproj'],
+                ['C:/repos/myapp'],
+                stubExists(['C:/repos/myapp/App.csproj']),
+            );
+            assert.strictEqual(r.ok, true);
+        });
+
+        test('no-match when workspace is open but contains none of the project files', () => {
+            const r = projectSourcesAccessible(
+                ['C:/other/Foo.csproj', 'C:/other/Bar.csproj'],
+                ['C:/repos/myapp'],
+                stubExists(['C:/repos/myapp/Different.csproj']),
+            );
+            assert.strictEqual(r.ok, false);
+            assert.strictEqual(r.reason, 'no-match');
+            assert.deepStrictEqual(r.missingExamples, ['C:/other/Foo.csproj', 'C:/other/Bar.csproj']);
+        });
+
+        test('caps missingExamples at 3 even with many projects', () => {
+            const many = ['a', 'b', 'c', 'd', 'e', 'f'].map(n => `C:/none/${n}.csproj`);
+            const r = projectSourcesAccessible(many, ['C:/elsewhere'], stubExists([]));
+            assert.strictEqual(r.ok, false);
+            assert.strictEqual(r.missingExamples?.length, 3);
+        });
+
+        test('does not crash when fileExists throws', () => {
+            const r = projectSourcesAccessible(
+                ['C:/src/App.csproj'],
+                ['C:/ws'],
+                () => { throw new Error('EACCES'); },
+            );
+            assert.strictEqual(r.ok, false);
+            assert.strictEqual(r.reason, 'no-match');
+        });
+
+        test('case-insensitive path matching (Windows-friendly)', () => {
+            const r = projectSourcesAccessible(
+                ['C:\\Build\\Agent\\src\\App.csproj'],
+                ['c:/build/agent'],
+                stubExists(['C:/Build/Agent/src/App.csproj']),
+            );
+            assert.strictEqual(r.ok, true);
+        });
+
+        test('ignores empty / falsy project entries', () => {
+            const r = projectSourcesAccessible(
+                ['', 'C:/src/App.csproj'],
+                ['C:/src'],
+                stubExists(['C:/src/App.csproj']),
+            );
+            assert.strictEqual(r.ok, true);
         });
     });
 });

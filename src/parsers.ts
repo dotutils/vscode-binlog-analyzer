@@ -265,6 +265,86 @@ export function computePerfComparison(
 }
 
 /**
+ * Result of a project-source-accessibility check. `ok=true` means at least
+ * one of the binlog's project files is reachable on the local filesystem
+ * — either as the absolute path the binlog recorded, or as a workspace-
+ * relative file with the same basename.
+ *
+ * `ok=false` means commands that need to edit source / re-run `dotnet
+ * build` (Fix all issues, Optimize build) cannot meaningfully proceed
+ * without first opening the project's source folder.
+ */
+export interface ProjectSourcesAccess {
+    ok: boolean;
+    reason?: 'no-projects' | 'no-workspace' | 'no-match';
+    detail?: string;
+    /** A few sample missing paths to surface in the warning, for UX. */
+    missingExamples?: string[];
+}
+
+/**
+ * Decide whether project sources are accessible locally so that
+ * file-editing / rebuild commands can run.
+ *
+ * Pure function — file-existence is injected via `fileExists` so tests can
+ * supply a stub. Callers in extension.ts pass `fs.existsSync`.
+ */
+export function projectSourcesAccessible(
+    projectPaths: string[],
+    workspaceFolders: string[],
+    fileExists: (p: string) => boolean,
+): ProjectSourcesAccess {
+    if (!projectPaths || projectPaths.length === 0) {
+        return { ok: false, reason: 'no-projects', detail: 'No projects detected in the binlog yet.' };
+    }
+    if (!workspaceFolders || workspaceFolders.length === 0) {
+        const reachable = projectPaths.find(p => safeExists(p, fileExists));
+        if (reachable) { return { ok: true }; }
+        return {
+            ok: false,
+            reason: 'no-workspace',
+            detail: 'No workspace folder is open and the binlog\'s project files are not at their original absolute paths.',
+            missingExamples: projectPaths.slice(0, 3),
+        };
+    }
+
+    const norm = (p: string) => p.replace(/\\/g, '/').toLowerCase().replace(/\/+$/, '');
+    const wfsNorm = workspaceFolders.map(norm);
+
+    for (const proj of projectPaths) {
+        if (!proj) { continue; }
+        if (safeExists(proj, fileExists)) { return { ok: true }; }
+
+        const projNorm = norm(proj);
+        const projBase = projNorm.split('/').pop() || '';
+
+        for (let i = 0; i < wfsNorm.length; i++) {
+            const wf = wfsNorm[i];
+            const wfRaw = workspaceFolders[i];
+            if (projNorm.startsWith(wf + '/')) {
+                const tail = projNorm.substring(wf.length + 1);
+                const candidates = [wfRaw + '/' + tail, wfRaw + '/' + projBase];
+                if (candidates.some(c => safeExists(c, fileExists))) { return { ok: true }; }
+            }
+            if (projBase && safeExists(wfRaw + '/' + projBase, fileExists)) {
+                return { ok: true };
+            }
+        }
+    }
+
+    return {
+        ok: false,
+        reason: 'no-match',
+        detail: 'None of the binlog\'s project files exist under the open workspace folder.',
+        missingExamples: projectPaths.slice(0, 3),
+    };
+}
+
+function safeExists(p: string, fileExists: (p: string) => boolean): boolean {
+    try { return fileExists(p); } catch { return false; }
+}
+
+/**
  * Checks if a workspace folder matches a binlog's location.
  * Returns true if binlog dir is a parent/child of workspace, or vice versa.
  */

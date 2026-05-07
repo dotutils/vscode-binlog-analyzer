@@ -12,6 +12,7 @@ import {
 } from './buildCheck';
 import * as telemetry from './telemetry';
 import { registerBinlogLanguageModelTools } from './languageModelTools';
+import { projectSourcesAccessible } from './parsers';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -39,13 +40,121 @@ function escapeHtml(s: string): string {
  * Call an MCP tool, auto-injecting `binlog_file` for the current primary
  * binlog when multiple are loaded. This prevents "requires explicit
  * binlog_file" errors throughout extension.ts call sites.
+ *
+ * The `args` object is **never mutated** — a shallow copy is taken before
+ * adding `binlog_file` so that callers can reuse the same `args` literal
+ * across calls (or across different binlogs) without leaking state.
  */
 function callMcpTool(tool: string, args: Record<string, unknown> = {}): Promise<{ text: string }> {
     if (!mcpClient) { throw new Error('MCP server not connected'); }
     if (!args.binlog_file && allBinlogPaths.length > 1) {
-        args.binlog_file = currentBinlogPath || allBinlogPaths[0];
+        const copy = { ...args, binlog_file: currentBinlogPath || allBinlogPaths[0] };
+        return mcpClient.callTool(tool, copy);
     }
     return mcpClient.callTool(tool, args);
+}
+
+/**
+ * Switch which binlog is "active" — the implicit `binlog_file` target for
+ * tools that don't carry an explicit path. Updates the tree view's
+ * "primary" badge, the document provider's render context, and the status
+ * bar. No-op when `path` isn't currently loaded.
+ */
+function setActiveBinlog(path: string | undefined) {
+    if (path && !allBinlogPaths.includes(path)) { return; }
+    if (currentBinlogPath === path) { return; }
+    currentBinlogPath = path;
+    treeDataProvider?.setActiveBinlogPath(path);
+    binlogDocProvider?.setActiveBinlog(path);
+    updateStatusBar();
+}
+
+let diagnosticOutputChannel: vscode.OutputChannel | undefined;
+
+function getDiagnosticOutputChannel(): vscode.OutputChannel {
+    if (!diagnosticOutputChannel) {
+        diagnosticOutputChannel = vscode.window.createOutputChannel('Binlog Analyzer');
+    }
+    return diagnosticOutputChannel;
+}
+
+/**
+ * Preflight check for commands that need to edit source files and re-run
+ * `dotnet build` (Fix all issues, Optimize build). When the binlog's
+ * project sources aren't reachable locally — the most common cause being
+ * a binlog dragged in from CI / a coworker without opening the matching
+ * project folder — pop a clear modal asking the user to either set the
+ * workspace folder or proceed anyway.
+ *
+ * Returns `true` to continue, `false` to abort the command.
+ */
+async function ensureProjectSourcesAccessible(
+    actionLabel: string,
+): Promise<boolean> {
+    const projectPaths = treeDataProvider?.getProjectFiles() || [];
+    const wsFolders = (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath);
+    const access = projectSourcesAccessible(projectPaths, wsFolders, p => fs.existsSync(p));
+    if (access.ok) { return true; }
+
+    const examples = (access.missingExamples || []).slice(0, 3).join('\n  • ');
+    const detail =
+        `${actionLabel} needs to edit project sources and re-run \`dotnet build\`, ` +
+        `but the binlog's project files don't appear to be loaded in this VS Code window.` +
+        (examples ? `\n\nProjects in the binlog:\n  • ${examples}` : '') +
+        `\n\nOpen the source folder so the model can find and edit these files.`;
+
+    const choice = await vscode.window.showWarningMessage(
+        access.detail || `${actionLabel}: project sources are not accessible.`,
+        { modal: true, detail },
+        'Set Workspace Folder...',
+        'Continue Anyway',
+    );
+
+    if (!choice) { return false; }
+    if (choice === 'Set Workspace Folder...') {
+        await vscode.commands.executeCommand('binlog.setWorkspaceFolder');
+        // setWorkspaceFolder reloads the window when it succeeds, so we
+        // should not continue this command in the current activation.
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Centralised error-surfacing helper. Replaces the many `.catch(() => {})`
+ * sites throughout the extension that silently dropped failures (MCP
+ * startup, update checks, restore, MCP-config writes, etc.).
+ *
+ * Behaviour:
+ *  - Always sends `telemetry.trackError(scope, err)` so failures show up
+ *    in operational telemetry instead of vanishing.
+ *  - Always logs the full error message + scope to the
+ *    "Binlog Analyzer" output channel so a developer can find it.
+ *  - When `userMessage` is provided, shows it as a warning toast (and
+ *    lazily reveals the output channel via a "Show Details" action).
+ *
+ * @param scope short identifier for grouping in telemetry/log
+ *              (e.g. 'mcpStartup', 'fetchAboutInfo', 'writeUserMcpJson').
+ * @param err   the caught error (any shape).
+ * @param opts  optional UI behaviour. Omit for log-only handling.
+ */
+function surfaceMcpError(
+    scope: string,
+    err: unknown,
+    opts?: { userMessage?: string },
+): void {
+    const msg = err instanceof Error ? err.message : String(err);
+    telemetry.trackError(scope, err);
+    getDiagnosticOutputChannel().appendLine(
+        `[${new Date().toISOString().substring(11, 19)}] ${scope}: ${msg}`
+    );
+    if (opts?.userMessage) {
+        vscode.window.showWarningMessage(opts.userMessage, 'Show Details').then(sel => {
+            if (sel === 'Show Details') {
+                getDiagnosticOutputChannel().show(true);
+            }
+        });
+    }
 }
 
 /** Returns a globalState key scoped to the current workspace folder, or a fallback for no-workspace. */
@@ -115,6 +224,20 @@ export async function activate(context: vscode.ExtensionContext) {
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
     statusBarItem.command = 'binlog.manageBinlogs';
     context.subscriptions.push(statusBarItem);
+
+    // Subscribe ONCE for the lifetime of the extension to the tree's raw
+    // diagnostics events. This bridges every prefetch (initial load,
+    // refresh, active-binlog switch, add/remove) into the Problems panel
+    // without re-running MCP calls. Previously this subscription was
+    // created per-load and self-disposed after the first event, which
+    // meant Problems went stale on subsequent updates.
+    context.subscriptions.push(
+        treeDataProvider.onDiagnosticsRaw((data) => {
+            const cfg = vscode.workspace.getConfiguration('binlogAnalyzer');
+            diagnosticsProvider!.loadFromRawData(data, cfg);
+            updateStatusBar();
+        })
+    );
 
     // Custom editor for .binlog files — opens the file and triggers the analysis flow
     context.subscriptions.push(
@@ -259,11 +382,12 @@ export async function activate(context: vscode.ExtensionContext) {
                 return;
             }
 
-            const items: (vscode.QuickPickItem & { action?: string })[] = [
-                ...allBinlogPaths.map((p, i) => ({
+            const items: (vscode.QuickPickItem & { action?: string; binlogPath?: string })[] = [
+                ...allBinlogPaths.map((p) => ({
                     label: `$(file) ${getFileName(p)}`,
-                    description: i === 0 ? '(primary)' : '',
-                    detail: p
+                    description: p === currentBinlogPath ? '(primary)' : '(switch to)',
+                    detail: p,
+                    binlogPath: p,
                 })),
                 { label: '', kind: vscode.QuickPickItemKind.Separator },
                 { label: '$(add) Add More Binlogs...', action: 'add' },
@@ -272,9 +396,9 @@ export async function activate(context: vscode.ExtensionContext) {
             ];
 
             const selected = await vscode.window.showQuickPick(items, {
-                placeHolder: `${allBinlogPaths.length} binlog(s) loaded`,
+                placeHolder: `${allBinlogPaths.length} binlog(s) loaded — select a binlog to make it primary`,
                 title: 'Binlog Analyzer — Manage Binlogs'
-            }) as (vscode.QuickPickItem & { action?: string }) | undefined;
+            }) as (vscode.QuickPickItem & { action?: string; binlogPath?: string }) | undefined;
 
             if (selected?.action === 'add') {
                 vscode.commands.executeCommand('binlog.addFile');
@@ -282,6 +406,8 @@ export async function activate(context: vscode.ExtensionContext) {
                 vscode.commands.executeCommand('binlog.removeFile');
             } else if (selected?.action === 'folder') {
                 vscode.commands.executeCommand('binlog.openProjectFolder');
+            } else if (selected?.binlogPath && selected.binlogPath !== currentBinlogPath) {
+                setActiveBinlog(selected.binlogPath);
             }
         })
     );
@@ -312,15 +438,22 @@ export async function activate(context: vscode.ExtensionContext) {
                 vscode.window.showWarningMessage('No binlog loaded. Use "Binlog: Load File" first.');
                 return;
             }
-            await openBinlogDocument('/summary', getFileName(currentBinlogPath));
+            await openBinlogDocument('/summary', getFileName(currentBinlogPath), currentBinlogPath);
         })
     );
 
     // Command: Open binlog section in editor
     context.subscriptions.push(
-        vscode.commands.registerCommand('binlog.openInEditor', async (section: string, label: string) => {
+        vscode.commands.registerCommand('binlog.openInEditor', async (section: string, label: string, binlogPath?: string) => {
             telemetry.trackCommand('openInEditor');
-            await openBinlogDocument(section, label);
+            // When a binlog file is opened from the tree we pin the document to
+            // that binlog AND make it the active one (so subsequent calls that
+            // don't carry an explicit path also target it).
+            const target = binlogPath || currentBinlogPath;
+            if (target && target !== currentBinlogPath && allBinlogPaths.includes(target)) {
+                setActiveBinlog(target);
+            }
+            await openBinlogDocument(section, label, target);
         })
     );
 
@@ -330,7 +463,7 @@ export async function activate(context: vscode.ExtensionContext) {
             telemetry.trackCommand('openProjectDetails');
             const projectName = projectFile.split(/[/\\]/).pop() || projectFile;
             const section = `/project/${encodeURIComponent(projectName)}`;
-            await openBinlogDocument(section, projectFile);
+            await openBinlogDocument(section, projectFile, currentBinlogPath);
         })
     );
 
@@ -431,6 +564,10 @@ export async function activate(context: vscode.ExtensionContext) {
             const diag = treeDataProvider?.getDiagnosticsSummary();
             if (!diag || (diag.errorCount === 0 && diag.warningCount === 0)) {
                 vscode.window.showInformationMessage('No errors or warnings to fix.');
+                return;
+            }
+
+            if (!await ensureProjectSourcesAccessible('Fix All Build Issues')) {
                 return;
             }
 
@@ -632,6 +769,9 @@ export async function activate(context: vscode.ExtensionContext) {
             }
             if (!mcpClient) {
                 vscode.window.showWarningMessage('MCP client not ready. Wait for binlog to finish loading.');
+                return;
+            }
+            if (!await ensureProjectSourcesAccessible('Optimize Build')) {
                 return;
             }
             await optimizeBuildFlow(context);
@@ -1386,7 +1526,11 @@ export async function activate(context: vscode.ExtensionContext) {
                         stableCount++;
                         if (stableCount >= STABLE_NEEDED) {
                             clearInterval(pollInterval);
-                            void handleBinlogOpen([binlogPath], context).catch(() => {});
+                            void handleBinlogOpen([binlogPath], context).catch(err =>
+                                surfaceMcpError('handleBinlogOpenFromUri', err, {
+                                    userMessage: `Failed to load binlog: ${binlogPath}`,
+                                })
+                            );
                         }
                     } else {
                         stableCount = 0;
@@ -1424,8 +1568,10 @@ export async function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    // Fetch about info on activation — show update popup if available
-    fetchAboutInfo('auto').catch(() => {});
+    // Fetch about info on activation — show update popup if available.
+    // Update-check failures are non-blocking but logged so a broken
+    // network / 404 isn't completely invisible to support.
+    fetchAboutInfo('auto').catch(err => surfaceMcpError('fetchAboutInfo', err));
 
     // Register chat participant
     chatParticipant.register(context);
@@ -1519,17 +1665,13 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
     chatParticipant?.setBinlogPaths(binlogPaths);
     treeDataProvider?.setLoading(true);
     treeDataProvider?.setBinlogPaths(binlogPaths);
+    treeDataProvider?.setActiveBinlogPath(currentBinlogPath);
+    binlogDocProvider?.setActiveBinlog(currentBinlogPath);
     updateStatusBar();
 
-    // Subscribe to tree's diagnostics data to populate Problems panel (zero extra MCP calls)
-    if (treeDataProvider && diagnosticsProvider) {
-        const sub = treeDataProvider.onDiagnosticsRaw((data) => {
-            const config = vscode.workspace.getConfiguration('binlogAnalyzer');
-            diagnosticsProvider!.loadFromRawData(data, config);
-            updateStatusBar();
-            sub.dispose();
-        });
-    }
+    // Diagnostics → Problems panel is wired permanently in `activate()`
+    // via `treeDataProvider.onDiagnosticsRaw`. No per-load subscription
+    // needed here.
 
     // Reveal the Binlog Explorer sidebar immediately so user sees loading state
     if (interactive) {
@@ -1541,7 +1683,7 @@ async function handleBinlogOpen(binlogPaths: string[], context: vscode.Extension
 
     // Configure MCP server for Copilot Chat and start tree client in parallel
     // cleanupBinlogInstructions is fire-and-forget (non-critical cleanup of old files)
-    cleanupBinlogInstructions().catch(() => {});
+    cleanupBinlogInstructions().catch(err => surfaceMcpError('cleanupBinlogInstructions', err));
 
     // Start MCP config and tree client concurrently — configureMcpServer writes settings
     // for Copilot Chat while startMcpClientForTree spawns the private MCP subprocess
@@ -1699,9 +1841,12 @@ async function addBinlogs(newPaths: string[]) {
     startMcpClientForTree(allBinlogPaths).then(() => {
         treeDataProvider?.setLoading(false);
         updateStatusBar();
-    }).catch(() => {
+    }).catch(err => {
         treeDataProvider?.setLoading(false);
         updateStatusBar();
+        surfaceMcpError('startMcpClientForTree:add', err, {
+            userMessage: 'Failed to restart the MCP server after adding binlogs. Reload the window.',
+        });
     });
 
     const names = added.map(getFileName).join(', ');
@@ -1964,9 +2109,12 @@ async function configureMcpServer(binlogPaths: string[], config: vscode.Workspac
                 startMcpClientForTree(binlogPaths).then(() => {
                     treeDataProvider?.setLoading(false);
                     updateStatusBar();
-                }).catch(() => {
+                }).catch(err => {
                     treeDataProvider?.setLoading(false);
                     updateStatusBar();
+                    surfaceMcpError('startMcpClientForTree:postInstall', err, {
+                        userMessage: 'BinlogInsights installed but the MCP server failed to start. Reload the window.',
+                    });
                 });
             }
         }
@@ -1997,8 +2145,12 @@ async function configureMcpServer(binlogPaths: string[], config: vscode.Workspac
         }
     }
 
-    // Write to user-level mcp.json first (sync file write, never hangs)
-    writeUserMcpJson(insightsConfig).catch(() => {});
+    // Write to user-level mcp.json first (sync file write, never hangs).
+    // Failures here mean Copilot Chat won't see the binlog tools — surface
+    // both to telemetry and to the user with a one-line warning.
+    writeUserMcpJson(insightsConfig).catch(err => surfaceMcpError('writeUserMcpJson', err, {
+        userMessage: 'Could not write MCP server config — Copilot Chat may not see binlog tools.',
+    }));
 
     // Write to VS Code settings (can hang on cold start — don't block on it)
     try {

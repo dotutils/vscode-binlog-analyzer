@@ -1,1 +1,1 @@
-Use `binlog_item_types` then `binlog_items` for: PackageReference, ProjectReference, Compile, Content, Reference. Flag duplicates and version conflicts.
+Use `binlog_item_types` then `binlog_items` for: PackageReference, ProjectReference, Compile, Content, Reference. Flag duplicates, version conflicts, and unusually large item groups (e.g. >500 Compile items in one project). When you find conflicts, name the projects involved and the suggested resolution (consolidate via `Directory.Packages.props`, pick the newer version, etc.).

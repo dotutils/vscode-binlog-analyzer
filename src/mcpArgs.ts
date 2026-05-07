@@ -5,12 +5,18 @@
 
 /**
  * Builds CLI args from a template string and binlog paths.
- * Template uses `${binlog}` as placeholder. The template is expanded
- * once per binlog path. E.g. `--binlog ${binlog}` with 2 paths produces
- * `['--binlog', 'a.binlog', '--binlog', 'b.binlog']`.
+ *
+ * The template uses `${binlog}` as a placeholder. The template is tokenized
+ * on whitespace ONCE, then `${binlog}` is substituted in each token per
+ * binlog path. This preserves paths that contain spaces — they remain a
+ * single argv entry instead of fragmenting.
+ *
+ * Example: `--binlog ${binlog}` with `['/tmp/has space.binlog']` produces
+ * `['--binlog', '/tmp/has space.binlog']` (two argv entries, not three).
  */
 export function buildMcpArgs(template: string, binlogPaths: string[]): string[] {
+    const tokens = template.split(/\s+/).filter(Boolean);
     return binlogPaths.flatMap(p =>
-        template.replace(/\$\{binlog\}/g, p).split(/\s+/).filter(Boolean)
+        tokens.map(t => t.replace(/\$\{binlog\}/g, p))
     );
 }

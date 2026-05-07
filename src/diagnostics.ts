@@ -58,8 +58,13 @@ export class BinlogDiagnosticsProvider implements vscode.Disposable {
             const diagnostics = this.parseMcpDiagnostics(data);
             this.cachedDiagnostics = diagnostics;
             this.pushDiagnostics(diagnostics, config);
-        } catch {
-            // MCP call failed — non-fatal, tree view still works
+        } catch (err) {
+            // MCP call failed — non-fatal for the tree view, but we used
+            // to silently swallow this and leave Problems stale. Log to
+            // the console so an unresponsive MCP server is at least
+            // visible during debugging.
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn(`[binlog-diagnostics] loadFromMcpClient failed: ${msg}`);
         }
     }
 

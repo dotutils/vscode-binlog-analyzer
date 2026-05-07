@@ -1,1 +1,1 @@
-Use `binlog_expensive_targets`. Show top 10: name, duration, executionCount, skippedCount. Mark any failed targets.
+Use `binlog_expensive_targets`. Show top 10 as a table: name, duration, executionCount, skippedCount. Mark any failed targets. Below the table, add one short paragraph noting: which target dominates (and roughly what share of total build time, only if the tool returned percentages), any target that runs many times without skipping (incrementality smell), and any failure. Suggest `/perf` or `/incremental` as the natural follow-up when patterns warrant it.
