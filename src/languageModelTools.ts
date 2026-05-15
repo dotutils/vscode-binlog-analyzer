@@ -143,9 +143,30 @@ class BinlogLmTool implements vscode.LanguageModelTool<BinlogToolInput> {
 
         try {
             if (this.mcpToolName) {
+                let resultText: string;
                 const result = await client.callTool(this.mcpToolName, args);
+                resultText = result.text || '(empty result)';
+
+                // Enrich overview with deduplicated project count from binlog_projects
+                if (this.toolName === 'binlog_lm_overview') {
+                    try {
+                        const projResult = await client.callTool('binlog_projects', args);
+                        const projData = JSON.parse(projResult.text);
+                        if (Array.isArray(projData)) {
+                            const seen = new Set<string>();
+                            for (const p of projData) {
+                                const fp = (p.fullPath || p.projectFile || '').split(/[/\\]/).pop()?.toLowerCase() || '';
+                                if (fp) { seen.add(fp); }
+                            }
+                            if (seen.size > 0) {
+                                resultText += `\nUnique projects: ${seen.size} (total evaluations may be higher due to restore/multi-targeting)`;
+                            }
+                        }
+                    } catch { /* non-fatal */ }
+                }
+
                 return new vscode.LanguageModelToolResult([
-                    new vscode.LanguageModelTextPart(result.text || '(empty result)'),
+                    new vscode.LanguageModelTextPart(resultText),
                 ]);
             }
 
