@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { McpClient } from './mcpClient';
 
 /**
- * Bridges BinlogInsights MCP tools into VS Code's `vscode.lm.tools` registry.
+ * Bridges AITools.BinlogMcp MCP tools into VS Code's `vscode.lm.tools` registry.
  *
  * Why this exists
  * ---------------

@@ -29,7 +29,8 @@ let statusBarItem: vscode.StatusBarItem | undefined;
 let extensionContext: vscode.ExtensionContext | undefined;
 let openedViaUri = false;
 let optimizeInProgress = false;
-let cachedInsightsExePath: string | null | undefined; // undefined = not searched yet
+let cachedMcpExePath: string | null | undefined; // undefined = not searched yet
+const DOTNET_ENG_FEED = 'https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-eng/nuget/v3/index.json';
 let codeLensRegistered = false;
 
 function escapeHtml(s: string): string {
@@ -2029,7 +2030,7 @@ async function startMcpClientForTree(binlogPaths: string[]) {
 
     const config = vscode.workspace.getConfiguration('binlogAnalyzer');
     const customPath = config.get<string>('mcpServerPath', '');
-    let toolExe = customPath || findBinlogInsightsTool();
+    let toolExe = customPath || findMcpTool();
     if (!toolExe) {
         // Don't block tree loading with install — configureMcpServer handles install
         return;
@@ -2100,12 +2101,12 @@ async function configureMcpServer(binlogPaths: string[], config: vscode.Workspac
             ...(workspaceCwd && { cwd: workspaceCwd }),
         };
     } else {
-        let insightsExe = findBinlogInsightsTool();
+        let insightsExe = findMcpTool();
         if (!insightsExe) {
-            insightsExe = await installBinlogInsightsTool();
+            insightsExe = await installMcpTool();
             // After install, start the tree client (it skipped earlier because tool wasn't found)
             if (insightsExe) {
-                cachedInsightsExePath = insightsExe;
+                cachedMcpExePath = insightsExe;
                 startMcpClientForTree(binlogPaths).then(() => {
                     treeDataProvider?.setLoading(false);
                     updateStatusBar();
@@ -2113,7 +2114,7 @@ async function configureMcpServer(binlogPaths: string[], config: vscode.Workspac
                     treeDataProvider?.setLoading(false);
                     updateStatusBar();
                     surfaceMcpError('startMcpClientForTree:postInstall', err, {
-                        userMessage: 'BinlogInsights installed but the MCP server failed to start. Reload the window.',
+                        userMessage: 'AITools.BinlogMcp installed but the MCP server failed to start. Reload the window.',
                     });
                 });
             }
@@ -2131,15 +2132,15 @@ async function configureMcpServer(binlogPaths: string[], config: vscode.Workspac
             insightsConfig = {
                 type: 'stdio',
                 command: 'dotnet',
-                args: ['tool', 'run', 'binlog-insights-mcp', '--', ...binlogArgs],
+                args: ['tool', 'run', 'binlog-mcp', '--', ...binlogArgs],
                 ...(workspaceCwd && { cwd: workspaceCwd }),
             };
             vscode.window.showWarningMessage(
-                'Could not find or install BinlogInsights.Mcp. Install it manually: `dotnet tool install -g BinlogInsights.Mcp`',
+                'Could not find or install AITools.BinlogMcp. Install it manually: `dotnet tool install -g AITools.BinlogMcp --prerelease --add-source ' + DOTNET_ENG_FEED + '`',
                 'Copy Command'
             ).then(sel => {
                 if (sel === 'Copy Command') {
-                    vscode.env.clipboard.writeText('dotnet tool install -g BinlogInsights.Mcp');
+                    vscode.env.clipboard.writeText('dotnet tool install -g AITools.BinlogMcp --prerelease --add-source ' + DOTNET_ENG_FEED);
                 }
             });
         }
@@ -2201,14 +2202,14 @@ async function writeUserMcpJson(serverConfig: Record<string, unknown>) {
     } catch { /* non-fatal */ }
 }
 
-const NUGET_PACKAGE_ID = 'BinlogInsights.Mcp';
+const NUGET_PACKAGE_ID = 'AITools.BinlogMcp';
 
-/** Checks whether a server config entry refers to the BinlogInsights MCP server. */
-function serverMatchesBinlogInsights(s: any): boolean {
+/** Checks whether a server config entry refers to the binlog MCP server. */
+function serverMatchesBinlogMcp(s: any): boolean {
     const cmd = typeof s?.command === 'string' ? s.command : '';
     const args: string[] = Array.isArray(s?.args) ? s.args : [];
     const combined = [cmd, ...args].join(' ').toLowerCase();
-    return combined.includes('binlog-insights-mcp') || combined.includes('binloginsights.mcp');
+    return combined.includes('binlog-mcp') || combined.includes('binloginsights.mcp') || combined.includes('aitools.binlogmcp');
 }
 
 /** Returns paths to mcp.json files that define the binlog-insights server. */
@@ -2223,7 +2224,7 @@ function getMcpConfigPaths(): string[] {
             try {
                 const content = JSON.parse(fs.readFileSync(wsMcp, 'utf8'));
                 const servers = content.servers || {};
-                if (Object.values(servers).some((s: any) => serverMatchesBinlogInsights(s))) {
+                if (Object.values(servers).some((s: any) => serverMatchesBinlogMcp(s))) {
                     paths.push(wsMcp);
                 }
             } catch { /* ignore parse errors */ }
@@ -2250,7 +2251,7 @@ function getMcpConfigPaths(): string[] {
 }
 
 async function fetchAboutInfo(mode: 'interactive' | 'auto' | 'silent') {
-    const toolPath = findBinlogInsightsTool();
+    const toolPath = findMcpTool();
     const version = toolPath ? await getInstalledMcpVersion(toolPath) : null;
     const latestVersion = await getLatestNuGetVersion();
 
@@ -2267,23 +2268,23 @@ async function fetchAboutInfo(mode: 'interactive' | 'auto' | 'silent') {
 
     if ((mode === 'interactive' || mode === 'auto') && updateAvailable) {
         const choice = await vscode.window.showInformationMessage(
-            `BinlogInsights.Mcp update available: v${version} → v${latestVersion}`,
+            `AITools.BinlogMcp update available: v${version} → v${latestVersion}`,
             'Update Now'
         );
         if (choice === 'Update Now') {
             await updateMcpServer();
         }
     } else if (mode === 'interactive' && !updateAvailable && version) {
-        vscode.window.showInformationMessage(`BinlogInsights.Mcp v${version} is up to date.`);
+        vscode.window.showInformationMessage(`AITools.BinlogMcp v${version} is up to date.`);
     }
 }
 
 async function getInstalledMcpVersion(toolPath: string): Promise<string | null> {
     // Primary: read version from the .store directory (works for all versions, even old ones without --version)
     try {
-        const storeDir = path.join(os.homedir(), '.dotnet', 'tools', '.store', 'binloginsights.mcp');
+        const storeDir = path.join(os.homedir(), '.dotnet', 'tools', '.store', 'aitools.binlogmcp');
         if (fs.existsSync(storeDir)) {
-            const versions = fs.readdirSync(storeDir).filter(d => /^\d+\.\d+\.\d+$/.test(d));
+            const versions = fs.readdirSync(storeDir).filter(d => /^\d+\.\d+\.\d+/.test(d));
             if (versions.length > 0) {
                 // Sort and pick the highest (there should only be one for a global tool)
                 versions.sort(compareVersions);
@@ -2309,8 +2310,9 @@ async function getLatestNuGetVersion(): Promise<string | null> {
     const cp = require('child_process');
 
     return new Promise<string | null>((resolve) => {
-        // Use dotnet CLI which respects all configured NuGet sources (including local feeds)
-        cp.execFile('dotnet', ['package', 'search', NUGET_PACKAGE_ID, '--exact-match', '--format', 'json'],
+        // Search the dotnet-eng feed for the package (includes prereleases)
+        cp.execFile('dotnet', ['package', 'search', NUGET_PACKAGE_ID, '--exact-match', '--format', 'json', '--prerelease',
+            '--source', DOTNET_ENG_FEED],
             { timeout: 30000, encoding: 'utf8' },
             (error: any, stdout: string) => {
                 if (error) {
@@ -2329,11 +2331,9 @@ async function getLatestNuGetVersion(): Promise<string | null> {
                             }
                         }
                     }
-                    // Filter out prereleases and find the highest version
-                    const stable = allVersions.filter(v => !v.includes('-'));
-                    if (stable.length === 0) { resolve(null); return; }
-                    stable.sort(compareVersions);
-                    resolve(stable[stable.length - 1]);
+                    if (allVersions.length === 0) { resolve(null); return; }
+                    allVersions.sort(compareVersions);
+                    resolve(allVersions[allVersions.length - 1]);
                 } catch {
                     resolve(null);
                 }
@@ -2359,16 +2359,16 @@ async function updateMcpServer() {
         // No binlog loaded — no MCP server running from our extension, try direct update
         const cp = require('child_process');
         const result = await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: 'Updating BinlogInsights MCP server...' },
+            { location: vscode.ProgressLocation.Notification, title: 'Updating AITools.BinlogMcp MCP server...' },
             () => new Promise<{ success: boolean; output: string }>((resolve) => {
-                cp.execFile('dotnet', ['tool', 'update', '-g', 'BinlogInsights.Mcp'], { timeout: 60000 }, (err: Error | null, stdout: string, stderr: string) => {
+                cp.execFile('dotnet', ['tool', 'update', '-g', 'AITools.BinlogMcp', '--prerelease', '--add-source', DOTNET_ENG_FEED], { timeout: 60000 }, (err: Error | null, stdout: string, stderr: string) => {
                     resolve({ success: !err, output: (stderr || stdout || '').toString() });
                 });
             })
         );
-        cachedInsightsExePath = undefined;
+        cachedMcpExePath = undefined;
         if (result.success) {
-            vscode.window.showInformationMessage('BinlogInsights MCP server updated successfully.');
+            vscode.window.showInformationMessage('AITools.BinlogMcp MCP server updated successfully.');
             await fetchAboutInfo('silent');
         } else {
             vscode.window.showErrorMessage(`Failed to update: ${result.output.substring(0, 200)}`);
@@ -2399,9 +2399,9 @@ async function applyPendingToolUpdate(): Promise<void> {
 
     const cp = require('child_process');
     const result = await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: 'Updating BinlogInsights MCP server...' },
+        { location: vscode.ProgressLocation.Notification, title: 'Updating AITools.BinlogMcp MCP server...' },
         () => new Promise<{ success: boolean; output: string }>((resolve) => {
-            cp.execFile('dotnet', ['tool', 'update', '-g', 'BinlogInsights.Mcp'], { timeout: 60000 }, (err: Error | null, stdout: string, stderr: string) => {
+            cp.execFile('dotnet', ['tool', 'update', '-g', 'AITools.BinlogMcp', '--prerelease', '--add-source', DOTNET_ENG_FEED], { timeout: 60000 }, (err: Error | null, stdout: string, stderr: string) => {
                 resolve({ success: !err, output: (stderr || stdout || '').toString() });
             });
         })
@@ -2409,25 +2409,25 @@ async function applyPendingToolUpdate(): Promise<void> {
 
     // Don't clear binlog.updatingMcp here — the auto-restore will clear it after loading binlogs,
     // or we clear it below if there are no binlogs to restore.
-    cachedInsightsExePath = undefined;
+    cachedMcpExePath = undefined;
     if (result.success) {
-        vscode.window.showInformationMessage('BinlogInsights MCP server updated successfully.');
+        vscode.window.showInformationMessage('AITools.BinlogMcp MCP server updated successfully.');
     } else {
-        vscode.window.showErrorMessage(`Failed to update BinlogInsights.Mcp: ${result.output.substring(0, 200)}`);
+        vscode.window.showErrorMessage(`Failed to update AITools.BinlogMcp: ${result.output.substring(0, 200)}`);
     }
 }
 
-function findBinlogInsightsTool(): string | null {
-    if (cachedInsightsExePath !== undefined) { return cachedInsightsExePath; }
+function findMcpTool(): string | null {
+    if (cachedMcpExePath !== undefined) { return cachedMcpExePath; }
 
     const homeDir = os.homedir();
     const isWindows = process.platform === 'win32';
-    const exeName = isWindows ? 'binlog-insights-mcp.exe' : 'binlog-insights-mcp';
+    const exeName = isWindows ? 'binlog-mcp.exe' : 'binlog-mcp';
 
     // Global dotnet tools are installed in ~/.dotnet/tools/
     const globalToolPath = path.join(homeDir, '.dotnet', 'tools', exeName);
     if (fs.existsSync(globalToolPath)) {
-        cachedInsightsExePath = globalToolPath;
+        cachedMcpExePath = globalToolPath;
         return globalToolPath;
     }
 
@@ -2437,7 +2437,7 @@ function findBinlogInsightsTool(): string | null {
         const candidate = path.join(dir, exeName);
         try {
             if (fs.existsSync(candidate)) {
-                cachedInsightsExePath = candidate;
+                cachedMcpExePath = candidate;
                 return candidate;
             }
         } catch {
@@ -2445,28 +2445,28 @@ function findBinlogInsightsTool(): string | null {
         }
     }
 
-    cachedInsightsExePath = null;
+    cachedMcpExePath = null;
     return null;
 }
 
-async function installBinlogInsightsTool(): Promise<string | null> {
-    cachedInsightsExePath = undefined; // Reset cache so findBinlogInsightsTool re-scans after install
+async function installMcpTool(): Promise<string | null> {
+    cachedMcpExePath = undefined; // Reset cache so findMcpTool re-scans after install
     const cp = require('child_process');
     const result = await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: 'Installing BinlogInsights MCP server (dotnet tool)...' },
+        { location: vscode.ProgressLocation.Notification, title: 'Installing AITools.BinlogMcp MCP server (dotnet tool)...' },
         () => new Promise<string | null>((resolve) => {
-            cp.execFile('dotnet', ['tool', 'install', '-g', 'BinlogInsights.Mcp'], { timeout: 60000 }, (err: Error | null) => {
+            cp.execFile('dotnet', ['tool', 'install', '-g', 'AITools.BinlogMcp', '--prerelease', '--add-source', DOTNET_ENG_FEED], { timeout: 60000 }, (err: Error | null) => {
                 if (err) {
-                    cp.execFile('dotnet', ['tool', 'update', '-g', 'BinlogInsights.Mcp'], { timeout: 60000 }, () => {
-                        const exe = findBinlogInsightsTool();
+                    cp.execFile('dotnet', ['tool', 'update', '-g', 'AITools.BinlogMcp', '--prerelease', '--add-source', DOTNET_ENG_FEED], { timeout: 60000 }, () => {
+                        const exe = findMcpTool();
                         telemetry.trackToolInstall(!!exe);
                         resolve(exe);
                     });
                 } else {
-                    const exe = findBinlogInsightsTool();
+                    const exe = findMcpTool();
                     telemetry.trackToolInstall(!!exe);
                     if (exe) {
-                        vscode.window.showInformationMessage('✅ BinlogInsights MCP server installed successfully.');
+                        vscode.window.showInformationMessage('✅ AITools.BinlogMcp MCP server installed successfully.');
                     }
                     resolve(exe);
                 }

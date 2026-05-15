@@ -247,12 +247,12 @@
         "binlogAnalyzer.mcpServerPath": {
           "type": "string",
           "default": "",
-          "description": "Custom path to the MCP server dotnet tool (BinlogInsights.Mcp or baronfel.binlog.mcp). Leave empty to use the globally installed tool."
+          "description": "Custom path to the MCP server dotnet tool (AITools.BinlogMcp). Leave empty to use the globally installed tool."
         },
         "binlogAnalyzer.mcpServerArgs": {
           "type": "string",
           "default": "--binlog ${binlog}",
-          "markdownDescription": "Argument template for the MCP server. Use `${binlog}` as a placeholder for each binlog path. Repeated for each loaded binlog. Examples:\n- BinlogInsights: `--binlog ${binlog}` (default)\n- baronfel: `--binlog ${binlog}`\n- Custom: `--file ${binlog}`"
+          "markdownDescription": "Argument template for the MCP server. Use `${binlog}` as a placeholder for each binlog path. Repeated for each loaded binlog. Examples:\n- AITools.BinlogMcp: `--binlog ${binlog}` (default)\n- Custom: `--file ${binlog}`"
         },
         "binlogAnalyzer.autoLoad": {
           "type": "boolean",
@@ -520,14 +520,14 @@
       {
         "slug": "build-analysis",
         "name": "Build Analysis",
-        "description": "Pre-configured for MSBuild binlog investigation with BinlogInsights MCP tools.",
+        "description": "Pre-configured for MSBuild binlog investigation with AITools.BinlogMcp MCP tools.",
         "toolsReferences": [
           {
             "type": "tool",
             "id": "binlog_insights_mcp"
           }
         ],
-        "systemPrompt": "You are an MSBuild build analysis assistant with BinlogInsights MCP tools available. Begin investigations with binlog_lm_overview (or binlog_overview) unless the question is narrowly scoped, then drill in with the most specific tool. For performance: rank with binlog_expensive_targets / binlog_expensive_tasks / binlog_expensive_projects / binlog_expensive_analyzers. For errors: binlog_lm_errors (or binlog_errors) then binlog_lm_search (or binlog_search). For deeper context the @binlog chat participant exposes the same tools plus prepared playbooks (try /perf, /incremental, /summary, /errors, /buildcheck). All tools take a binlog_file path parameter — ask the user if you don't know it. Reference real file paths, line numbers and error codes from tool output; don't invent numbers."
+        "systemPrompt": "You are an MSBuild build analysis assistant with AITools.BinlogMcp MCP tools available. Begin investigations with binlog_lm_overview (or binlog_overview) unless the question is narrowly scoped, then drill in with the most specific tool. For performance: rank with binlog_expensive_targets / binlog_expensive_tasks / binlog_expensive_projects / binlog_expensive_analyzers. For errors: binlog_lm_errors (or binlog_errors) then binlog_lm_search (or binlog_search). For deeper context the @binlog chat participant exposes the same tools plus prepared playbooks (try /perf, /incremental, /summary, /errors, /buildcheck). All tools take a binlog_file path parameter — ask the user if you don't know it. Reference real file paths, line numbers and error codes from tool output; don't invent numbers."
       }
     ],
     "menus": {
