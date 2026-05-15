@@ -878,10 +878,15 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                 query: 'Total analyzer execution',
                 limit: 5,
             });
-            const checkData = this.tryParseJson(checkResult.text);
+            // Handle both JSON (old) and text (new) response formats
+            const checkText = checkResult.text;
+            const checkData = this.tryParseJson(checkText);
             const checkEntries = Array.isArray(checkData) ? checkData : [];
+            // New tool returns "No results for '...'" text when empty
+            const hasResults = checkEntries.length > 0 ||
+                (checkText && !checkText.startsWith('No results') && checkText.includes('Total analyzer execution'));
 
-            if (checkEntries.length === 0) {
+            if (!hasResults) {
                 this.analyzersCache = [];
                 return [this.makeInfoItem('No analyzer data found', 'info')];
             }
@@ -915,43 +920,19 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                     });
                     const data = this.tryParseJson(result.text);
                     const entries = Array.isArray(data) ? data : [];
+
+                    // Process JSON entries (old BinlogInsights format)
                     for (const entry of entries) {
                         const msg = entry.message || entry.Message || '';
-                        // Match individual analyzer timing: "0.176   71      FullAnalyzerName (CA1234)"
-                        const timingMatch = msg.match(/^(\d+\.\d+)\s+\d+\s{2,}(.+)/);
-                        if (timingMatch) {
-                            const seconds = parseFloat(timingMatch[1]);
-                            const name = timingMatch[2].trim();
-                            if (seconds > 0.001 && name.length > 5 && !name.startsWith('Total')) {
-                                const durationMs = Math.round(seconds * 1000);
-                                const existing = analyzerMap.get(name);
-                                if (existing) {
-                                    existing.durationMs += durationMs;
-                                    existing.count++;
-                                } else {
-                                    analyzerMap.set(name, { durationMs, count: 1 });
-                                }
-                            }
-                            continue;
-                        }
-                        // Match assembly-level summary: "363 ms   AssemblyFullName, Version=... : AnalyzerName = 341 ms"
-                        const asmMatch = msg.match(/^(\d+)\s*ms\s{2,}(.+)/);
-                        if (asmMatch && entry.nodeType === 'Item') {
-                            const durationMs = parseInt(asmMatch[1]);
-                            let name = asmMatch[2].trim();
-                            // Trim version info: "Name, Version=... : SubName = Nms" → just "Name"
-                            const colonIdx = name.indexOf(':');
-                            if (colonIdx > 0) { name = name.substring(0, colonIdx).trim(); }
-                            const commaIdx = name.indexOf(',');
-                            if (commaIdx > 0) { name = name.substring(0, commaIdx).trim(); }
-                            if (durationMs > 0 && name.length > 3) {
-                                const existing = analyzerMap.get(name);
-                                if (existing) {
-                                    existing.durationMs += durationMs;
-                                    existing.count++;
-                                } else {
-                                    analyzerMap.set(name, { durationMs, count: 1 });
-                                }
+                        this.extractAnalyzerTiming(msg, entry.nodeType, analyzerMap);
+                    }
+
+                    // Process text lines (new AITools.BinlogMcp format)
+                    if (entries.length === 0 && result.text && !result.text.startsWith('No results')) {
+                        for (const line of result.text.split('\n')) {
+                            const msgMatch = line.match(/^\s*\[(\w+)\]\s*(.+)/);
+                            if (msgMatch) {
+                                this.extractAnalyzerTiming(msgMatch[2].trim(), msgMatch[1], analyzerMap);
                             }
                         }
                     }
@@ -987,6 +968,46 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
 
         this.analyzersCache = [];
         return [this.makeInfoItem('No analyzer data found', 'info')];
+    }
+
+    /** Extract analyzer timing from a message line and add to the map. */
+    private extractAnalyzerTiming(msg: string, nodeType: string | undefined, analyzerMap: Map<string, { durationMs: number; count: number }>): void {
+        // Match individual analyzer timing: "0.176   71      FullAnalyzerName (CA1234)"
+        const timingMatch = msg.match(/^(\d+\.\d+)\s+\d+\s{2,}(.+)/);
+        if (timingMatch) {
+            const seconds = parseFloat(timingMatch[1]);
+            const name = timingMatch[2].trim();
+            if (seconds > 0.001 && name.length > 5 && !name.startsWith('Total')) {
+                const durationMs = Math.round(seconds * 1000);
+                const existing = analyzerMap.get(name);
+                if (existing) {
+                    existing.durationMs += durationMs;
+                    existing.count++;
+                } else {
+                    analyzerMap.set(name, { durationMs, count: 1 });
+                }
+            }
+            return;
+        }
+        // Match assembly-level summary: "363 ms   AssemblyFullName, Version=... : AnalyzerName = 341 ms"
+        const asmMatch = msg.match(/^(\d+)\s*ms\s{2,}(.+)/);
+        if (asmMatch && (nodeType === 'Item' || nodeType === undefined)) {
+            const durationMs = parseInt(asmMatch[1]);
+            let name = asmMatch[2].trim();
+            const colonIdx = name.indexOf(':');
+            if (colonIdx > 0) { name = name.substring(0, colonIdx).trim(); }
+            const commaIdx = name.indexOf(',');
+            if (commaIdx > 0) { name = name.substring(0, commaIdx).trim(); }
+            if (durationMs > 0 && name.length > 3) {
+                const existing = analyzerMap.get(name);
+                if (existing) {
+                    existing.durationMs += durationMs;
+                    existing.count++;
+                } else {
+                    analyzerMap.set(name, { durationMs, count: 1 });
+                }
+            }
+        }
     }
 
     private parsePerfItems(text: string, icon: string): TreeNodeData[] {
