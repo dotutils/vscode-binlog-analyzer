@@ -239,6 +239,60 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             ]
         });
 
+        // Fallback: if binlog_projects returned very few entries (e.g. just a .sln),
+        // use binlog_evaluations to build a fuller project list.
+        if (this.projectsCache && this.projectsCache.length <= 2) {
+            try {
+                const evalResult = await client.callTool('binlog_evaluations', { limit: 500 });
+                const evalEntries: Array<{ projectFile: string }> = [];
+                // Parse text format
+                for (const line of evalResult.text.split('\n')) {
+                    const m = line.match(/^\s*\[id=\d+\]\s*(.+?)\s+\(\d+ms\)/);
+                    if (m) { evalEntries.push({ projectFile: m[1].trim() }); }
+                }
+                // Also try JSON format
+                if (evalEntries.length === 0) {
+                    try {
+                        const evalData = JSON.parse(evalResult.text);
+                        if (Array.isArray(evalData)) {
+                            for (const e of evalData) {
+                                evalEntries.push({ projectFile: e.projectFile || e.fullPath || '' });
+                            }
+                        }
+                    } catch { /* not JSON */ }
+                }
+                // Deduplicate by filename and filter out .sln/.proj wrappers
+                const seen = new Set<string>();
+                const projItems: TreeNodeData[] = [];
+                for (const e of evalEntries) {
+                    const filePath = e.projectFile;
+                    const fileName = this.extractFileName(filePath).toLowerCase();
+                    if (!fileName || seen.has(fileName)) { continue; }
+                    if (fileName.endsWith('.sln') || fileName.endsWith('.slnf')) { continue; }
+                    seen.add(fileName);
+                    const dirPath = this.extractDirectory(filePath);
+                    projItems.push({
+                        kind: 'project',
+                        label: this.extractFileName(filePath),
+                        description: dirPath || undefined,
+                        tooltip: `${filePath}\n\nExpand to see targets, or click to view project details`,
+                        icon: 'package',
+                        projectFile: filePath,
+                        projectId: String(projItems.length),
+                        children: [],
+                        command: {
+                            command: 'binlog.openProjectDetails',
+                            title: 'View Project Details',
+                            arguments: [String(projItems.length), filePath, {}],
+                        },
+                    });
+                }
+                if (projItems.length > this.projectsCache.length) {
+                    this.projectsCache = projItems;
+                }
+            } catch { /* non-fatal */ }
+        }
+
         this._onDidChangeTreeData.fire(undefined);
     }
 
