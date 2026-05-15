@@ -1151,8 +1151,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
                         let results: any[] = [];
                         try {
-                            const data = JSON.parse(result.text);
-                            results = Array.isArray(data) ? data : [];
+                            results = parseSearchResults(result.text);
                         } catch {
                             results = [];
                         }
@@ -1205,8 +1204,7 @@ export async function activate(context: vscode.ExtensionContext) {
                         });
                         let page: any[] = [];
                         try {
-                            const data = JSON.parse(result.text);
-                            page = Array.isArray(data) ? data : [];
+                            page = parseSearchResults(result.text);
                         } catch { break; }
                         allResults.push(...page);
                         if (page.length < pageSize) { break; }
@@ -2479,6 +2477,45 @@ async function installMcpTool(): Promise<string | null> {
 
 function getFileName(filePath: string): string {
     return filePath.split(/[/\\]/).pop() || filePath;
+}
+
+/**
+ * Parse binlog_search results from either JSON array (BinlogInsights) or
+ * human-readable text (AITools.BinlogMcp) into a uniform array of objects.
+ */
+function parseSearchResults(text: string): any[] {
+    // Try JSON first
+    try {
+        const data = JSON.parse(text);
+        if (Array.isArray(data)) { return data; }
+    } catch { /* not JSON */ }
+
+    // Parse AITools.BinlogMcp text format:
+    //   Search 'query': N results
+    //     [NodeType] Message text...
+    //       Project: file.csproj  Target: Name  Task: Name
+    if (text.startsWith('No results')) { return []; }
+    const results: any[] = [];
+    const lines = text.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const entryMatch = line.match(/^\s*\[(\w+)\]\s*(.+)/);
+        if (!entryMatch) { continue; }
+        const entry: any = { nodeType: entryMatch[1], message: entryMatch[2].trim() };
+        // Check next line for Project/Target/Task metadata
+        if (i + 1 < lines.length) {
+            const meta = lines[i + 1];
+            const projMatch = meta.match(/Project:\s*(\S+)/);
+            if (projMatch) { entry.projectFile = projMatch[1]; }
+            const targetMatch = meta.match(/Target:\s*(\S+)/);
+            if (targetMatch) { entry.targetName = targetMatch[1]; }
+            const taskMatch = meta.match(/Task:\s*(\S+)/);
+            if (taskMatch) { entry.taskName = taskMatch[1]; }
+            if (projMatch || targetMatch || taskMatch) { i++; }
+        }
+        results.push(entry);
+    }
+    return results;
 }
 
 export function deactivate() {
