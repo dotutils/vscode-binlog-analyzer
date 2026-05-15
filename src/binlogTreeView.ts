@@ -1460,7 +1460,23 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         try {
             const result = await this.mcpCall('binlog_evaluations');
             const data = this.tryParseJson(result.text);
-            const entries = Array.isArray(data) ? data : [];
+            let entries: any[] = Array.isArray(data) ? data : [];
+
+            // Parse text format from AITools.BinlogMcp:
+            //   Evaluations: N total, showing N (offset 0):
+            //     [id=10] path/to/project.csproj  (109ms)
+            if (entries.length === 0 && result.text && !result.text.startsWith('No ')) {
+                for (const line of result.text.split('\n')) {
+                    const m = line.match(/^\s*\[id=(\d+)\]\s*(.+?)\s+\((\d+)ms\)/);
+                    if (m) {
+                        entries.push({
+                            id: parseInt(m[1]),
+                            projectFile: m[2].trim(),
+                            durationMs: parseInt(m[3]),
+                        });
+                    }
+                }
+            }
 
             const items: TreeNodeData[] = entries.map((e: any) => {
                 const file = e.projectFile || e.ProjectFile || '';
