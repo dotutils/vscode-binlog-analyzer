@@ -1460,12 +1460,6 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
         try {
             const result = await this.mcpCall('binlog_evaluations');
 
-            // Check if the tool returned an "Unknown tool" error
-            if (result.text.includes('Unknown tool')) {
-                this.evaluationsCache = [];
-                return [this.makeInfoItem('Evaluations not available (tool not registered in MCP server)', 'info')];
-            }
-
             const data = this.tryParseJson(result.text);
             let entries: any[] = Array.isArray(data) ? data : [];
 
@@ -1509,6 +1503,10 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                 : [this.makeInfoItem('No evaluations found', 'info')];
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
+            if (msg.includes('Unknown tool')) {
+                this.evaluationsCache = [];
+                return [this.makeInfoItem('Evaluations not available in this MCP version', 'info')];
+            }
             return [this.makeInfoItem(`Error: ${msg.substring(0, 80)}`, 'error')];
         }
     }
