@@ -1633,10 +1633,8 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             return [this.makeInfoItem('Loading...', 'loading')];
         }
 
-        // Auto-inject binlog_file for multi-binlog to avoid
-        // "requires explicit binlog_file" errors.
-        if (!args.binlog_file && this.binlogPaths.length > 1) {
-            args.binlog_file = this.binlogPaths[0];
+        if (!args.binlog_file && this.binlogPaths.length >= 1) {
+            args.binlog_file = this.activeBinlogPath || this.binlogPaths[0];
         }
 
         this.loadingSet.add(parentKind);
@@ -1661,8 +1659,8 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
      */
     private mcpCall(tool: string, args: Record<string, unknown> = {}): Promise<{ text: string }> {
         if (!this.mcpClient) { throw new Error('MCP server not connected'); }
-        if (!args.binlog_file && this.binlogPaths.length > 1) {
-            args.binlog_file = this.binlogPaths[0];
+        if (!args.binlog_file && this.binlogPaths.length >= 1) {
+            args.binlog_file = this.activeBinlogPath || this.binlogPaths[0];
         }
         return this.mcpClient.callTool(tool, args);
     }
