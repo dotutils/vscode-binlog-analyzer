@@ -74,6 +74,8 @@ interface TreeNodeData {
     itemType?: string;
     /** For evaluation nodes: evaluation id from MCP */
     evaluationId?: number;
+    /** For task nodes: task id from MCP */
+    taskId?: number;
 }
 
 export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTreeItem> {
@@ -1139,7 +1141,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                 ? this.extractFileName(element.projectFile).replace(/\.[^.]+$/, '')
                 : '';
             const args: Record<string, unknown> = {
-                target_name: targetName,
+                target: targetName,
                 project: projectName,
             };
             const result = await this.mcpCall('binlog_tasks_in_target', args);
@@ -1161,6 +1163,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                 item.projectFile = element.projectFile;
                 item.targetName = targetName;
                 item.taskName = String(name);
+                item.taskId = t.id || t.Id || undefined;
                 item.contextValue = 'copyable-task';
                 item.fullText = `${name} — ${durStr}`;
                 items.push(item);
@@ -1197,14 +1200,19 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             return [this.makeInfoItem('No task name', 'info')];
         }
         try {
-            const projectName = element.projectFile
-                ? this.extractFileName(element.projectFile).replace(/\.[^.]+$/, '')
-                : '';
-            const args: Record<string, unknown> = {
-                task_name: taskName,
-                project: projectName,
-                target_name: element.targetName || '',
-            };
+            const args: Record<string, unknown> = {};
+            if (element.taskId !== undefined) {
+                // New MCP: use task_id directly
+                args.task_id = element.taskId;
+            } else {
+                // Legacy fallback: look up by name
+                const projectName = element.projectFile
+                    ? this.extractFileName(element.projectFile).replace(/\.[^.]+$/, '')
+                    : '';
+                args.task_name = taskName;
+                args.project = projectName;
+                args.target_name = element.targetName || '';
+            }
             const result = await this.mcpCall('binlog_task_details', args);
             const items: BinlogTreeItem[] = [];
 
@@ -1878,6 +1886,8 @@ export class BinlogTreeItem extends vscode.TreeItem {
     itemType?: string;
     /** For evaluation nodes: evaluation id from MCP */
     evaluationId?: number;
+    /** For task nodes: task id from MCP */
+    taskId?: number;
     constructor(label: string, collapsibleState: vscode.TreeItemCollapsibleState) {
         super(label, collapsibleState);
     }
