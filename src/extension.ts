@@ -2280,13 +2280,14 @@ async function fetchAboutInfo(mode: 'interactive' | 'auto' | 'silent') {
 async function getInstalledMcpVersion(toolPath: string): Promise<string | null> {
     // Primary: read version from the .store directory (works for all versions, even old ones without --version)
     try {
-        const storeDir = path.join(os.homedir(), '.dotnet', 'tools', '.store', 'aitools.binlogmcp');
-        if (fs.existsSync(storeDir)) {
-            const versions = fs.readdirSync(storeDir).filter(d => /^\d+\.\d+\.\d+/.test(d));
-            if (versions.length > 0) {
-                // Sort and pick the highest (there should only be one for a global tool)
-                versions.sort(compareVersions);
-                return versions[versions.length - 1];
+        for (const storeId of ['aitools.binlogmcp', 'binloginsights.mcp']) {
+            const storeDir = path.join(os.homedir(), '.dotnet', 'tools', '.store', storeId);
+            if (fs.existsSync(storeDir)) {
+                const versions = fs.readdirSync(storeDir).filter(d => /^\d+\.\d+\.\d+/.test(d));
+                if (versions.length > 0) {
+                    versions.sort(compareVersions);
+                    return versions[versions.length - 1];
+                }
             }
         }
     } catch { /* fall through */ }
@@ -2420,26 +2421,36 @@ function findMcpTool(): string | null {
 
     const homeDir = os.homedir();
     const isWindows = process.platform === 'win32';
-    const exeName = isWindows ? 'binlog-mcp.exe' : 'binlog-mcp';
+
+    // Look for both the new (AITools.BinlogMcp → binlog-mcp) and old
+    // (BinlogInsights.Mcp → binlog-insights-mcp) executables so existing
+    // users aren't broken on upgrade.
+    const candidates = isWindows
+        ? ['binlog-mcp.exe', 'binlog-insights-mcp.exe']
+        : ['binlog-mcp', 'binlog-insights-mcp'];
 
     // Global dotnet tools are installed in ~/.dotnet/tools/
-    const globalToolPath = path.join(homeDir, '.dotnet', 'tools', exeName);
-    if (fs.existsSync(globalToolPath)) {
-        cachedMcpExePath = globalToolPath;
-        return globalToolPath;
+    for (const exeName of candidates) {
+        const globalToolPath = path.join(homeDir, '.dotnet', 'tools', exeName);
+        if (fs.existsSync(globalToolPath)) {
+            cachedMcpExePath = globalToolPath;
+            return globalToolPath;
+        }
     }
 
     // Also check PATH
     const pathDirs = (process.env.PATH || '').split(path.delimiter);
-    for (const dir of pathDirs) {
-        const candidate = path.join(dir, exeName);
-        try {
-            if (fs.existsSync(candidate)) {
-                cachedMcpExePath = candidate;
-                return candidate;
+    for (const exeName of candidates) {
+        for (const dir of pathDirs) {
+            const candidate = path.join(dir, exeName);
+            try {
+                if (fs.existsSync(candidate)) {
+                    cachedMcpExePath = candidate;
+                    return candidate;
+                }
+            } catch {
+                // ignore permission errors
             }
-        } catch {
-            // ignore permission errors
         }
     }
 

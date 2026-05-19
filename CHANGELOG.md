@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.10.19 (Preview)
+
+### Changed
+- **Switched MCP server to AITools.BinlogMcp** — the extension now uses [AITools.BinlogMcp](https://dev.azure.com/dnceng/public/_artifacts/feed/dotnet-eng/NuGet/AITools.BinlogMcp) from the dotnet-eng feed instead of BinlogInsights.Mcp from nuget.org. The new package is auto-installed on first use. Existing BinlogInsights.Mcp installations continue to work — the extension detects both `binlog-mcp` and `binlog-insights-mcp` executables.
+- **Consistent project count** — the overview and tree view now show the same deduplicated project count instead of the raw evaluation count
+- **Search with text format** — search results from the new MCP's text format are parsed correctly for the tree view
+
+### Fixed
+- **Evaluations tree** — parse text format responses from the new MCP server; gracefully show "not available" when the tool isn't registered
+- **Task expansion** — fixed parameter names (`target` not `target_name`, `task_id` not `task_name`) to match the new MCP tool signatures
+- **Multi-binlog removal** — always inject `binlog_file` in tree MCP calls to avoid stale state errors when removing a binlog
+- **Overview parsing** — handle both JSON (old) and text (new) overview formats
+- **Project list for solutions** — parse `projectFile` property in addition to `fullPath` for compatibility
+
 ## 0.10.18 (Preview)
 
 ### Removed
