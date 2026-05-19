@@ -119,7 +119,21 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
         // Build overview
         try {
             const overviewResult = await this.call('binlog_overview', {}, binlogPath);
-            const ov = JSON.parse(overviewResult.text);
+            // Handle both JSON (BinlogInsights) and text (AITools.BinlogMcp) formats
+            let ov: any;
+            try {
+                ov = JSON.parse(overviewResult.text);
+            } catch {
+                // AITools.BinlogMcp returns human-readable text — parse it
+                const text = overviewResult.text;
+                ov = {
+                    succeeded: /SUCCEEDED/i.test(text),
+                    msBuildVersion: text.match(/MSBuild:\s*(.+)/)?.[1]?.trim() || '',
+                    errorCount: parseInt(text.match(/Errors:\s*(\d+)/)?.[1] || '0'),
+                    warningCount: parseInt(text.match(/Warnings:\s*(\d+)/)?.[1] || '0'),
+                    duration: text.match(/Duration:\s*(.+)/)?.[1]?.trim() || '',
+                };
+            }
             const status = ov.succeeded ? '✅ BUILD SUCCEEDED' : '❌ BUILD FAILED';
             const dur = ov.duration || '';
             // Parse "HH:MM:SS.xxx" duration to a readable format
@@ -152,8 +166,8 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
             // Handle both formats: array (BinlogInsights) and object (baronfel)
             let projectFiles: string[] = [];
             if (Array.isArray(projData)) {
-                // BinlogInsights: [{ fullPath, isLegacy }, ...]
-                projectFiles = projData.map((p: any) => p.fullPath || '').filter(Boolean);
+                // Array format: [{ fullPath/projectFile, ... }, ...]
+                projectFiles = projData.map((p: any) => p.fullPath || p.projectFile || '').filter(Boolean);
             } else {
                 // baronfel: { "id": { projectFile, entryTargets }, ... }
                 projectFiles = Object.values(projData as Record<string, any>)

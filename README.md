@@ -19,7 +19,7 @@ Analyze MSBuild binary logs (`.binlog`) with **GitHub Copilot Chat** and **MCP t
 @binlog /perf
 ```
 
-The [BinlogInsights.Mcp](https://www.nuget.org/packages/BinlogInsights.Mcp) server (28 analysis tools) is auto-installed on first use.
+The [AITools.BinlogMcp](https://dev.azure.com/dnceng/public/_artifacts/feed/dotnet-eng/NuGet/AITools.BinlogMcp) server (28 analysis tools) is auto-installed on first use.
 
 ## What You Get
 
@@ -32,7 +32,7 @@ The [BinlogInsights.Mcp](https://www.nuget.org/packages/BinlogInsights.Mcp) serv
 | **Fix All Issues** | Copilot fixes all build errors/warnings, rebuilds, and loads before/after for comparison |
 | **Auto-fix Diagnostic** | Right-click any error/warning in the tree → "Auto-fix with Copilot" to fix it directly |
 | **Optimize Build** | Pick optimizations, Copilot applies changes, verify with A/B comparison |
-| **Build Analysis Mode** | Chat mode pre-configured with BinlogInsights MCP tools — works with any agent |
+| **Build Analysis Mode** | Chat mode pre-configured with AITools.BinlogMcp MCP tools — works with any agent |
 | **Language Model Tools** | `binlog_lm_overview`, `binlog_lm_errors`, `binlog_lm_search`, `binlog_lm_perf`, `binlog_lm_compare` — available to @workspace, agent mode, and custom chat modes |
 | **CI/CD Integration** | Download binlogs from Azure DevOps Pipelines and GitHub Actions — filter by branch or PR |
 | **Problems Panel** | Build diagnostics as native VS Code errors/warnings with per-project CodeLens and "Ask @binlog" CodeActions |
@@ -52,53 +52,36 @@ The [BinlogInsights.Mcp](https://www.nuget.org/packages/BinlogInsights.Mcp) serv
 
 ## Troubleshooting: MCP Server Installation
 
-The extension auto-installs [BinlogInsights.Mcp](https://www.nuget.org/packages/BinlogInsights.Mcp) via `dotnet tool install -g`. In corporate environments with restricted NuGet feeds, this may fail. Here are the workarounds:
+The extension auto-installs [AITools.BinlogMcp](https://dev.azure.com/dnceng/public/_artifacts/feed/dotnet-eng/NuGet/AITools.BinlogMcp) via `dotnet tool install -g`. In corporate environments with restricted NuGet feeds, this may fail. Here are the workarounds:
 
-### 1. Install with explicit NuGet source
-
-```bash
-dotnet tool install -g BinlogInsights.Mcp --add-source https://api.nuget.org/v3/index.json
-```
-
-### 2. Manual download fallback
-
-If all `dotnet tool install` attempts fail (e.g., nuget.org is blocked):
-
-1. Download the `.nupkg` directly from [nuget.org](https://www.nuget.org/packages/BinlogInsights.Mcp)
-2. Install from the local file:
+### 1. Install with explicit feed source
 
 ```bash
-# Download (replace {version} with latest, e.g. 0.2.0)
-Invoke-WebRequest -Uri "https://www.nuget.org/api/v2/package/BinlogInsights.Mcp/{version}" -OutFile "BinlogInsights.Mcp.nupkg"
-
-# Install from local file
-dotnet tool install -g BinlogInsights.Mcp --add-source .
+dotnet tool install -g AITools.BinlogMcp --prerelease --add-source https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-eng/nuget/v3/index.json
 ```
 
-### 3. Diagnose NuGet issues
+### 2. Diagnose NuGet issues
 
 ```bash
 dotnet nuget list source
 ```
 
 Common problems:
-- **nuget.org not listed or disabled** — the tool is published on nuget.org
-- **Authenticated feed requires credentials** — may block fallthrough to nuget.org
-- **Package source mapping** excludes nuget.org for this package
+- **dotnet-eng feed not configured** — the tool is published on the dotnet-eng Azure DevOps feed
+- **Authenticated feed requires credentials** — may block access to the feed
+- **Package source mapping** excludes the dotnet-eng feed for this package
 
-### 4. Verify installation
+### 3. Verify installation
 
 ```bash
-dotnet tool list -g | Select-String BinlogInsights
-binlog-insights-mcp --help
+dotnet tool list -g | Select-String AITools.BinlogMcp
+binlog-mcp --help
 ```
-
-> For the full troubleshooting guide, see [BinlogInsights repo setup instructions](https://github.com/SergeyTeplyakov/BinlogInsights/blob/main/samples/repo-setup/.github/skills/build-tool-setup/SKILL.md).
 
 ## Related Projects
 
 - [MSBuild Structured Log Viewer](https://github.com/KirillOsenkov/MSBuildStructuredLog) — WPF viewer with secrets redaction
-- [BinlogInsights](https://github.com/SergeyTeplyakov/BinlogInsights) — CLI + MCP server for binlog analysis
+- [AITools.BinlogMcp](https://dev.azure.com/dnceng/public/_artifacts/feed/dotnet-eng/NuGet/AITools.BinlogMcp) — MCP server for binlog analysis
 - [MSBuild Binary Log docs](https://learn.microsoft.com/en-us/visualstudio/msbuild/obtaining-build-logs-with-msbuild#save-a-binary-log)
 
 ## License
