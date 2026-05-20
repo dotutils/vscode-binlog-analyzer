@@ -190,6 +190,9 @@ export async function activate(context: vscode.ExtensionContext) {
     // Apply any pending tool update BEFORE MCP servers start
     await applyPendingToolUpdate();
 
+    // Auto-migrate from BinlogInsights.Mcp to AITools.BinlogMcp on extension update
+    await migrateToNewMcpTool();
+
     diagnosticsProvider = new BinlogDiagnosticsProvider();
     chatParticipant = new BinlogChatParticipant();
 
@@ -2100,29 +2103,6 @@ async function configureMcpServer(binlogPaths: string[], config: vscode.Workspac
         };
     } else {
         let insightsExe = findMcpTool();
-
-        // Force migration: if user has the old BinlogInsights.Mcp but not the
-        // new AITools.BinlogMcp, install the new one automatically.
-        if (insightsExe && insightsExe.includes('binlog-insights-mcp')) {
-            const newExeName = process.platform === 'win32' ? 'binlog-mcp.exe' : 'binlog-mcp';
-            const newExePath = path.join(os.homedir(), '.dotnet', 'tools', newExeName);
-            if (!fs.existsSync(newExePath)) {
-                const migrated = await installMcpTool();
-                if (migrated) {
-                    insightsExe = migrated;
-                    cachedMcpExePath = migrated;
-                    vscode.window.showInformationMessage(
-                        '🔄 Migrated from BinlogInsights.Mcp to AITools.BinlogMcp. You can uninstall the old tool: `dotnet tool uninstall -g BinlogInsights.Mcp`',
-                        'Copy Command'
-                    ).then(sel => {
-                        if (sel === 'Copy Command') {
-                            vscode.env.clipboard.writeText('dotnet tool uninstall -g BinlogInsights.Mcp');
-                        }
-                    });
-                }
-            }
-        }
-
         if (!insightsExe) {
             insightsExe = await installMcpTool();
             // After install, start the tree client (it skipped earlier because tool wasn't found)
@@ -2436,6 +2416,34 @@ async function applyPendingToolUpdate(): Promise<void> {
         vscode.window.showInformationMessage('AITools.BinlogMcp MCP server updated successfully.');
     } else {
         vscode.window.showErrorMessage(`Failed to update AITools.BinlogMcp: ${result.output.substring(0, 200)}`);
+    }
+}
+
+/**
+ * Auto-migrate from BinlogInsights.Mcp to AITools.BinlogMcp.
+ * Runs once on extension activation when updating from a previous version.
+ * If the old tool is found but the new one isn't, installs the new one
+ * and prompts the user to uninstall the old one.
+ */
+async function migrateToNewMcpTool(): Promise<void> {
+    const isWindows = process.platform === 'win32';
+    const oldExe = path.join(os.homedir(), '.dotnet', 'tools', isWindows ? 'binlog-insights-mcp.exe' : 'binlog-insights-mcp');
+    const newExe = path.join(os.homedir(), '.dotnet', 'tools', isWindows ? 'binlog-mcp.exe' : 'binlog-mcp');
+
+    // Only migrate if old tool exists but new one doesn't
+    if (!fs.existsSync(oldExe) || fs.existsSync(newExe)) { return; }
+
+    const migrated = await installMcpTool();
+    if (migrated) {
+        cachedMcpExePath = migrated;
+        vscode.window.showInformationMessage(
+            '🔄 Migrated from BinlogInsights.Mcp to AITools.BinlogMcp. You can uninstall the old tool: `dotnet tool uninstall -g BinlogInsights.Mcp`',
+            'Copy Command'
+        ).then(sel => {
+            if (sel === 'Copy Command') {
+                vscode.env.clipboard.writeText('dotnet tool uninstall -g BinlogInsights.Mcp');
+            }
+        });
     }
 }
 
