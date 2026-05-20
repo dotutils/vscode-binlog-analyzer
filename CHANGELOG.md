@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.20 (Preview)
+
+### Fixed
+- **Auto-migration runs on activation** — migration from BinlogInsights.Mcp to AITools.BinlogMcp now triggers immediately when the extension starts, not only when a binlog is loaded
+
 ## 0.10.19 (Preview)
 
 ### Changed
