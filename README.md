@@ -19,7 +19,7 @@ Analyze MSBuild binary logs (`.binlog`) with **GitHub Copilot Chat** and **MCP t
 @binlog /perf
 ```
 
-The [AITools.BinlogMcp](https://dev.azure.com/dnceng/public/_artifacts/feed/dotnet-eng/NuGet/AITools.BinlogMcp) server (28 analysis tools) is auto-installed on first use.
+The [AITools.BinlogMcp](https://dev.azure.com/dnceng/public/_artifacts/feed/dotnet-tools/NuGet/AITools.BinlogMcp) server (28 analysis tools) is auto-installed on first use.
 
 ## What You Get
 
@@ -52,12 +52,12 @@ The [AITools.BinlogMcp](https://dev.azure.com/dnceng/public/_artifacts/feed/dotn
 
 ## Troubleshooting: MCP Server Installation
 
-The extension auto-installs [AITools.BinlogMcp](https://dev.azure.com/dnceng/public/_artifacts/feed/dotnet-eng/NuGet/AITools.BinlogMcp) via `dotnet tool install -g`. In corporate environments with restricted NuGet feeds, this may fail. Here are the workarounds:
+The extension auto-installs [AITools.BinlogMcp](https://dev.azure.com/dnceng/public/_artifacts/feed/dotnet-tools/NuGet/AITools.BinlogMcp) via `dotnet tool install -g`. In corporate environments with restricted NuGet feeds, this may fail. Here are the workarounds:
 
 ### 1. Install with explicit feed source
 
 ```bash
-dotnet tool install -g AITools.BinlogMcp --prerelease --add-source https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-eng/nuget/v3/index.json
+dotnet tool install -g AITools.BinlogMcp --prerelease --add-source https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-tools/nuget/v3/index.json
 ```
 
 ### 2. Diagnose NuGet issues
@@ -67,9 +67,9 @@ dotnet nuget list source
 ```
 
 Common problems:
-- **dotnet-eng feed not configured** — the tool is published on the dotnet-eng Azure DevOps feed
+- **dotnet-tools feed not configured** — the tool is published on the dotnet-tools Azure DevOps feed
 - **Authenticated feed requires credentials** — may block access to the feed
-- **Package source mapping** excludes the dotnet-eng feed for this package
+- **Package source mapping** excludes the dotnet-tools feed for this package
 
 ### 3. Verify installation
 
@@ -81,7 +81,7 @@ binlog-mcp --help
 ## Related Projects
 
 - [MSBuild Structured Log Viewer](https://github.com/KirillOsenkov/MSBuildStructuredLog) — WPF viewer with secrets redaction
-- [AITools.BinlogMcp](https://dev.azure.com/dnceng/public/_artifacts/feed/dotnet-eng/NuGet/AITools.BinlogMcp) — MCP server for binlog analysis
+- [AITools.BinlogMcp](https://dev.azure.com/dnceng/public/_artifacts/feed/dotnet-tools/NuGet/AITools.BinlogMcp) — MCP server for binlog analysis
 - [MSBuild Binary Log docs](https://learn.microsoft.com/en-us/visualstudio/msbuild/obtaining-build-logs-with-msbuild#save-a-binary-log)
 
 ## License
