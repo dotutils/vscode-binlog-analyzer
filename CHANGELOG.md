@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.21 (Preview)
+
+### Changed
+- **Switched NuGet feed from dotnet-eng to dotnet-tools** — the AITools.BinlogMcp package is now published on the `dotnet-tools` feed. All install, update, and version resolution commands updated automatically.
+
 ## 0.10.20 (Preview)
 
 ### Fixed
@@ -8,7 +13,7 @@
 ## 0.10.19 (Preview)
 
 ### Changed
-- **Switched MCP server to AITools.BinlogMcp** — the extension now uses [AITools.BinlogMcp](https://dev.azure.com/dnceng/public/_artifacts/feed/dotnet-eng/NuGet/AITools.BinlogMcp) from the dotnet-eng feed instead of BinlogInsights.Mcp from nuget.org. The new package is auto-installed on first use. Existing BinlogInsights.Mcp installations are automatically migrated — the extension installs the new tool and prompts to uninstall the old one.
+- **Switched MCP server to AITools.BinlogMcp** — the extension now uses [AITools.BinlogMcp](https://dev.azure.com/dnceng/public/_artifacts/feed/dotnet-tools/NuGet/AITools.BinlogMcp) from the dotnet-tools feed instead of BinlogInsights.Mcp from nuget.org. The new package is auto-installed on first use. Existing BinlogInsights.Mcp installations are automatically migrated — the extension installs the new tool and prompts to uninstall the old one.
 - **Consistent project count** — the overview and tree view now show the same deduplicated project count instead of the raw evaluation count
 - **Search with text format** — search results from the new MCP's text format are parsed correctly for the tree view
 
