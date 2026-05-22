@@ -19,7 +19,7 @@ Analyze MSBuild binary logs (`.binlog`) with **GitHub Copilot Chat** and **MCP t
 @binlog /perf
 ```
 
-The [AITools.BinlogMcp](https://dev.azure.com/dnceng/public/_artifacts/feed/dotnet-tools/NuGet/AITools.BinlogMcp) server (28 analysis tools) is auto-installed on first use.
+The [Microsoft.AITools.BinlogMcp](https://dev.azure.com/dnceng/public/_artifacts/feed/dotnet-tools/NuGet/Microsoft.AITools.BinlogMcp) server (28 analysis tools) is auto-installed on first use.
 
 ## What You Get
 
@@ -32,7 +32,7 @@ The [AITools.BinlogMcp](https://dev.azure.com/dnceng/public/_artifacts/feed/dotn
 | **Fix All Issues** | Copilot fixes all build errors/warnings, rebuilds, and loads before/after for comparison |
 | **Auto-fix Diagnostic** | Right-click any error/warning in the tree → "Auto-fix with Copilot" to fix it directly |
 | **Optimize Build** | Pick optimizations, Copilot applies changes, verify with A/B comparison |
-| **Build Analysis Mode** | Chat mode pre-configured with AITools.BinlogMcp MCP tools — works with any agent |
+| **Build Analysis Mode** | Chat mode pre-configured with Microsoft.AITools.BinlogMcp MCP tools — works with any agent |
 | **Language Model Tools** | `binlog_lm_overview`, `binlog_lm_errors`, `binlog_lm_search`, `binlog_lm_perf`, `binlog_lm_compare` — available to @workspace, agent mode, and custom chat modes |
 | **CI/CD Integration** | Download binlogs from Azure DevOps Pipelines and GitHub Actions — filter by branch or PR |
 | **Problems Panel** | Build diagnostics as native VS Code errors/warnings with per-project CodeLens and "Ask @binlog" CodeActions |
@@ -52,12 +52,12 @@ The [AITools.BinlogMcp](https://dev.azure.com/dnceng/public/_artifacts/feed/dotn
 
 ## Troubleshooting: MCP Server Installation
 
-The extension auto-installs [AITools.BinlogMcp](https://dev.azure.com/dnceng/public/_artifacts/feed/dotnet-tools/NuGet/AITools.BinlogMcp) via `dotnet tool install -g`. In corporate environments with restricted NuGet feeds, this may fail. Here are the workarounds:
+The extension auto-installs [Microsoft.AITools.BinlogMcp](https://dev.azure.com/dnceng/public/_artifacts/feed/dotnet-tools/NuGet/Microsoft.AITools.BinlogMcp) via `dotnet tool install -g`. In corporate environments with restricted NuGet feeds, this may fail. Here are the workarounds:
 
 ### 1. Install with explicit feed source
 
 ```bash
-dotnet tool install -g AITools.BinlogMcp --prerelease --add-source https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-tools/nuget/v3/index.json
+dotnet tool install -g Microsoft.AITools.BinlogMcp --prerelease --add-source https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-tools/nuget/v3/index.json
 ```
 
 ### 2. Diagnose NuGet issues
@@ -74,14 +74,14 @@ Common problems:
 ### 3. Verify installation
 
 ```bash
-dotnet tool list -g | Select-String AITools.BinlogMcp
+dotnet tool list -g | Select-String Microsoft.AITools.BinlogMcp
 binlog-mcp --help
 ```
 
 ## Related Projects
 
 - [MSBuild Structured Log Viewer](https://github.com/KirillOsenkov/MSBuildStructuredLog) — WPF viewer with secrets redaction
-- [AITools.BinlogMcp](https://dev.azure.com/dnceng/public/_artifacts/feed/dotnet-tools/NuGet/AITools.BinlogMcp) — MCP server for binlog analysis
+- [Microsoft.AITools.BinlogMcp](https://dev.azure.com/dnceng/public/_artifacts/feed/dotnet-tools/NuGet/Microsoft.AITools.BinlogMcp) — MCP server for binlog analysis
 - [MSBuild Binary Log docs](https://learn.microsoft.com/en-us/visualstudio/msbuild/obtaining-build-logs-with-msbuild#save-a-binary-log)
 
 ## License

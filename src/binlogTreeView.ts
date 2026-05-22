@@ -929,7 +929,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
                         this.extractAnalyzerTiming(msg, entry.nodeType, analyzerMap);
                     }
 
-                    // Process text lines (new AITools.BinlogMcp format)
+                    // Process text lines (new Microsoft.AITools.BinlogMcp format)
                     if (entries.length === 0 && result.text && !result.text.startsWith('No results')) {
                         for (const line of result.text.split('\n')) {
                             const msgMatch = line.match(/^\s*\[(\w+)\]\s*(.+)/);
@@ -1471,7 +1471,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
             const data = this.tryParseJson(result.text);
             let entries: any[] = Array.isArray(data) ? data : [];
 
-            // Parse text format from AITools.BinlogMcp:
+            // Parse text format from Microsoft.AITools.BinlogMcp:
             //   Evaluations: N total, showing N (offset 0):
             //     [id=10] path/to/project.csproj  (109ms)
             if (entries.length === 0 && result.text && !result.text.startsWith('No ')) {

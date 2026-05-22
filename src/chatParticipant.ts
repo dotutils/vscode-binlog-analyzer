@@ -129,7 +129,7 @@ export class BinlogChatParticipant {
         if (tools.length === 0 && !isBuildCheck) {
             stream.markdown(
                 '⚠️ No binlog MCP tools found. The MCP server may not be running.\n\n' +
-                '1. Check `dotnet tool list -g` for `AITools.BinlogMcp`\n' +
+                '1. Check `dotnet tool list -g` for `Microsoft.AITools.BinlogMcp`\n' +
                 '2. Restart VS Code to reload MCP servers\n',
             );
             return;
