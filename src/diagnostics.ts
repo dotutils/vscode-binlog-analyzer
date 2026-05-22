@@ -53,7 +53,11 @@ export class BinlogDiagnosticsProvider implements vscode.Disposable {
         if (!this.mcpClient) { return; }
 
         try {
-            const result = await this.mcpClient.callTool('get_diagnostics');
+            const args: Record<string, unknown> = {};
+            if (this.mcpClient.loadedBinlogs.length > 1) {
+                args.binlog_file = this.mcpClient.loadedBinlogs[0];
+            }
+            const result = await this.mcpClient.callTool('get_diagnostics', args);
             const data = JSON.parse(result.text);
             const diagnostics = this.parseMcpDiagnostics(data);
             this.cachedDiagnostics = diagnostics;

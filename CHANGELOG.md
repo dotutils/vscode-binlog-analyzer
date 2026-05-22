@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.22 (Preview)
+
+### Fixed
+- **Multi-binlog timeline/tree crash** — fixed "requires explicit binlog_file" errors when the MCP server was started with multiple binlogs. The sidebar, tree prefetch, diagnostics, and timeline now correctly inject `binlog_file` even when the sidebar and MCP server binlog lists are out of sync.
+
 ## 0.10.21 (Preview)
 
 ### Changed

@@ -48,7 +48,10 @@ function escapeHtml(s: string): string {
  */
 function callMcpTool(tool: string, args: Record<string, unknown> = {}): Promise<{ text: string }> {
     if (!mcpClient) { throw new Error('MCP server not connected'); }
-    if (!args.binlog_file && allBinlogPaths.length > 1) {
+    // Always inject binlog_file when the MCP server was started with multiple
+    // binlogs — even if the user removed one from the sidebar, the server
+    // still requires an explicit path.
+    if (!args.binlog_file && (allBinlogPaths.length > 1 || (mcpClient.loadedBinlogs && mcpClient.loadedBinlogs.length > 1))) {
         const copy = { ...args, binlog_file: currentBinlogPath || allBinlogPaths[0] };
         return mcpClient.callTool(tool, copy);
     }
