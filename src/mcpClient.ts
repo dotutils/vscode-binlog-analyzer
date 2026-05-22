@@ -17,7 +17,7 @@ function log(msg: string) {
 
 /**
  * Minimal MCP (Model Context Protocol) clientthat communicates with
- * AITools.BinlogMcp over stdio using JSON-RPC 2.0 with newline-delimited JSON.
+ * Microsoft.AITools.BinlogMcp over stdio using JSON-RPC 2.0 with newline-delimited JSON.
  *
  * Emits:
  * - 'unexpected-exit' when the server process exits unexpectedly (not via dispose())

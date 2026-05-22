@@ -119,12 +119,12 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
         // Build overview
         try {
             const overviewResult = await this.call('binlog_overview', {}, binlogPath);
-            // Handle both JSON (BinlogInsights) and text (AITools.BinlogMcp) formats
+            // Handle both JSON (BinlogInsights) and text (Microsoft.AITools.BinlogMcp) formats
             let ov: any;
             try {
                 ov = JSON.parse(overviewResult.text);
             } catch {
-                // AITools.BinlogMcp returns human-readable text — parse it
+                // Microsoft.AITools.BinlogMcp returns human-readable text — parse it
                 const text = overviewResult.text;
                 ov = {
                     succeeded: /SUCCEEDED/i.test(text),
