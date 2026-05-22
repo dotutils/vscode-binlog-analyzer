@@ -209,7 +209,7 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
 
         await Promise.allSettled(calls.map(async (c) => {
             try {
-                const result = await client.callTool(c.tool, c.args);
+                const result = await this.mcpCall(c.tool, c.args);
                 const data = this.tryParseJson(result.text);
 
                 if (c.cache === 'projects') {
@@ -1668,7 +1668,8 @@ export class BinlogTreeDataProvider implements vscode.TreeDataProvider<BinlogTre
     private mcpCall(tool: string, args: Record<string, unknown> = {}): Promise<{ text: string }> {
         if (!this.mcpClient) { throw new Error('MCP server not connected'); }
         if (!args.binlog_file && this.binlogPaths.length >= 1) {
-            args.binlog_file = this.activeBinlogPath || this.binlogPaths[0];
+            const copy = { ...args, binlog_file: this.activeBinlogPath || this.binlogPaths[0] };
+            return this.mcpClient.callTool(tool, copy);
         }
         return this.mcpClient.callTool(tool, args);
     }
