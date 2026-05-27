@@ -2491,25 +2491,36 @@ function isToolInstalled(packageId: string): Promise<boolean> {
 }
 
 /**
- * Kill any running binlog-mcp processes so the dotnet tool store is unlocked.
- * Without this, `dotnet tool uninstall` / `install` fails with access-denied
- * or misleading "DotnetToolSettings.xml not found" errors.
+ * Kill running binlog-mcp processes that belong to the OLD package so the
+ * dotnet tool store is unlocked for migration. Only targets processes whose
+ * executable lives under the old `.store/aitools.binlogmcp/` path — leaves
+ * any instance launched from the new `microsoft.aitools.binlogmcp` store
+ * (i.e., another VS Code window) untouched.
+ *
+ * Uses PowerShell `Get-Process` (works on all supported Windows versions)
+ * instead of deprecated `wmic`.
  */
 function killRunningMcpProcesses(): Promise<void> {
     const cp = require('child_process');
     const isWindows = process.platform === 'win32';
     if (!isWindows) { return Promise.resolve(); }
+
+    // Only kill processes whose path contains the OLD package store directory.
+    // The new Microsoft.AITools.BinlogMcp stores under "microsoft.aitools.binlogmcp".
+    const oldStoreFragment = '.store\\aitools.binlogmcp\\';
+
     return new Promise((resolve) => {
-        // Use WMIC to find PIDs by executable name — avoids name-based taskkill
-        cp.exec('wmic process where "name=\'binlog-mcp.exe\'" get ProcessId /format:list', { timeout: 10000 },
+        const psCmd = `Get-Process -Name binlog-mcp -ErrorAction SilentlyContinue | ` +
+            `Where-Object { $_.Path -and $_.Path.Contains('${oldStoreFragment}') } | ` +
+            `Select-Object -ExpandProperty Id`;
+        cp.exec(`powershell -NoProfile -Command "${psCmd}"`, { timeout: 10000 },
             (_err: Error | null, stdout: string) => {
-                const pids = (stdout || '').match(/ProcessId=(\d+)/g)?.map(m => m.split('=')[1]) || [];
+                const pids = (stdout || '').trim().split(/\r?\n/).filter(s => /^\d+$/.test(s));
                 if (pids.length === 0) { resolve(); return; }
                 let remaining = pids.length;
                 for (const pid of pids) {
                     cp.exec(`taskkill /PID ${pid} /F`, { timeout: 5000 }, () => {
                         if (--remaining === 0) {
-                            // Brief delay to let file locks release
                             setTimeout(resolve, 1000);
                         }
                     });
