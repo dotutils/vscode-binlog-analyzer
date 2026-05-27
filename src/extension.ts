@@ -2491,11 +2491,12 @@ function isToolInstalled(packageId: string): Promise<boolean> {
 }
 
 /**
- * Kill running binlog-mcp processes that belong to the OLD package so the
- * dotnet tool store is unlocked for migration. Only targets processes whose
- * executable lives under the old `.store/aitools.binlogmcp/` path — leaves
- * any instance launched from the new `microsoft.aitools.binlogmcp` store
- * (i.e., another VS Code window) untouched.
+ * Kill running binlog-mcp processes so the dotnet tool store is unlocked
+ * for migration. This is safe because both old (AITools.BinlogMcp) and new
+ * (Microsoft.AITools.BinlogMcp) packages share the same `binlog-mcp` command
+ * name, so only one can be installed at a time. This function is only called
+ * after confirming the old package is installed, meaning any running
+ * binlog-mcp process belongs to the old package.
  *
  * Uses PowerShell `Get-Process` (works on all supported Windows versions)
  * instead of deprecated `wmic`.
@@ -2505,17 +2506,11 @@ function killRunningMcpProcesses(): Promise<void> {
     const isWindows = process.platform === 'win32';
     if (!isWindows) { return Promise.resolve(); }
 
-    // Only kill processes whose path contains the OLD package store directory.
-    // The new Microsoft.AITools.BinlogMcp stores under "microsoft.aitools.binlogmcp".
-    const oldStoreFragment = '.store\\aitools.binlogmcp\\';
-
     return new Promise((resolve) => {
-        const psCmd = `Get-Process -Name binlog-mcp -ErrorAction SilentlyContinue | ` +
-            `Where-Object { $_.Path -and $_.Path.Contains('${oldStoreFragment}') } | ` +
-            `Select-Object -ExpandProperty Id`;
+        const psCmd = `Get-Process -Name binlog-mcp -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id`;
         cp.exec(`powershell -NoProfile -Command "${psCmd}"`, { timeout: 10000 },
             (_err: Error | null, stdout: string) => {
-                const pids = (stdout || '').trim().split(/\r?\n/).filter(s => /^\d+$/.test(s));
+                const pids = (stdout || '').trim().split(/\r?\n/).filter((s: string) => /^\d+$/.test(s));
                 if (pids.length === 0) { resolve(); return; }
                 let remaining = pids.length;
                 for (const pid of pids) {
