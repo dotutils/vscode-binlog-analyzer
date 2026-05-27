@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.24 (Preview)
+
+### Fixed
+- **Migration from old AITools.BinlogMcp package** — kill running `binlog-mcp` processes before uninstalling the old package to prevent "DotnetToolSettings.xml not found" and access-denied errors during migration.
+- **Replaced deprecated `wmic`** — process discovery now uses PowerShell `Get-Process`, which works on all Windows versions including Windows 11+.
+
 ## 0.10.23 (Preview)
 
 ### Changed
