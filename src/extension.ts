@@ -2458,6 +2458,10 @@ async function migrateToNewMcpTool(): Promise<void> {
 
     // Migrate from old AITools.BinlogMcp → Microsoft.AITools.BinlogMcp
     if (oldPackageInstalled && !newPackageInstalled) {
+        // Kill running binlog-mcp processes first — the old tool uses the same
+        // executable name, and file locks cause uninstall to fail silently,
+        // which then blocks install with a misleading "DotnetToolSettings.xml not found" error.
+        await killRunningMcpProcesses();
         // Uninstall old, install new (both produce the same binlog-mcp executable)
         const cp = require('child_process');
         await new Promise<void>((resolve) => {
@@ -2483,6 +2487,34 @@ function isToolInstalled(packageId: string): Promise<boolean> {
             if (err) { resolve(false); return; }
             resolve(stdout.toLowerCase().includes(packageId.toLowerCase()));
         });
+    });
+}
+
+/**
+ * Kill any running binlog-mcp processes so the dotnet tool store is unlocked.
+ * Without this, `dotnet tool uninstall` / `install` fails with access-denied
+ * or misleading "DotnetToolSettings.xml not found" errors.
+ */
+function killRunningMcpProcesses(): Promise<void> {
+    const cp = require('child_process');
+    const isWindows = process.platform === 'win32';
+    if (!isWindows) { return Promise.resolve(); }
+    return new Promise((resolve) => {
+        // Use WMIC to find PIDs by executable name — avoids name-based taskkill
+        cp.exec('wmic process where "name=\'binlog-mcp.exe\'" get ProcessId /format:list', { timeout: 10000 },
+            (_err: Error | null, stdout: string) => {
+                const pids = (stdout || '').match(/ProcessId=(\d+)/g)?.map(m => m.split('=')[1]) || [];
+                if (pids.length === 0) { resolve(); return; }
+                let remaining = pids.length;
+                for (const pid of pids) {
+                    cp.exec(`taskkill /PID ${pid} /F`, { timeout: 5000 }, () => {
+                        if (--remaining === 0) {
+                            // Brief delay to let file locks release
+                            setTimeout(resolve, 1000);
+                        }
+                    });
+                }
+            });
     });
 }
 
@@ -2531,6 +2563,19 @@ function findMcpTool(): string | null {
 async function installMcpTool(): Promise<string | null> {
     cachedMcpExePath = undefined; // Reset cache so findMcpTool re-scans after install
     const cp = require('child_process');
+
+    // If the old AITools.BinlogMcp is installed, kill its process and uninstall
+    // first — both packages use the same "binlog-mcp" command name, so the new
+    // install will fail with "DotnetToolSettings.xml not found" or a command-name
+    // conflict if the old one is still present.
+    const oldInstalled = await isToolInstalled('aitools.binlogmcp');
+    if (oldInstalled) {
+        await killRunningMcpProcesses();
+        await new Promise<void>((resolve) => {
+            cp.execFile('dotnet', ['tool', 'uninstall', '-g', 'AITools.BinlogMcp'], { timeout: 30000 }, () => resolve());
+        });
+    }
+
     const result = await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: 'Installing Microsoft.AITools.BinlogMcp MCP server (dotnet tool)...' },
         () => new Promise<string | null>((resolve) => {
