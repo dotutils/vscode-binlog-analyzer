@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.25 (Preview)
+
+### Fixed
+- **Chat agent no longer dead-ends on long investigations** — when the `@binlog` chat participant reached its tool-call round limit it previously stopped with `⚠️ Too many tool calls — stopping here.` and produced no answer. It now makes a final tool-free request so the model synthesizes a response from the data already gathered.
+- **Stopped redundant tool-call loops** — byte-identical tool calls (same tool + same arguments) are now short-circuited and reuse the earlier result instead of re-querying the MCP server, so commands such as `/summary` converge well within the round budget. Failed calls are still retryable.
+
+### Changed
+- **Added a tool-use efficiency instruction** to the chat system prompt so the model avoids re-running the same analysis with only cosmetic argument changes and stops once it has enough data to answer.
+
 ## 0.10.24 (Preview)
 
 ### Fixed
