@@ -158,7 +158,7 @@ export class BinlogChatParticipant {
             vscode.LanguageModelChatMessage.User(userMessage),
         ];
 
-        const state = { hadOutput: false, toolCallCount: 0 };
+        const state = { hadOutput: false, toolCallCount: 0, seen: new Set<string>() };
         try {
             const chatRequest = await model.sendRequest(
                 messages,
@@ -234,6 +234,15 @@ export class BinlogChatParticipant {
         if (playbookKey) {
             parts.push(`# Playbook: ${playbookKey}\n${this.playbooks.get(playbookKey)}`);
         }
+
+        parts.push(
+            '# Tool-use efficiency\n' +
+            'Call each tool at most once per distinct set of arguments. Never re-issue an ' +
+            'identical tool call, and do not re-run the same analysis with only cosmetic ' +
+            'argument changes (e.g. a different top/limit) unless the earlier result was ' +
+            'explicitly truncated and you genuinely need more rows. As soon as you have the ' +
+            'data needed to answer, stop calling tools and write the response.',
+        );
 
         const body = parts.filter(Boolean).join('\n\n');
         return [
@@ -333,11 +342,31 @@ export class BinlogChatParticipant {
         stream: vscode.ChatResponseStream,
         token: vscode.CancellationToken,
         depth: number = 0,
-        state: { hadOutput: boolean; toolCallCount: number } = { hadOutput: false, toolCallCount: 0 },
-    ): Promise<{ hadOutput: boolean; toolCallCount: number }> {
+        state: { hadOutput: boolean; toolCallCount: number; seen: Set<string> } =
+            { hadOutput: false, toolCallCount: 0, seen: new Set<string>() },
+    ): Promise<{ hadOutput: boolean; toolCallCount: number; seen: Set<string> }> {
         if (depth > 10) {
-            stream.markdown('\n\n⚠️ Too many tool calls — stopping here.\n');
-            state.hadOutput = true;
+            // Round budget exhausted. Rather than dead-ending with no answer,
+            // make one final request with NO tools so the model is forced to
+            // synthesize a response from everything gathered so far (same
+            // no-tools pattern used by the 400-error fallback below).
+            stream.progress('Reached the tool-call limit — summarizing findings so far…');
+            try {
+                const finalRequest = await model.sendRequest(messages, {}, token);
+                for await (const part of finalRequest.stream) {
+                    if (part instanceof vscode.LanguageModelTextPart) {
+                        stream.markdown(part.value);
+                        if (part.value.trim()) state.hadOutput = true;
+                    }
+                }
+            } catch (err) {
+                telemetry.trackError('processResponseFinalize', err);
+                stream.markdown(
+                    '\n\n⚠️ Reached the tool-call limit before reaching a complete answer. ' +
+                    'Try narrowing the question.\n',
+                );
+                state.hadOutput = true;
+            }
             return state;
         }
 
@@ -354,13 +383,23 @@ export class BinlogChatParticipant {
 
         if (toolCalls.length === 0) return state;
 
-        for (const call of toolCalls) {
-            stream.progress(`Calling ${call.name}…`);
-            state.toolCallCount++;
-        }
-
         const toolResultTexts: string[] = [];
         for (const call of toolCalls) {
+            // Collapse byte-identical repeat calls: on a static binlog the same
+            // tool + input always returns the same data, so re-invoking only
+            // burns the round budget and pushes the conversation toward the cap.
+            // Errored calls are intentionally NOT remembered, so a transient
+            // failure can still be retried.
+            const key = `${call.name}:${JSON.stringify(call.input)}`;
+            if (state.seen.has(key)) {
+                toolResultTexts.push(
+                    `<tool_result name="${call.name}">(already returned above — reuse the earlier result)</tool_result>`,
+                );
+                continue;
+            }
+
+            stream.progress(`Calling ${call.name}…`);
+            state.toolCallCount++;
             try {
                 const result = await vscode.lm.invokeTool(
                     call.name,
@@ -371,6 +410,7 @@ export class BinlogChatParticipant {
                     .filter((p): p is vscode.LanguageModelTextPart => p instanceof vscode.LanguageModelTextPart)
                     .map(p => p.value)
                     .join('\n');
+                state.seen.add(key);
                 toolResultTexts.push(`<tool_result name="${call.name}">\n${text || '(empty)'}\n</tool_result>`);
             } catch (err) {
                 const m = err instanceof Error ? err.message : String(err);
