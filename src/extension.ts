@@ -30,7 +30,6 @@ let extensionContext: vscode.ExtensionContext | undefined;
 let openedViaUri = false;
 let optimizeInProgress = false;
 let cachedMcpExePath: string | null | undefined; // undefined = not searched yet
-const DOTNET_TOOLS_FEED = 'https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-tools/nuget/v3/index.json';
 let codeLensRegistered = false;
 
 function escapeHtml(s: string): string {
@@ -2140,11 +2139,11 @@ async function configureMcpServer(binlogPaths: string[], config: vscode.Workspac
                 ...(workspaceCwd && { cwd: workspaceCwd }),
             };
             vscode.window.showWarningMessage(
-                'Could not find or install Microsoft.AITools.BinlogMcp. Install it manually: `dotnet tool install -g Microsoft.AITools.BinlogMcp --prerelease --add-source ' + DOTNET_TOOLS_FEED + '`',
+                'Could not find or install Microsoft.AITools.BinlogMcp. Install it manually: `dotnet tool install -g Microsoft.AITools.BinlogMcp`',
                 'Copy Command'
             ).then(sel => {
                 if (sel === 'Copy Command') {
-                    vscode.env.clipboard.writeText('dotnet tool install -g Microsoft.AITools.BinlogMcp --prerelease --add-source ' + DOTNET_TOOLS_FEED);
+                    vscode.env.clipboard.writeText('dotnet tool install -g Microsoft.AITools.BinlogMcp');
                 }
             });
         }
@@ -2315,9 +2314,8 @@ async function getLatestNuGetVersion(): Promise<string | null> {
     const cp = require('child_process');
 
     return new Promise<string | null>((resolve) => {
-        // Search the dotnet-tools feed for the package (includes prereleases)
-        cp.execFile('dotnet', ['package', 'search', NUGET_PACKAGE_ID, '--exact-match', '--format', 'json', '--prerelease',
-            '--source', DOTNET_TOOLS_FEED],
+        // Search nuget.org for the package
+        cp.execFile('dotnet', ['package', 'search', NUGET_PACKAGE_ID, '--exact-match', '--format', 'json'],
             { timeout: 30000, encoding: 'utf8' },
             (error: any, stdout: string) => {
                 if (error) {
@@ -2366,7 +2364,7 @@ async function updateMcpServer() {
         const result = await vscode.window.withProgress(
             { location: vscode.ProgressLocation.Notification, title: 'Updating Microsoft.AITools.BinlogMcp MCP server...' },
             () => new Promise<{ success: boolean; output: string }>((resolve) => {
-                cp.execFile('dotnet', ['tool', 'update', '-g', 'Microsoft.AITools.BinlogMcp', '--prerelease', '--add-source', DOTNET_TOOLS_FEED], { timeout: 60000 }, (err: Error | null, stdout: string, stderr: string) => {
+                cp.execFile('dotnet', ['tool', 'update', '-g', 'Microsoft.AITools.BinlogMcp'], { timeout: 60000 }, (err: Error | null, stdout: string, stderr: string) => {
                     resolve({ success: !err, output: (stderr || stdout || '').toString() });
                 });
             })
@@ -2406,7 +2404,7 @@ async function applyPendingToolUpdate(): Promise<void> {
     const result = await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: 'Updating Microsoft.AITools.BinlogMcp MCP server...' },
         () => new Promise<{ success: boolean; output: string }>((resolve) => {
-            cp.execFile('dotnet', ['tool', 'update', '-g', 'Microsoft.AITools.BinlogMcp', '--prerelease', '--add-source', DOTNET_TOOLS_FEED], { timeout: 60000 }, (err: Error | null, stdout: string, stderr: string) => {
+            cp.execFile('dotnet', ['tool', 'update', '-g', 'Microsoft.AITools.BinlogMcp'], { timeout: 60000 }, (err: Error | null, stdout: string, stderr: string) => {
                 resolve({ success: !err, output: (stderr || stdout || '').toString() });
             });
         })
@@ -2585,9 +2583,9 @@ async function installMcpTool(): Promise<string | null> {
     const result = await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: 'Installing Microsoft.AITools.BinlogMcp MCP server (dotnet tool)...' },
         () => new Promise<string | null>((resolve) => {
-            cp.execFile('dotnet', ['tool', 'install', '-g', 'Microsoft.AITools.BinlogMcp', '--prerelease', '--add-source', DOTNET_TOOLS_FEED], { timeout: 60000 }, (err: Error | null) => {
+            cp.execFile('dotnet', ['tool', 'install', '-g', 'Microsoft.AITools.BinlogMcp'], { timeout: 60000 }, (err: Error | null) => {
                 if (err) {
-                    cp.execFile('dotnet', ['tool', 'update', '-g', 'Microsoft.AITools.BinlogMcp', '--prerelease', '--add-source', DOTNET_TOOLS_FEED], { timeout: 60000 }, () => {
+                    cp.execFile('dotnet', ['tool', 'update', '-g', 'Microsoft.AITools.BinlogMcp'], { timeout: 60000 }, () => {
                         const exe = findMcpTool();
                         telemetry.trackToolInstall(!!exe);
                         resolve(exe);
