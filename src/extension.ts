@@ -3290,6 +3290,12 @@ async function showComparisonTimelineWebview(context: vscode.ExtensionContext) {
         if (secMatch) { return `${parseFloat(secMatch[1]).toFixed(1)}s`; }
         const minMatch = overviewText.match(/(?:in|Duration[:\s]*)\s*(\d+)\s*m\s*([\d.]+)\s*s/i);
         if (minMatch) { return `${minMatch[1]}m ${parseFloat(minMatch[2]).toFixed(0)}s`; }
+        // Enveloped overview reports duration as an ISO timespan, e.g. "duration":"00:01:27.039".
+        const tsMatch = overviewText.match(/"duration"\s*:\s*"(\d+):(\d{2}):(\d{2}(?:\.\d+)?)"/i);
+        if (tsMatch) {
+            const totalSeconds = (+tsMatch[1]) * 3600 + (+tsMatch[2]) * 60 + parseFloat(tsMatch[3]);
+            return `${totalSeconds.toFixed(1)}s`;
+        }
         const jsonMatch = overviewText.match(/"(?:duration_seconds|durationSeconds|totalSeconds)"[:\s]*([\d.]+)/i);
         if (jsonMatch) { return `${parseFloat(jsonMatch[1]).toFixed(1)}s`; }
         return '';
