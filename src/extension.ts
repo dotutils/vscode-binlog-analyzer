@@ -12,7 +12,7 @@ import {
 } from './buildCheck';
 import * as telemetry from './telemetry';
 import { registerBinlogLanguageModelTools } from './languageModelTools';
-import { projectSourcesAccessible } from './parsers';
+import { projectSourcesAccessible, formatOverviewText } from './parsers';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -1262,7 +1262,7 @@ export async function activate(context: vscode.ExtensionContext) {
                             const overview = await callMcpTool('binlog_overview', {});
                             sections.push('BUILD OVERVIEW');
                             sections.push('─'.repeat(40));
-                            sections.push(overview.text);
+                            sections.push(formatOverviewText(overview.text));
                             sections.push('');
                         } catch { /* non-fatal */ }
 
@@ -2093,7 +2093,15 @@ async function configureMcpServer(binlogPaths: string[], config: vscode.Workspac
     const argTemplate = config.get<string>('mcpServerArgs', '--binlog ${binlog}');
     const workspaceCwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
-    // Configure MCP server for Copilot Chat
+    // Configure the MCP server entry that Copilot Chat / the agent spawns
+    // DIRECTLY. Deliberately uses buildMcpArgs (NOT buildLaunchArgs): we do not
+    // pass --envelope on this path. It has no envelope-unwrap boundary (that
+    // lives in McpClient.callTool, used only by the extension's own client), and
+    // the server's default non-enveloped output is the shape best suited for the
+    // agent to read. Passing --envelope here would instead hand the model a raw
+    // { schemaVersion, kind, data } wrapper it has no way to unwrap. These two
+    // launch paths are intentionally asymmetric: extension client = --envelope
+    // (it unwraps); agent-facing entry = legacy default.
     let insightsConfig: Record<string, unknown>;
 
     if (customPath) {
@@ -3285,11 +3293,9 @@ async function showComparisonTimelineWebview(context: vscode.ExtensionContext) {
 
     // Extract wall-clock build duration from overview text
     function extractBuildDuration(overviewText: string): string {
-        // Look for patterns like "Build succeeded in 294.3s" or "Duration: 5m 12s" or "duration_seconds": 294
-        const secMatch = overviewText.match(/(?:in|Duration[:\s]*)\s*([\d.]+)\s*s/i);
-        if (secMatch) { return `${parseFloat(secMatch[1]).toFixed(1)}s`; }
-        const minMatch = overviewText.match(/(?:in|Duration[:\s]*)\s*(\d+)\s*m\s*([\d.]+)\s*s/i);
-        if (minMatch) { return `${minMatch[1]}m ${parseFloat(minMatch[2]).toFixed(0)}s`; }
+        // Enveloped overview is JSON: prefer its structured duration fields over
+        // the legacy prose regexes, which can otherwise false-match an
+        // "in<digits>s" substring inside a path field (e.g. D:\bin5s\X.csproj).
         // Enveloped overview reports duration as an ISO timespan, e.g. "duration":"00:01:27.039".
         const tsMatch = overviewText.match(/"duration"\s*:\s*"(\d+):(\d{2}):(\d{2}(?:\.\d+)?)"/i);
         if (tsMatch) {
@@ -3298,6 +3304,11 @@ async function showComparisonTimelineWebview(context: vscode.ExtensionContext) {
         }
         const jsonMatch = overviewText.match(/"(?:duration_seconds|durationSeconds|totalSeconds)"[:\s]*([\d.]+)/i);
         if (jsonMatch) { return `${parseFloat(jsonMatch[1]).toFixed(1)}s`; }
+        // Legacy prose fallbacks: "Build succeeded in 294.3s" or "Duration: 5m 12s".
+        const minMatch = overviewText.match(/(?:in|Duration[:\s]*)\s*(\d+)\s*m\s*([\d.]+)\s*s/i);
+        if (minMatch) { return `${minMatch[1]}m ${parseFloat(minMatch[2]).toFixed(0)}s`; }
+        const secMatch = overviewText.match(/(?:in|Duration[:\s]*)\s*([\d.]+)\s*s/i);
+        if (secMatch) { return `${parseFloat(secMatch[1]).toFixed(1)}s`; }
         return '';
     }
     const wallClockA = extractBuildDuration(dataA.overview);

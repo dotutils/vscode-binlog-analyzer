@@ -2,7 +2,7 @@ import { ChildProcess, spawn } from 'child_process';
 import { EventEmitter } from 'events';
 import * as vscode from 'vscode';
 import { buildMcpArgs, buildLaunchArgs } from './mcpArgs';
-import { unwrapToolResultText } from './envelope';
+import { unwrapToolResultText, initFailureMessage } from './envelope';
 
 // Re-export for backward compatibility with consumers that import from mcpClient.
 export { buildMcpArgs };
@@ -30,6 +30,10 @@ export class McpClient extends EventEmitter {
     private buffer = '';
     private initialized = false;
     private disposed = false;
+    // Exit code captured if the server process dies during the init handshake
+    // (`undefined` = still running). Lets start() distinguish an old server
+    // that rejected --envelope from one that is merely unresponsive.
+    private startupExitCode: number | null | undefined = undefined;
 
     constructor(
         private readonly exePath: string,
@@ -50,6 +54,7 @@ export class McpClient extends EventEmitter {
 
     async start(): Promise<void> {
         this.disposed = false;
+        this.startupExitCode = undefined;
         const args = buildLaunchArgs(this.argTemplate, this.binlogPaths);
         this.proc = spawn(this.exePath, args, {
             stdio: ['pipe', 'pipe', 'pipe'],
@@ -74,6 +79,12 @@ export class McpClient extends EventEmitter {
         this.proc.on('exit', (code) => {
             const wasInitialized = this.initialized;
             this.initialized = false;
+            // Exited before the handshake completed — remember the code so
+            // start() can surface an actionable "server too old for --envelope"
+            // message instead of a generic timeout.
+            if (!wasInitialized) {
+                this.startupExitCode = code;
+            }
             for (const p of this.pending.values()) {
                 p.reject(new Error('MCP server exited'));
             }
@@ -101,7 +112,9 @@ export class McpClient extends EventEmitter {
             }
         }
         if (!initialized) {
-            throw new Error('Failed to initialize MCP server after 5 attempts');
+            const msg = initFailureMessage(this.startupExitCode);
+            log(msg);
+            throw new Error(msg);
         }
 
         // Send initialized notification

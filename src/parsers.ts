@@ -448,3 +448,54 @@ export function getProjectDiagnosticCounts(
     }
     return { errorCount, warningCount };
 }
+
+/** Render an ISO-ish `HH:MM:SS(.fff)` timespan as a compact `1h 2m 3s` string. */
+function formatBuildDuration(duration: string): string {
+    const match = duration.match(/(\d+):(\d+):(\d+)/);
+    if (!match) { return duration; }
+    const hours = parseInt(match[1], 10);
+    const minutes = parseInt(match[2], 10);
+    const seconds = parseInt(match[3], 10);
+    if (hours > 0) { return `${hours}h ${minutes}m ${seconds}s`; }
+    if (minutes > 0) { return `${minutes}m ${seconds}s`; }
+    return `${seconds}s`;
+}
+
+/**
+ * Render an unwrapped `binlog_overview` envelope payload as human-readable prose
+ * for the "Text Log" export. The enveloped server returns the overview as JSON
+ * (`{ succeeded, msBuildVersion, duration, errorCount, warningCount }`); without
+ * this the export would dump raw `{...}` braces. Input that isn't the JSON
+ * overview shape (e.g. plain text from a non-enveloped server) is returned
+ * unchanged so the export degrades gracefully.
+ */
+export function formatOverviewText(overviewText: string): string {
+    let overview: Record<string, unknown>;
+    try {
+        const parsed = JSON.parse(overviewText);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            return overviewText;
+        }
+        overview = parsed as Record<string, unknown>;
+    } catch {
+        return overviewText;
+    }
+
+    const knownKeys = ['succeeded', 'duration', 'msBuildVersion', 'errorCount', 'warningCount'];
+    if (!knownKeys.some(key => key in overview)) {
+        return overviewText;
+    }
+
+    const lines: string[] = [];
+    if ('succeeded' in overview) {
+        lines.push(`Status: ${overview.succeeded ? 'BUILD SUCCEEDED' : 'BUILD FAILED'}`);
+    }
+    const duration = typeof overview.duration === 'string' ? overview.duration.trim() : '';
+    if (duration) { lines.push(`Duration: ${formatBuildDuration(duration)}`); }
+    const msBuildVersion = typeof overview.msBuildVersion === 'string' ? overview.msBuildVersion.trim() : '';
+    if (msBuildVersion) { lines.push(`MSBuild: ${msBuildVersion}`); }
+    if (typeof overview.errorCount === 'number') { lines.push(`Errors: ${overview.errorCount}`); }
+    if (typeof overview.warningCount === 'number') { lines.push(`Warnings: ${overview.warningCount}`); }
+
+    return lines.length > 0 ? lines.join('\n') : overviewText;
+}

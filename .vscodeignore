@@ -11,6 +11,7 @@ out/**
 .gitignore
 node_modules/**
 .github/**
+.agents/**
 CHANGELOG.md
 !CHANGELOG.md
 

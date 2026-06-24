@@ -4,6 +4,7 @@ import {
     isSupportedMajor,
     OLD_SERVER_MESSAGE,
     ENVELOPE_CONTRACT_TOOLS,
+    initFailureMessage,
 } from '../envelope';
 
 // These shapes mirror real `binlog-mcp --envelope` output captured over stdio
@@ -99,6 +100,33 @@ suite('envelope', () => {
                     `expected old-server error for ${tool}`
                 );
             }
+        });
+    });
+
+    suite('initFailureMessage', () => {
+        test('returns the generic message when the process never exited (undefined)', () => {
+            const msg = initFailureMessage(undefined);
+            assert.match(msg, /Failed to initialize MCP server after 5 attempts/);
+            // Must NOT mislead the user toward a server update when the process
+            // is still up but unresponsive.
+            assert.doesNotMatch(msg, /too old/);
+        });
+
+        test('surfaces the actionable old-server update on a non-zero startup exit', () => {
+            const msg = initFailureMessage(1);
+            assert.match(msg, /exited during startup \(exit code 1\)/);
+            assert.match(msg, /too old to support --envelope/);
+            assert.match(msg, /dotnet tool update -g Microsoft\.AITools\.BinlogMcp/);
+        });
+
+        test('treats a clean (zero) startup exit as a likely old server too', () => {
+            // An old server that prints help for an unknown flag may exit 0; the
+            // process is still gone, so the update hint is the right guidance.
+            assert.match(initFailureMessage(0), /exited during startup \(exit code 0\)/);
+        });
+
+        test('reports an unknown exit code when terminated by a signal (null)', () => {
+            assert.match(initFailureMessage(null), /exit code unknown/);
         });
     });
 });

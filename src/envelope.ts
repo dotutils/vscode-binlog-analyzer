@@ -42,11 +42,41 @@ export const ENVELOPE_CONTRACT_TOOLS: ReadonlySet<string> = new Set([
     'binlog_compare',
 ]);
 
+/** Shared remediation step appended to old-server / startup-failure messages. */
+const UPDATE_INSTRUCTION =
+    'Update it with: dotnet tool update -g Microsoft.AITools.BinlogMcp ' +
+    '(dnceng dotnet-tools feed).';
+
 /** Actionable message shown when the installed server predates `--envelope`. */
 export const OLD_SERVER_MESSAGE =
     'The installed binlog-mcp server is too old to support --envelope. ' +
-    'Update it with: dotnet tool update -g Microsoft.AITools.BinlogMcp ' +
-    '(dnceng dotnet-tools feed).';
+    UPDATE_INSTRUCTION;
+
+/**
+ * Error message for when the init handshake never completes. Distinguishes a
+ * server that *exited* during startup from one that stays up but never answers.
+ *
+ * The only startup variable this extension adds is `--envelope`, so a process
+ * that exits during the handshake most likely means the installed server
+ * rejected that unknown flag — surface the actionable update instruction. A
+ * process that is still running (no exit observed) is unresponsive for some
+ * other reason, so keep the generic message there.
+ *
+ * @param startupExitCode the child's exit code if it exited during startup
+ *   (`null` when terminated by a signal), or `undefined` if it was still
+ *   running when the handshake gave up.
+ */
+export function initFailureMessage(startupExitCode: number | null | undefined): string {
+    if (startupExitCode === undefined) {
+        return 'Failed to initialize MCP server after 5 attempts';
+    }
+    const code = startupExitCode === null ? 'unknown' : String(startupExitCode);
+    return (
+        `The binlog-mcp server exited during startup (exit code ${code}). ` +
+        'This usually means the installed server is too old to support --envelope. ' +
+        UPDATE_INSTRUCTION
+    );
+}
 
 function isEnvelope(value: unknown): value is ContractEnvelope {
     return !!value
