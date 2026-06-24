@@ -3291,25 +3291,24 @@ async function showComparisonTimelineWebview(context: vscode.ExtensionContext) {
     const totalDelta = totalA > 0 ? ((totalB - totalA) / totalA * 100) : 0;
     const totalDeltaClass = totalDelta > 5 ? 'delta-worse' : totalDelta < -5 ? 'delta-better' : 'delta-neutral';
 
-    // Extract wall-clock build duration from overview text
+    // Extract wall-clock build duration from the (enveloped) overview JSON.
+    // The extension's client always launches with --envelope, so a contract tool
+    // like binlog_overview is unwrapped to structured JSON before it reaches here
+    // (an old server throws at the boundary and is caught upstream as '{}'). So we
+    // read the duration field directly instead of regex-scanning prose.
     function extractBuildDuration(overviewText: string): string {
-        // Enveloped overview is JSON: prefer its structured duration fields over
-        // the legacy prose regexes, which can otherwise false-match an
-        // "in<digits>s" substring inside a path field (e.g. D:\bin5s\X.csproj).
-        // Enveloped overview reports duration as an ISO timespan, e.g. "duration":"00:01:27.039".
-        const tsMatch = overviewText.match(/"duration"\s*:\s*"(\d+):(\d{2}):(\d{2}(?:\.\d+)?)"/i);
-        if (tsMatch) {
-            const totalSeconds = (+tsMatch[1]) * 3600 + (+tsMatch[2]) * 60 + parseFloat(tsMatch[3]);
-            return `${totalSeconds.toFixed(1)}s`;
+        let overview: any;
+        try { overview = JSON.parse(overviewText); } catch { return ''; }
+        if (!overview || typeof overview !== 'object') { return ''; }
+        if (typeof overview.duration === 'string') {
+            const m = overview.duration.match(/(\d+):(\d{2}):(\d{2}(?:\.\d+)?)/);
+            if (m) {
+                const totalSeconds = (+m[1]) * 3600 + (+m[2]) * 60 + parseFloat(m[3]);
+                return `${totalSeconds.toFixed(1)}s`;
+            }
         }
-        const jsonMatch = overviewText.match(/"(?:duration_seconds|durationSeconds|totalSeconds)"[:\s]*([\d.]+)/i);
-        if (jsonMatch) { return `${parseFloat(jsonMatch[1]).toFixed(1)}s`; }
-        // Legacy prose fallbacks: "Build succeeded in 294.3s" or "Duration: 5m 12s".
-        const minMatch = overviewText.match(/(?:in|Duration[:\s]*)\s*(\d+)\s*m\s*([\d.]+)\s*s/i);
-        if (minMatch) { return `${minMatch[1]}m ${parseFloat(minMatch[2]).toFixed(0)}s`; }
-        const secMatch = overviewText.match(/(?:in|Duration[:\s]*)\s*([\d.]+)\s*s/i);
-        if (secMatch) { return `${parseFloat(secMatch[1]).toFixed(1)}s`; }
-        return '';
+        const seconds = overview.durationSeconds ?? overview.totalSeconds ?? overview.duration_seconds;
+        return typeof seconds === 'number' ? `${seconds.toFixed(1)}s` : '';
     }
     const wallClockA = extractBuildDuration(dataA.overview);
     const wallClockB = extractBuildDuration(dataB.overview);

@@ -450,7 +450,7 @@ export function getProjectDiagnosticCounts(
 }
 
 /** Render an ISO-ish `HH:MM:SS(.fff)` timespan as a compact `1h 2m 3s` string. */
-function formatBuildDuration(duration: string): string {
+export function formatBuildDuration(duration: string): string {
     const match = duration.match(/(\d+):(\d+):(\d+)/);
     if (!match) { return duration; }
     const hours = parseInt(match[1], 10);

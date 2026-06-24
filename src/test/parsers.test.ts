@@ -16,6 +16,7 @@ import {
     getProjectDiagnosticCounts,
     projectSourcesAccessible,
     formatOverviewText,
+    formatBuildDuration,
     McpDiagnostic,
 } from '../parsers';
 
@@ -748,6 +749,22 @@ suite('Parsers', () => {
         test('falls back to the raw duration string when it is not a timespan', () => {
             const out = formatOverviewText(JSON.stringify({ succeeded: true, duration: '90 seconds' }));
             assert.match(out, /Duration: 90 seconds/);
+        });
+    });
+
+    suite('formatBuildDuration', () => {
+        test('formats sub-minute timespans as seconds', () => {
+            assert.strictEqual(formatBuildDuration('00:00:05.000'), '5s');
+        });
+        test('formats minutes and seconds', () => {
+            assert.strictEqual(formatBuildDuration('00:01:27.039'), '1m 27s');
+        });
+        test('formats hours, minutes and seconds', () => {
+            assert.strictEqual(formatBuildDuration('02:03:04'), '2h 3m 4s');
+        });
+        test('returns the input unchanged when it is not a timespan', () => {
+            assert.strictEqual(formatBuildDuration(''), '');
+            assert.strictEqual(formatBuildDuration('unknown'), 'unknown');
         });
     });
 });
