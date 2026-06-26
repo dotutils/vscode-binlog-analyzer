@@ -15,6 +15,8 @@ import {
     filterBuildProjects,
     getProjectDiagnosticCounts,
     projectSourcesAccessible,
+    formatOverviewText,
+    formatBuildDuration,
     McpDiagnostic,
 } from '../parsers';
 
@@ -694,6 +696,75 @@ suite('Parsers', () => {
                 stubExists(['C:/src/App.csproj']),
             );
             assert.strictEqual(r.ok, true);
+        });
+    });
+
+    suite('formatOverviewText', () => {
+        test('renders enveloped overview JSON as readable prose', () => {
+            const data = JSON.stringify({
+                succeeded: false,
+                msBuildVersion: '17.9.0',
+                duration: '00:01:27.039',
+                errorCount: 3,
+                warningCount: 2,
+            });
+            const out = formatOverviewText(data);
+            assert.match(out, /Status: BUILD FAILED/);
+            assert.match(out, /Duration: 1m 27s/);
+            assert.match(out, /MSBuild: 17\.9\.0/);
+            assert.match(out, /Errors: 3/);
+            assert.match(out, /Warnings: 2/);
+            assert.doesNotMatch(out, /[{}]/);
+        });
+
+        test('renders a successful build status', () => {
+            const out = formatOverviewText(JSON.stringify({ succeeded: true, duration: '00:00:05.000' }));
+            assert.match(out, /Status: BUILD SUCCEEDED/);
+            assert.match(out, /Duration: 5s/);
+        });
+
+        test('keeps zero error/warning counts (meaningful in an overview)', () => {
+            const out = formatOverviewText(JSON.stringify({ succeeded: true, errorCount: 0, warningCount: 0 }));
+            assert.match(out, /Errors: 0/);
+            assert.match(out, /Warnings: 0/);
+        });
+
+        test('omits lines for absent optional fields', () => {
+            const out = formatOverviewText(JSON.stringify({ succeeded: true }));
+            assert.strictEqual(out, 'Status: BUILD SUCCEEDED');
+        });
+
+        test('passes plain (non-JSON) text through unchanged', () => {
+            const prose = 'Build: FAILED\nDuration: 87.0s';
+            assert.strictEqual(formatOverviewText(prose), prose);
+        });
+
+        test('passes JSON that is not the overview shape through unchanged', () => {
+            const bareArray = JSON.stringify([{ severity: 'error' }]);
+            assert.strictEqual(formatOverviewText(bareArray), bareArray);
+            const unrelated = JSON.stringify({ foo: 'bar' });
+            assert.strictEqual(formatOverviewText(unrelated), unrelated);
+        });
+
+        test('falls back to the raw duration string when it is not a timespan', () => {
+            const out = formatOverviewText(JSON.stringify({ succeeded: true, duration: '90 seconds' }));
+            assert.match(out, /Duration: 90 seconds/);
+        });
+    });
+
+    suite('formatBuildDuration', () => {
+        test('formats sub-minute timespans as seconds', () => {
+            assert.strictEqual(formatBuildDuration('00:00:05.000'), '5s');
+        });
+        test('formats minutes and seconds', () => {
+            assert.strictEqual(formatBuildDuration('00:01:27.039'), '1m 27s');
+        });
+        test('formats hours, minutes and seconds', () => {
+            assert.strictEqual(formatBuildDuration('02:03:04'), '2h 3m 4s');
+        });
+        test('returns the input unchanged when it is not a timespan', () => {
+            assert.strictEqual(formatBuildDuration(''), '');
+            assert.strictEqual(formatBuildDuration('unknown'), 'unknown');
         });
     });
 });

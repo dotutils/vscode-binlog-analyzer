@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { McpClient } from './mcpClient';
+import { formatBuildDuration } from './parsers';
 
 const SCHEME = 'binlog';
 
@@ -119,32 +120,12 @@ export class BinlogDocumentProvider implements vscode.TextDocumentContentProvide
         // Build overview
         try {
             const overviewResult = await this.call('binlog_overview', {}, binlogPath);
-            // Handle both JSON (BinlogInsights) and text (Microsoft.AITools.BinlogMcp) formats
-            let ov: any;
-            try {
-                ov = JSON.parse(overviewResult.text);
-            } catch {
-                // Microsoft.AITools.BinlogMcp returns human-readable text — parse it
-                const text = overviewResult.text;
-                ov = {
-                    succeeded: /SUCCEEDED/i.test(text),
-                    msBuildVersion: text.match(/MSBuild:\s*(.+)/)?.[1]?.trim() || '',
-                    errorCount: parseInt(text.match(/Errors:\s*(\d+)/)?.[1] || '0'),
-                    warningCount: parseInt(text.match(/Warnings:\s*(\d+)/)?.[1] || '0'),
-                    duration: text.match(/Duration:\s*(.+)/)?.[1]?.trim() || '',
-                };
-            }
+            // binlog_overview is a contract tool: the MCP boundary always hands us
+            // the unwrapped envelope `data` as JSON (an old server throws there and
+            // is caught below), so we parse it directly.
+            const ov: any = JSON.parse(overviewResult.text);
             const status = ov.succeeded ? '✅ BUILD SUCCEEDED' : '❌ BUILD FAILED';
-            const dur = ov.duration || '';
-            // Parse "HH:MM:SS.xxx" duration to a readable format
-            const durMatch = dur.match(/(\d+):(\d+):(\d+)/);
-            let durStr = dur;
-            if (durMatch) {
-                const h = parseInt(durMatch[1]);
-                const m = parseInt(durMatch[2]);
-                const s = parseInt(durMatch[3]);
-                durStr = h > 0 ? `${h}h ${m}m ${s}s` : m > 0 ? `${m}m ${s}s` : `${s}s`;
-            }
+            const durStr = formatBuildDuration(typeof ov.duration === 'string' ? ov.duration : '');
 
             lines.push(`${status}  ·  ${durStr}  ·  MSBuild ${ov.msBuildVersion || ''}`.trimEnd());
             if (ov.errorCount > 0 || ov.warningCount > 0) {

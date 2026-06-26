@@ -1,7 +1,8 @@
 import { ChildProcess, spawn } from 'child_process';
 import { EventEmitter } from 'events';
 import * as vscode from 'vscode';
-import { buildMcpArgs } from './mcpArgs';
+import { buildMcpArgs, buildLaunchArgs } from './mcpArgs';
+import { unwrapToolResultText, initFailureMessage } from './envelope';
 
 // Re-export for backward compatibility with consumers that import from mcpClient.
 export { buildMcpArgs };
@@ -29,6 +30,10 @@ export class McpClient extends EventEmitter {
     private buffer = '';
     private initialized = false;
     private disposed = false;
+    // Exit code captured if the server process dies during the init handshake
+    // (`undefined` = still running). Lets start() distinguish an old server
+    // that rejected --envelope from one that is merely unresponsive.
+    private startupExitCode: number | null | undefined = undefined;
 
     constructor(
         private readonly exePath: string,
@@ -49,7 +54,8 @@ export class McpClient extends EventEmitter {
 
     async start(): Promise<void> {
         this.disposed = false;
-        const args = buildMcpArgs(this.argTemplate, this.binlogPaths);
+        this.startupExitCode = undefined;
+        const args = buildLaunchArgs(this.argTemplate, this.binlogPaths);
         this.proc = spawn(this.exePath, args, {
             stdio: ['pipe', 'pipe', 'pipe'],
             windowsHide: true,
@@ -73,6 +79,12 @@ export class McpClient extends EventEmitter {
         this.proc.on('exit', (code) => {
             const wasInitialized = this.initialized;
             this.initialized = false;
+            // Exited before the handshake completed — remember the code so
+            // start() can surface an actionable "server too old for --envelope"
+            // message instead of a generic timeout.
+            if (!wasInitialized) {
+                this.startupExitCode = code;
+            }
             for (const p of this.pending.values()) {
                 p.reject(new Error('MCP server exited'));
             }
@@ -100,7 +112,9 @@ export class McpClient extends EventEmitter {
             }
         }
         if (!initialized) {
-            throw new Error('Failed to initialize MCP server after 5 attempts');
+            const msg = initFailureMessage(this.startupExitCode);
+            log(msg);
+            throw new Error(msg);
         }
 
         // Send initialized notification
@@ -148,7 +162,17 @@ export class McpClient extends EventEmitter {
             log(`callTool ${name} ERROR: ${text.substring(0, 500)}`);
             throw new Error(text || 'Tool call failed');
         }
-        return { text };
+        // Unwrap the versioned envelope at the boundary so downstream consumers
+        // keep receiving the same v1 JSON `text` they parse today. Tools that
+        // aren't enveloped pass through unchanged; an old server that ignored
+        // --envelope is detected here and surfaced with an actionable message.
+        try {
+            return { text: unwrapToolResultText(name, text) };
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            log(`callTool ${name} envelope error: ${msg}`);
+            throw err instanceof Error ? err : new Error(msg);
+        }
     }
 
     async listTools(): Promise<Array<{ name: string; description: string; inputSchema?: any }>> {

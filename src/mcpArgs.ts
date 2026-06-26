@@ -20,3 +20,22 @@ export function buildMcpArgs(template: string, binlogPaths: string[]): string[] 
         tokens.map(t => t.replace(/\$\{binlog\}/g, p))
     );
 }
+
+/**
+ * Launch flags this extension requires from the binlog-mcp server.
+ *
+ * `--envelope` makes the server wrap each contract tool's result in a versioned
+ * JSON envelope (schemaVersion major 1) whose `data` is the same ungrouped v1
+ * payload the extension already parses. We deliberately do NOT pass `--grouped`
+ * (that selects the v2 grouped envelope, which is out of scope here).
+ */
+export const CONTRACT_LAUNCH_FLAGS: readonly string[] = ['--envelope'];
+
+/**
+ * Builds the full server argv: the contract launch flags followed by the
+ * per-binlog args. Mirrors `buildMcpArgs` but prepends `--envelope` so the
+ * extension always consumes the versioned envelope.
+ */
+export function buildLaunchArgs(template: string, binlogPaths: string[]): string[] {
+    return [...CONTRACT_LAUNCH_FLAGS, ...buildMcpArgs(template, binlogPaths)];
+}

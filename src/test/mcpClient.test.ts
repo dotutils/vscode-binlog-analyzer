@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { buildMcpArgs } from '../mcpArgs';
+import { buildMcpArgs, buildLaunchArgs, CONTRACT_LAUNCH_FLAGS } from '../mcpArgs';
 
 // Note: McpClient itself spawns a child process so we don't unit-test it
 // end-to-end here. We do, however, exercise the pure-function helper
@@ -58,6 +58,32 @@ suite('mcpClient', () => {
             const tricky = '/tmp/with;semi $var `back`/x.binlog';
             const args = buildMcpArgs('--binlog ${binlog}', [tricky]);
             assert.deepStrictEqual(args, ['--binlog', tricky]);
+        });
+    });
+
+    suite('buildLaunchArgs', () => {
+        test('prepends --envelope before the per-binlog args', () => {
+            const args = buildLaunchArgs('--binlog ${binlog}', ['/tmp/a.binlog']);
+            assert.deepStrictEqual(args, ['--envelope', '--binlog', '/tmp/a.binlog']);
+        });
+
+        test('prepends --envelope once for multiple binlogs', () => {
+            const args = buildLaunchArgs('--binlog ${binlog}', ['/a.binlog', '/b.binlog']);
+            assert.deepStrictEqual(args, ['--envelope', '--binlog', '/a.binlog', '--binlog', '/b.binlog']);
+        });
+
+        test('emits just the launch flags when no binlogs are provided', () => {
+            const args = buildLaunchArgs('--binlog ${binlog}', []);
+            assert.deepStrictEqual(args, ['--envelope']);
+        });
+
+        test('preserves spaces inside binlog paths (delegates to buildMcpArgs)', () => {
+            const args = buildLaunchArgs('--binlog ${binlog}', ['C:\\Users\\Has Space\\build.binlog']);
+            assert.deepStrictEqual(args, ['--envelope', '--binlog', 'C:\\Users\\Has Space\\build.binlog']);
+        });
+
+        test('CONTRACT_LAUNCH_FLAGS is --envelope only (no --grouped)', () => {
+            assert.deepStrictEqual([...CONTRACT_LAUNCH_FLAGS], ['--envelope']);
         });
     });
 });
