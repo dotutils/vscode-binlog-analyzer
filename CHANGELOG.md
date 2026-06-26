@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.27 (Preview)
+
+### Added
+- **Versioned MCP envelope support** — the extension now launches `binlog-mcp` with `--envelope` and unwraps the server's versioned JSON envelope (`{ schemaVersion, kind, data, error }`) at the MCP client boundary, so the tree, webviews, and Problems panel consume structured `data` directly. It validates the envelope's schema major version, surfaces server-side errors, and shows an actionable "the installed server is too old to support `--envelope`" message (with the `dotnet tool update` command) when connected to a pre-envelope `binlog-mcp`. The MCP entry spawned directly by Copilot Chat deliberately stays on the server's default LLM-optimized prose output.
+
+### Changed
+- **Install Microsoft.AITools.BinlogMcp from nuget.org** — the package is now published on nuget.org as stable, so the extension installs and updates the MCP server tool without the dnceng Azure DevOps feed or the `--prerelease` flag.
+
 ## 0.10.25 (Preview)
 
 ### Fixed
