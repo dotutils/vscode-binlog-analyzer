@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.10.26 (Preview)
+## 0.10.27 (Preview)
 
 ### Added
 - **Versioned MCP envelope support** — the extension now launches `binlog-mcp` with `--envelope` and unwraps the server's versioned JSON envelope (`{ schemaVersion, kind, data, error }`) at the MCP client boundary, so the tree, webviews, and Problems panel consume structured `data` directly. It validates the envelope's schema major version, surfaces server-side errors, and shows an actionable "the installed server is too old to support `--envelope`" message (with the `dotnet tool update` command) when connected to a pre-envelope `binlog-mcp`. The MCP entry spawned directly by Copilot Chat deliberately stays on the server's default LLM-optimized prose output.
