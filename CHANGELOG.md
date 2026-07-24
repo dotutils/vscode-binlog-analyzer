@@ -3,7 +3,7 @@
 ## 0.10.28 (Preview)
 
 ### Deprecated
-- **This extension has moved to the official Microsoft extension** — `dotutils.binlog-analyzer` is now published as [`ms-dotnettools.msbuild-binlog-analyzer`](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.msbuild-binlog-analyzer) ("MSBuild Binlog Analyzer for VS Code"). This `dotutils` build is deprecated and will no longer be updated. On activation it now offers to install the official extension and uninstall this one; the README and Marketplace listing point to the replacement.
+- **This extension has moved to the official Microsoft extension** — `dotutils.binlog-analyzer` is now published as [`ms-dotnettools.msbuild-binlog-analyzer`](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.msbuild-binlog-analyzer) ("MSBuild Binlog Analyzer for VS Code"). This `dotutils` build is deprecated and will no longer be updated. It now nudges users to migrate with a one-time blocking dialog (offering to install the official extension and uninstall this one) plus a persistent status-bar warning that remains until you migrate or opt out; the notice stays silent once the official extension is installed. The README and Marketplace listing point to the replacement.
 
 ## 0.10.27 (Preview)
 
