@@ -12,6 +12,7 @@ import {
 } from './buildCheck';
 import * as telemetry from './telemetry';
 import { registerBinlogLanguageModelTools } from './languageModelTools';
+import { registerDeprecationNotice } from './deprecationNotice';
 import { projectSourcesAccessible, formatOverviewText } from './parsers';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -171,6 +172,11 @@ export async function activate(context: vscode.ExtensionContext) {
     telemetry.initTelemetry(context);
     telemetry.trackActivation();
     setCiContext(context);
+
+    // This extension is deprecated in favor of the official ms-dotnettools
+    // extension. Register a persistent migration nudge (best-effort, never
+    // blocks activation): an unmissable modal once + a persistent status bar.
+    registerDeprecationNotice(context);
 
     // Expose binlog analysis as VS Code language-model tools so any agent
     // (@workspace, custom modes, agent mode) can use them — not just @binlog.
