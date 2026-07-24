@@ -1,8 +1,8 @@
 {
   "name": "binlog-analyzer",
-  "displayName": "MSBuild Binlog Analyzer",
-  "description": "Analyze MSBuild binary logs with Copilot Chat and MCP tools",
-  "version": "0.10.27",
+  "displayName": "MSBuild Binlog Analyzer (DEPRECATED \u2014 use ms-dotnettools.msbuild-binlog-analyzer)",
+  "description": "DEPRECATED: install the official \"MSBuild Binlog Analyzer for VS Code\" (ms-dotnettools.msbuild-binlog-analyzer) instead. Analyze MSBuild binary logs with Copilot Chat and MCP tools.",
+  "version": "0.10.28",
   "preview": true,
   "publisher": "dotutils",
   "license": "MIT",

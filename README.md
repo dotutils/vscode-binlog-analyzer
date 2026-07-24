@@ -1,7 +1,13 @@
 # MSBuild Binlog Analyzer for VS Code
 
-[![VS Marketplace](https://img.shields.io/visual-studio-marketplace/v/dotutils.binlog-analyzer?label=VS%20Marketplace&color=blue)](https://marketplace.visualstudio.com/items?itemName=dotutils.binlog-analyzer)
-[![Installs](https://img.shields.io/visual-studio-marketplace/i/dotutils.binlog-analyzer)](https://marketplace.visualstudio.com/items?itemName=dotutils.binlog-analyzer)
+> # ⚠️ This extension is deprecated
+>
+> **`dotutils.binlog-analyzer` has moved to the official Microsoft extension:**
+> **[MSBuild Binlog Analyzer for VS Code (`ms-dotnettools.msbuild-binlog-analyzer`)](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.msbuild-binlog-analyzer)**
+>
+> This `dotutils` version is no longer maintained and will not receive updates.
+> Please install the official extension and uninstall this one. VS Code will
+> also prompt you to migrate automatically.
 
 Analyze MSBuild binary logs (`.binlog`) with **GitHub Copilot Chat** and **MCP tools** — right from VS Code.
 
