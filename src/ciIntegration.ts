@@ -10,7 +10,18 @@ import {
     safeBasename,
     psSingleQuote,
     assertNoZipSlip,
+    assertValidRepoIdentifier,
+    assertValidGitRef,
+    assertValidArtifactName,
+    assertValidRunId,
 } from './ciSafety';
+import { buildLaunchSpec, LaunchSpec } from './commandResolver';
+import {
+    parseAzdoRemote,
+    parseGitHubRemote,
+    parseGitHubRemoteDetailed,
+    GITHUB_ENTERPRISE_UNSUPPORTED_MESSAGE,
+} from './gitRemoteParse';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -33,14 +44,40 @@ interface CiArtifact {
 // ─── Azure DevOps ────────────────────────────────────────────────────────────
 
 async function execCommand(cmd: string, args: string[], cwd?: string, timeoutMs: number = 30000): Promise<{ stdout: string; stderr: string; code: number }> {
+    // Strip GITHUB_TOKEN from env to avoid interfering with gh CLI keyring auth
+    const env = { ...process.env };
+    if (cmd === 'gh') { delete env.GITHUB_TOKEN; }
+
+    // SECURITY: the `shell` option must never be enabled here. Node does not
+    // escape `args` when a shell is used — it concatenates them into a command
+    // line handed to cmd.exe, so any attacker-influenced argument containing
+    // `&`, `|`, `;`, `$`, `(` or `)` executes as a separate command (DEP0190).
+    // `buildLaunchSpec` resolves `.cmd`/`.bat` shims (az) explicitly instead,
+    // which is the only reason a shell was ever used.
+    let launch: LaunchSpec | undefined;
+    let launchError: string | undefined;
+    try {
+        launch = buildLaunchSpec(cmd, args);
+    } catch (err) {
+        launchError = err instanceof Error ? err.message : String(err);
+    }
+    if (!launch) {
+        return { stdout: '', stderr: launchError ?? `Could not resolve command '${cmd}'`, code: 1 };
+    }
+    const spec = launch;
+
+    const options: cp.ExecFileOptionsWithStringEncoding & { windowsVerbatimArguments?: boolean } = {
+        cwd,
+        timeout: timeoutMs,
+        maxBuffer: 5 * 1024 * 1024,
+        env,
+        encoding: 'utf8',
+        windowsHide: true,
+        windowsVerbatimArguments: spec.windowsVerbatimArguments,
+    };
+
     return new Promise((resolve) => {
-        // Strip GITHUB_TOKEN from env to avoid interfering with gh CLI keyring auth
-        const env = { ...process.env };
-        if (cmd === 'gh') { delete env.GITHUB_TOKEN; }
-        // shell: true is needed on Windows for .cmd shims (az, gh, dotnet).
-        // execFile with shell: true still passes args as an array — Node.js
-        // handles proper escaping per-platform, so this is NOT a shell-injection risk.
-        cp.execFile(cmd, args, { cwd, timeout: timeoutMs, maxBuffer: 5 * 1024 * 1024, shell: true, env }, (err, stdout, stderr) => {
+        cp.execFile(spec.file, spec.args, options, (err, stdout, stderr) => {
             resolve({ stdout: stdout || '', stderr: stderr || '', code: err ? (err as any).code ?? 1 : 0 });
         });
     });
@@ -54,39 +91,6 @@ async function isAzCliAvailable(): Promise<boolean> {
 async function isGhCliAvailable(): Promise<boolean> {
     const result = await execCommand('gh', ['--version']);
     return result.code === 0;
-}
-
-/** Detect Azure DevOps org/project from any Azure DevOps URL */
-function parseAzdoRemote(remoteUrl: string): { org: string; project: string } | null {
-    // HTTPS: https://dev.azure.com/{org}/{project}/_git/{repo}
-    let m = remoteUrl.match(/dev\.azure\.com\/([^/]+)\/([^/]+)\/_git/);
-    if (m) { return { org: m[1], project: m[2] }; }
-
-    // General AzDO URL: https://dev.azure.com/{org}/{project}/...
-    m = remoteUrl.match(/dev\.azure\.com\/([^/]+)\/([^/?]+)/);
-    if (m) { return { org: m[1], project: m[2] }; }
-
-    // SSH: git@ssh.dev.azure.com:v3/{org}/{project}/{repo}
-    m = remoteUrl.match(/ssh\.dev\.azure\.com:v3\/([^/]+)\/([^/]+)\//);
-    if (m) { return { org: m[1], project: m[2] }; }
-
-    // Old VSTS: https://{org}.visualstudio.com/{project}/_git/{repo}
-    m = remoteUrl.match(/([^/.]+)\.visualstudio\.com\/([^/]+)\/_git/);
-    if (m) { return { org: m[1], project: m[2] }; }
-
-    // Old VSTS general: https://{org}.visualstudio.com/{project}/...
-    m = remoteUrl.match(/([^/.]+)\.visualstudio\.com\/([^/?]+)/);
-    if (m) { return { org: m[1], project: m[2] }; }
-
-    return null;
-}
-
-/** Detect GitHub owner/repo from git remote URL */
-function parseGitHubRemote(remoteUrl: string): { owner: string; repo: string } | null {
-    // HTTPS: https://github.com/{owner}/{repo}.git
-    let m = remoteUrl.match(/github\.com[/:]([^/]+)\/([^/.]+)/);
-    if (m) { return { owner: m[1], repo: m[2] }; }
-    return null;
 }
 
 async function getGitRemoteUrl(cwd?: string): Promise<string> {
@@ -105,7 +109,39 @@ interface AzdoPipeline {
     folder: string;
 }
 
+/**
+ * Validate Azure DevOps coordinates before they are interpolated into a URL or
+ * passed to `az`. Both values originate from a git remote URL or from user
+ * input, so neither is trustworthy.
+ */
+function assertAzdoCoordinates(org: string, project: string): void {
+    assertValidRepoIdentifier(org, 'Azure DevOps organization');
+    assertValidRepoIdentifier(project, 'Azure DevOps project');
+}
+
+/** Same, for GitHub owner/repo. */
+function assertGitHubCoordinates(owner: string, repo: string): void {
+    assertValidRepoIdentifier(owner, 'GitHub owner');
+    assertValidRepoIdentifier(repo, 'GitHub repository');
+}
+
+/**
+ * Run a validator and surface its message to the user. Returns `false` when
+ * validation failed, so callers can abort the flow with a clear explanation
+ * instead of letting a rejected value reach a CLI argument.
+ */
+function reportValidationFailure(check: () => void): boolean {
+    try {
+        check();
+        return true;
+    } catch (err) {
+        vscode.window.showErrorMessage(err instanceof Error ? err.message : String(err));
+        return false;
+    }
+}
+
 async function listAzdoPipelines(org: string, project: string): Promise<AzdoPipeline[]> {
+    assertAzdoCoordinates(org, project);
     const apiUrl = `https://dev.azure.com/${org}/${project}/_apis/pipelines?api-version=7.0`;
     try {
         const data = await httpsGetJson(apiUrl);
@@ -133,6 +169,8 @@ async function listAzdoPipelines(org: string, project: string): Promise<AzdoPipe
 }
 
 async function listAzdoBuilds(org: string, project: string, opts?: { pipelineId?: number; branch?: string; top?: number }): Promise<CiBuild[]> {
+    assertAzdoCoordinates(org, project);
+    if (opts?.branch) { assertValidGitRef(opts.branch, 'branch'); }
     const top = opts?.top ?? 20;
     let apiUrl = `https://dev.azure.com/${org}/${project}/_apis/build/builds?api-version=7.0&%24top=${top}&queryOrder=finishTimeDescending`;
     if (opts?.pipelineId !== undefined) {
@@ -196,6 +234,9 @@ async function listAzdoBuilds(org: string, project: string, opts?: { pipelineId?
 }
 
 async function downloadAzdoArtifact(org: string, project: string, runId: string, artifactName: string, destDir: string): Promise<string[]> {
+    assertAzdoCoordinates(org, project);
+    assertValidRunId(runId, 'build ID');
+    assertValidArtifactName(artifactName);
     const safeName = safeBasename(artifactName);
     // Try direct ZIP download first (works for public projects without az CLI)
     const zipUrl = `https://dev.azure.com/${org}/${project}/_apis/build/builds/${runId}/artifacts?artifactName=${encodeURIComponent(artifactName)}&api-version=7.0&%24format=zip`;
@@ -246,6 +287,8 @@ async function downloadAzdoArtifact(org: string, project: string, runId: string,
 }
 
 async function listAzdoArtifacts(org: string, project: string, runId: string): Promise<CiArtifact[]> {
+    assertAzdoCoordinates(org, project);
+    assertValidRunId(runId, 'build ID');
     const apiUrl = `https://dev.azure.com/${org}/${project}/_apis/build/builds/${runId}/artifacts?api-version=7.0`;
     const errors: string[] = [];
 
@@ -311,6 +354,8 @@ async function listAzdoArtifacts(org: string, project: string, runId: string): P
 // ─── GitHub Actions ──────────────────────────────────────────────────────────
 
 async function listGitHubRuns(owner: string, repo: string, top: number = 20, branch?: string): Promise<CiBuild[]> {
+    assertGitHubCoordinates(owner, repo);
+    if (branch) { assertValidGitRef(branch, 'branch'); }
     const args = [
         'run', 'list',
         '--repo', `${owner}/${repo}`,
@@ -343,6 +388,8 @@ async function listGitHubRuns(owner: string, repo: string, top: number = 20, bra
 }
 
 async function listGitHubArtifacts(owner: string, repo: string, runId: string): Promise<CiArtifact[]> {
+    assertGitHubCoordinates(owner, repo);
+    assertValidRunId(runId);
     // Use full JSON output instead of jq for robustness
     const result = await execCommand('gh', [
         'api', `repos/${owner}/${repo}/actions/runs/${runId}/artifacts`,
@@ -368,6 +415,9 @@ async function listGitHubArtifacts(owner: string, repo: string, runId: string): 
 }
 
 async function downloadGitHubArtifact(owner: string, repo: string, runId: string, artifactName: string, destDir: string): Promise<string[]> {
+    assertGitHubCoordinates(owner, repo);
+    assertValidRunId(runId);
+    assertValidArtifactName(artifactName);
     const result = await execCommand('gh', [
         'run', 'download', runId,
         '--repo', `${owner}/${repo}`,
@@ -587,7 +637,17 @@ async function doDownloadCiBinlog(): Promise<string[] | undefined> {
     const remoteUrl = await getGitRemoteUrl(cwd);
 
     const azdoInfo = remoteUrl ? parseAzdoRemote(remoteUrl) : null;
-    const ghInfo = remoteUrl ? parseGitHubRemote(remoteUrl) : null;
+    const ghResult = remoteUrl ? parseGitHubRemoteDetailed(remoteUrl) : { kind: 'none' as const };
+    const ghInfo = ghResult.kind === 'github' ? { owner: ghResult.owner, repo: ghResult.repo } : null;
+
+    // GitHub Enterprise Server has never been supported. Say so explicitly
+    // instead of silently behaving as if no CI provider were detected.
+    if (ghResult.kind === 'enterprise') {
+        vscode.window.showWarningMessage(
+            `${GITHUB_ENTERPRISE_UNSUPPORTED_MESSAGE} The remote '${ghResult.host}' is a GitHub Enterprise host; ` +
+            `choose Azure DevOps, or enter a github.com owner/repo manually.`
+        );
+    }
 
     // Always let user choose platform — repos often have CI on a different platform
     const platformPick = await vscode.window.showQuickPick(
@@ -595,7 +655,9 @@ async function doDownloadCiBinlog(): Promise<string[] | undefined> {
             {
                 label: '$(github) GitHub Actions',
                 value: 'github' as const,
-                description: ghInfo ? `${ghInfo.owner}/${ghInfo.repo}` : '',
+                description: ghInfo
+                    ? `${ghInfo.owner}/${ghInfo.repo}`
+                    : (ghResult.kind === 'enterprise' ? GITHUB_ENTERPRISE_UNSUPPORTED_MESSAGE : ''),
             },
             {
                 label: '$(cloud) Azure DevOps',
@@ -649,6 +711,9 @@ async function doDownloadCiBinlog(): Promise<string[] | undefined> {
             const parts = trimmed.split('/');
             effectiveAzdoInfo = { org: parts[0], project: parts[1] };
         }
+        if (!reportValidationFailure(() => assertAzdoCoordinates(effectiveAzdoInfo!.org, effectiveAzdoInfo!.project))) {
+            return;
+        }
         saveRecentAzdoOrg(`${effectiveAzdoInfo.org}/${effectiveAzdoInfo.project}`);
         // If URL contains buildId, skip straight to artifact selection
         const directBuildId = extractBuildId(trimmed);
@@ -692,6 +757,9 @@ async function doDownloadCiBinlog(): Promise<string[] | undefined> {
         } else {
             const parts = trimmed.split('/');
             effectiveGhInfo = { owner: parts[0], repo: parts[1] };
+        }
+        if (!reportValidationFailure(() => assertGitHubCoordinates(effectiveGhInfo!.owner, effectiveGhInfo!.repo))) {
+            return;
         }
         saveRecentGhRepo(`${effectiveGhInfo.owner}/${effectiveGhInfo.repo}`);
         // If URL contains /actions/runs/{id}, skip straight to artifact selection
@@ -789,6 +857,8 @@ async function doDownloadCiBinlog(): Promise<string[] | undefined> {
             } else {
                 // GitHub: resolve PR number to head branch name
                 try {
+                    assertValidRunId(prNumber, 'PR number');
+                    assertGitHubCoordinates(effectiveGhInfo!.owner, effectiveGhInfo!.repo);
                     const prResult = await execCommand('gh', [
                         'pr', 'view', prNumber,
                         '--repo', `${effectiveGhInfo!.owner}/${effectiveGhInfo!.repo}`,
@@ -809,6 +879,14 @@ async function doDownloadCiBinlog(): Promise<string[] | undefined> {
         }
     } else {
         branchFilter = filterPick.value;
+    }
+
+    // Validate before the value can become a `--branch` argument. Git permits
+    // `&`, `|`, `;`, `$`, `(` and `)` in ref names, so a hostile branch name is
+    // an injection vector on its own.
+    const selectedBranch = branchFilter;
+    if (selectedBranch && !reportValidationFailure(() => assertValidGitRef(selectedBranch, 'branch'))) {
+        return;
     }
 
     // List builds
@@ -1009,7 +1087,14 @@ async function pickAndDownloadArtifact(
     );
     if (!artifactPick) { return; }
 
-    const destDir = path.join(getDownloadDir(), `${source}-${downloadArgs[2]}-${artifactPick.artifact.name}`);
+    // The artifact name comes from the CI server. Validate it before it becomes
+    // either a CLI argument or part of a filesystem path.
+    if (!reportValidationFailure(() => assertValidArtifactName(artifactPick.artifact.name))) { return; }
+
+    const destDir = path.join(
+        getDownloadDir(),
+        safeBasename(`${source}-${downloadArgs[2]}-${artifactPick.artifact.name}`)
+    );
     fs.mkdirSync(destDir, { recursive: true });
 
     let binlogFiles: string[];

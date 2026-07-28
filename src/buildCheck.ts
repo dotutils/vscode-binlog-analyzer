@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as cp from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
+import { buildLaunchSpec } from './commandResolver';
 
 export interface BuildCheckResult {
     code: string;
@@ -43,7 +44,16 @@ export function getBuildCheckDiagnostics(): vscode.DiagnosticCollection | undefi
 
 export async function detectSdkVersion(): Promise<{ supported: boolean; sdkVersion: string }> {
     return new Promise((resolve) => {
-        cp.execFile('dotnet', ['--version'], { timeout: 10000, shell: true }, (err, stdout) => {
+        // No `shell` option: `shell: true` makes Node concatenate `args` into a
+        // cmd.exe command line without escaping (DEP0190). `buildLaunchSpec`
+        // resolves the real executable (or its .cmd shim) instead.
+        const spec = buildLaunchSpec('dotnet', ['--version']);
+        cp.execFile(spec.file, spec.args, {
+            timeout: 10000,
+            encoding: 'utf8',
+            windowsHide: true,
+            windowsVerbatimArguments: spec.windowsVerbatimArguments,
+        }, (err, stdout) => {
             if (err) {
                 resolve({ supported: false, sdkVersion: 'unknown' });
                 return;

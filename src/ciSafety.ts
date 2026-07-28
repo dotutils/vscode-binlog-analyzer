@@ -73,6 +73,105 @@ export function safeBasename(name: string): string {
     return base;
 }
 
+// ─── Command-argument allow-lists ────────────────────────────────────────────
+//
+// Every value below is attacker-influenced (git remote URL, branch name, or a
+// string chosen by the CI server) and ends up as an argument to `gh` / `az`.
+// The command runner no longer uses a shell, but these allow-lists are the
+// second, independent layer: they make the values structurally incapable of
+// carrying shell syntax, and they stop option injection (`--repo -x`).
+
+/** owner / repo / org / project. */
+const REPO_IDENTIFIER_RE = /^[A-Za-z0-9._-]+$/;
+
+/** Characters that are never legal in a value we hand to a CLI. */
+const CONTROL_CHARS_RE = /[\u0000-\u001F\u007F]/;
+
+/**
+ * Shell metacharacters plus whitespace. Git allows most of these in ref names,
+ * which is exactly why a branch name is a viable injection vector.
+ */
+const REF_FORBIDDEN_RE = /[\s&|;<>()$`'"\\!*?[\]{}~^%]/;
+
+/** Artifact names: letters, digits and a few punctuation characters only. */
+const ARTIFACT_NAME_RE = /^[A-Za-z0-9 ._+=-]+$/;
+
+const MAX_IDENTIFIER_LENGTH = 100;
+const MAX_REF_LENGTH = 255;
+
+/** True for a value usable as a GitHub owner/repo or an Azure DevOps org/project. */
+export function isValidRepoIdentifier(value: unknown): value is string {
+    return typeof value === 'string'
+        && value.length > 0
+        && value.length <= MAX_IDENTIFIER_LENGTH
+        && REPO_IDENTIFIER_RE.test(value)
+        && !value.startsWith('-')
+        && value !== '.'
+        && value !== '..';
+}
+
+/** True for a value usable as a git branch / ref argument. */
+export function isValidGitRef(value: unknown): value is string {
+    return typeof value === 'string'
+        && value.length > 0
+        && value.length <= MAX_REF_LENGTH
+        && !CONTROL_CHARS_RE.test(value)
+        && !REF_FORBIDDEN_RE.test(value)
+        && !value.startsWith('-')
+        && !value.startsWith('/')
+        && !value.endsWith('/')
+        && !value.includes('..');
+}
+
+/** True for a CI artifact name we are willing to pass to a CLI. */
+export function isValidArtifactName(value: unknown): value is string {
+    return typeof value === 'string'
+        && value.length > 0
+        && value.length <= MAX_REF_LENGTH
+        && ARTIFACT_NAME_RE.test(value)
+        && !value.startsWith('-')
+        && !value.includes('..')
+        && value.trim().length > 0;
+}
+
+/** True for a CI build/run identifier. */
+export function isValidRunId(value: unknown): value is string {
+    return typeof value === 'string' && /^[0-9]{1,20}$/.test(value);
+}
+
+function reject(label: string, value: unknown, requirement: string): never {
+    throw new Error(
+        `Refusing to run CI command: invalid ${label} ${JSON.stringify(String(value))}. ${requirement}`
+    );
+}
+
+/**
+ * Validate a GitHub owner/repo or Azure DevOps org/project.
+ * `label` is used verbatim in the error message shown to the user.
+ */
+export function assertValidRepoIdentifier(value: unknown, label: string): string {
+    if (isValidRepoIdentifier(value)) { return value; }
+    reject(label, value, `Only letters, digits, '.', '_' and '-' are allowed.`);
+}
+
+/** Validate a branch name / git ref before it reaches a CLI argument. */
+export function assertValidGitRef(value: unknown, label: string = 'branch'): string {
+    if (isValidGitRef(value)) { return value; }
+    reject(label, value, `Shell metacharacters, whitespace and control characters are not allowed.`);
+}
+
+/** Validate a CI artifact name before it reaches a CLI argument. */
+export function assertValidArtifactName(value: unknown, label: string = 'artifact name'): string {
+    if (isValidArtifactName(value)) { return value; }
+    reject(label, value, `Path separators and shell metacharacters are not allowed.`);
+}
+
+/** Validate a CI build/run identifier before it reaches a CLI argument. */
+export function assertValidRunId(value: unknown, label: string = 'run ID'): string {
+    if (isValidRunId(value)) { return value; }
+    reject(label, value, `Only digits are allowed.`);
+}
+
 /**
  * Escape a string so it is safe to embed inside a single-quoted PowerShell
  * literal: PowerShell escapes `'` by doubling it (`''`). Returns the value

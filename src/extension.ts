@@ -5,6 +5,7 @@ import { BinlogTreeDataProvider, BinlogTreeItem, AboutInfo } from './binlogTreeV
 import { McpClient, buildMcpArgs } from './mcpClient';
 import { BinlogDocumentProvider, BINLOG_SCHEME, openBinlogDocument } from './binlogDocumentProvider';
 import { downloadCiBinlog, setCiContext } from './ciIntegration';
+import { buildCmdExeLaunch } from './commandResolver';
 import {
     initBuildCheckDiagnostics, runBuildCheck, pushBuildCheckToProblemsPanel,
     formatBuildCheckForChat, detectSdkVersion, buildWithPropertyTracking,
@@ -717,8 +718,24 @@ export async function activate(context: vscode.ExtensionContext) {
                 return;
             }
             // Launch with OS default app (Structured Log Viewer registers .binlog)
+            // The path can come from a CI-downloaded artifact, so its file name is
+            // attacker-influenced. `execFile` does not escape `&`/`|`/`;` for
+            // cmd.exe, so quote the whole command line ourselves.
             const { execFile } = require('child_process');
-            execFile('cmd', ['/c', 'start', '', targetPath], { shell: false }, (err: Error | null) => {
+            const revealInExplorer = () => execFile('explorer', ['/select,', targetPath], { shell: false });
+            let startSpec;
+            try {
+                startSpec = buildCmdExeLaunch(['start', '', targetPath!]);
+            } catch {
+                // Path contains a character cmd.exe cannot carry safely (`%`, `!`,
+                // `"`). explorer.exe opens the default handler without a shell.
+                execFile('explorer', [targetPath], { shell: false });
+                return;
+            }
+            execFile(startSpec.file, startSpec.args, {
+                shell: false,
+                windowsVerbatimArguments: startSpec.windowsVerbatimArguments,
+            }, (err: Error | null) => {
                 if (err) {
                     // No app registered for .binlog — offer to reveal in Explorer or install SLV
                     vscode.window.showWarningMessage(
@@ -729,7 +746,7 @@ export async function activate(context: vscode.ExtensionContext) {
                         if (choice === 'Download Viewer') {
                             vscode.env.openExternal(vscode.Uri.parse('https://msbuildlog.com/'));
                         } else if (choice === 'Reveal in Explorer') {
-                            execFile('explorer', ['/select,', targetPath], { shell: false });
+                            revealInExplorer();
                         }
                     });
                 }
